@@ -7,6 +7,18 @@ export class Transformer {
   /** Below this a thinking budget buys nothing, and some models reject it. */
   private static readonly MIN_THINKING_BUDGET = 1024;
   private static readonly DEFAULT_MAX_OUTPUT_TOKENS = 64000;
+  /**
+   * Tokens held back from the window for the visible answer.
+   *
+   * Thinking and the answer share maxOutputTokens, so this is the actual knob:
+   * a smaller reserve means more room to reason and less room to write. 8192
+   * matches the headroom the original code assumed. Raise it if long answers —
+   * a large file write, say — come back truncated.
+   */
+  private static answerReserveTokens(): number {
+    const configured = Number(process.env.BRIDGE_ANSWER_RESERVE_TOKENS);
+    return Number.isFinite(configured) && configured > 0 ? Math.floor(configured) : 8192;
+  }
 
   /**
    * Fit the thinking budget inside the caller's output cap.
@@ -33,8 +45,12 @@ export class Transformer {
       return;
     }
 
-    // Honour the cap, reserving at least half the window for the answer.
-    const budget = Math.min(requestedBudget, Math.floor(generationConfig.maxOutputTokens / 2));
+    // Honour the cap, giving reasoning everything the answer does not need.
+    // The reserve is capped at half the window so a small cap still leaves
+    // something to answer with.
+    const maxOutputTokens = generationConfig.maxOutputTokens;
+    const reserve = Math.min(this.answerReserveTokens(), Math.floor(maxOutputTokens / 2));
+    const budget = Math.min(requestedBudget, maxOutputTokens - reserve);
     if (budget < this.MIN_THINKING_BUDGET) {
       generationConfig.thinkingConfig = { include_thoughts: false, thinking_budget: 0 };
       return;

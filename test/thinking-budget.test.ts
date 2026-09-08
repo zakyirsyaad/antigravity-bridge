@@ -58,6 +58,30 @@ function runTests() {
   expect("thinking_budget", roomy.thinkingConfig?.thinking_budget, 4000);
   expect("budget leaves room for the answer", roomy.thinkingConfig.thinking_budget < roomy.maxOutputTokens, true);
 
+  console.log("\n[2b/7] A large cap gives reasoning everything the answer does not need ...");
+  // The distinguishing case: reserving a flat 8192 for the answer rather than
+  // half the window. At 8000 both rules agree (the reserve caps at half), so
+  // this has to be checked somewhere roomier or the two are indistinguishable.
+  const large = anthropic({ max_tokens: 32000 });
+  expect("maxOutputTokens", large.maxOutputTokens, 32000);
+  expect("thinking_budget", large.thinkingConfig?.thinking_budget, 23808);
+  expect("answer reserve", large.maxOutputTokens - large.thinkingConfig.thinking_budget, 8192);
+
+  const huge = anthropic({ max_tokens: 64000 });
+  expect("full requested budget when it fits", huge.thinkingConfig?.thinking_budget, 32768);
+
+  console.log("\n[2c/7] The reserve is configurable, and still capped at half ...");
+  process.env.BRIDGE_ANSWER_RESERVE_TOKENS = "4096";
+  const wider = anthropic({ max_tokens: 32000 });
+  expect("smaller reserve -> more thinking", wider.thinkingConfig?.thinking_budget, 32000 - 4096);
+
+  // A reserve larger than half the window is clamped, so a small cap always
+  // keeps something to answer with.
+  process.env.BRIDGE_ANSWER_RESERVE_TOKENS = "40000";
+  const clamped = anthropic({ max_tokens: 32000 });
+  expect("reserve clamped to half", clamped.thinkingConfig?.thinking_budget, 16000);
+  delete process.env.BRIDGE_ANSWER_RESERVE_TOKENS;
+
   console.log("\n[3/7] Anthropic: no cap given -> default window, full budget ...");
   const uncapped = anthropic({});
   expect("maxOutputTokens", uncapped.maxOutputTokens, 64000);

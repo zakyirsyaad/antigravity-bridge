@@ -61,6 +61,19 @@ export class BridgeServer {
     return null;
   }
 
+  /**
+   * Thinking tokens Google reported for a response.
+   *
+   * Reported separately from candidatesTokenCount, and previously discarded, so
+   * `bridge:usage` always showed zero reasoning. It is the only way to tell
+   * whether a thinking budget is actually being used or is sitting idle — which
+   * is what a budget-vs-answer-window tradeoff has to be tuned against.
+   */
+  private static thoughtsTokens(resp: any): number {
+    const raw = resp?.response || resp;
+    return raw?.usageMetadata?.thoughtsTokenCount || 0;
+  }
+
   /** Compare via fixed-length digests so the check does not leak the key. */
   private static keysMatch(presented: string, expected: string): boolean {
     const a = crypto.createHash("sha256").update(presented).digest();
@@ -467,8 +480,11 @@ export class BridgeServer {
         let currentBlockType: "thinking" | "text" | null = null;
         let outputTokens = 0;
         let sawToolUse = false;
+        let streamUsage: any = null;
 
         for await (const chunk of stream) {
+          const chunkUsage = chunk.response?.usageMetadata || chunk.usageMetadata;
+          if (chunkUsage) streamUsage = chunkUsage;
           const candidate = chunk.response?.candidates?.[0] || chunk.candidates?.[0];
           const parts = candidate?.content?.parts || [];
 
@@ -575,7 +591,12 @@ export class BridgeServer {
         res.write(`event: message_stop\ndata: ${JSON.stringify({ type: "message_stop" })}\n\n`);
         res.end();
 
-        UsageTracker.getInstance().recordUsage(requestedModel, 0, outputTokens, 0);
+        UsageTracker.getInstance().recordUsage(
+          requestedModel,
+          streamUsage?.promptTokenCount || 0,
+          streamUsage?.candidatesTokenCount || outputTokens,
+          streamUsage?.thoughtsTokenCount || 0
+        );
       } catch (streamErr: any) {
         console.error("[Stream Error]", streamErr);
         if (res.headersSent) {
@@ -602,7 +623,7 @@ export class BridgeServer {
         requestedModel,
         formatted.usage?.input_tokens || 0,
         formatted.usage?.output_tokens || 0,
-        0
+        BridgeServer.thoughtsTokens(resp)
       );
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify(formatted));
@@ -637,8 +658,11 @@ export class BridgeServer {
         // must each get their own — sharing one index merges them into a
         // single call with concatenated names and unparseable arguments.
         let toolCallIndex = 0;
+        let streamUsage: any = null;
 
         for await (const chunk of stream) {
+          const chunkUsage = chunk.response?.usageMetadata || chunk.usageMetadata;
+          if (chunkUsage) streamUsage = chunkUsage;
           const candidate = chunk.response?.candidates?.[0] || chunk.candidates?.[0];
           const parts = candidate?.content?.parts || [];
 
@@ -732,7 +756,12 @@ export class BridgeServer {
         res.write("data: [DONE]\n\n");
         res.end();
 
-        UsageTracker.getInstance().recordUsage(requestedModel, 0, outputTokens, 0);
+        UsageTracker.getInstance().recordUsage(
+          requestedModel,
+          streamUsage?.promptTokenCount || 0,
+          streamUsage?.candidatesTokenCount || outputTokens,
+          streamUsage?.thoughtsTokenCount || 0
+        );
       } catch (streamErr: any) {
         console.error("[OpenAI Stream Error]", streamErr);
         res.write(`data: ${JSON.stringify({ error: { message: streamErr.message } })}\n\n`);
@@ -746,7 +775,7 @@ export class BridgeServer {
         requestedModel,
         formatted.usage?.prompt_tokens || 0,
         formatted.usage?.completion_tokens || 0,
-        0
+        BridgeServer.thoughtsTokens(resp)
       );
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify(formatted));
