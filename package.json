@@ -21,6 +21,7 @@
     "bridge:service:uninstall": "tsx bin/cli.ts service:uninstall",
     "test": "tsx test/bridge.test.ts",
     "test:bridge": "tsx test/bridge.test.ts",
+    "test:stream": "tsx test/streaming-stop-reason.test.ts",
     "build": "tsc"
   },
   "keywords": [

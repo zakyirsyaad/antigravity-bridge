@@ -350,6 +350,7 @@ export class BridgeServer {
         let currentBlockIndex = 0;
         let currentBlockType: "thinking" | "text" | null = null;
         let outputTokens = 0;
+        let sawToolUse = false;
 
         for await (const chunk of stream) {
           const candidate = chunk.response?.candidates?.[0] || chunk.candidates?.[0];
@@ -411,6 +412,7 @@ export class BridgeServer {
                 currentBlockIndex++;
               }
               currentBlockType = null;
+              sawToolUse = true;
               const toolUseId = `call_${crypto.randomBytes(8).toString("hex")}`;
               res.write(
                 `event: content_block_start\ndata: ${JSON.stringify({
@@ -448,7 +450,7 @@ export class BridgeServer {
         res.write(
           `event: message_delta\ndata: ${JSON.stringify({
             type: "message_delta",
-            delta: { stop_reason: "end_turn", stop_sequence: null },
+            delta: { stop_reason: sawToolUse ? "tool_use" : "end_turn", stop_sequence: null },
             usage: { output_tokens: outputTokens },
           })}\n\n`
         );
@@ -510,6 +512,7 @@ export class BridgeServer {
 
       try {
         const stream = await this.client.streamGenerateContent(payload);
+        let sawToolCall = false;
 
         for await (const chunk of stream) {
           const candidate = chunk.response?.candidates?.[0] || chunk.candidates?.[0];
@@ -552,6 +555,7 @@ export class BridgeServer {
                 })}\n\n`
               );
             } else if (part.functionCall) {
+              sawToolCall = true;
               const toolCallId = part.functionCall.id || `call_${crypto.randomBytes(8).toString("hex")}`;
               res.write(
                 `data: ${JSON.stringify({
@@ -594,7 +598,7 @@ export class BridgeServer {
               {
                 index: 0,
                 delta: {},
-                finish_reason: "stop",
+                finish_reason: sawToolCall ? "tool_calls" : "stop",
               },
             ],
           })}\n\n`
