@@ -558,7 +558,11 @@ export class BridgeServer {
 
       try {
         const stream = await this.client.streamGenerateContent(payload);
-        let sawToolCall = false;
+        // Position of the next tool call within this turn. OpenAI clients
+        // accumulate tool_call deltas keyed by this index, so parallel calls
+        // must each get their own — sharing one index merges them into a
+        // single call with concatenated names and unparseable arguments.
+        let toolCallIndex = 0;
 
         for await (const chunk of stream) {
           const candidate = chunk.response?.candidates?.[0] || chunk.candidates?.[0];
@@ -601,7 +605,6 @@ export class BridgeServer {
                 })}\n\n`
               );
             } else if (part.functionCall) {
-              sawToolCall = true;
               const toolCallId = part.functionCall.id || `call_${crypto.randomBytes(8).toString("hex")}`;
               res.write(
                 `data: ${JSON.stringify({
@@ -615,7 +618,7 @@ export class BridgeServer {
                       delta: {
                         tool_calls: [
                           {
-                            index: 0,
+                            index: toolCallIndex,
                             id: toolCallId,
                             type: "function",
                             function: {
@@ -630,6 +633,7 @@ export class BridgeServer {
                   ],
                 })}\n\n`
               );
+              toolCallIndex++;
             }
           }
         }
@@ -644,7 +648,7 @@ export class BridgeServer {
               {
                 index: 0,
                 delta: {},
-                finish_reason: sawToolCall ? "tool_calls" : "stop",
+                finish_reason: toolCallIndex > 0 ? "tool_calls" : "stop",
               },
             ],
           })}\n\n`
