@@ -3,6 +3,20 @@ import { SUPPORTED_MODELS, SKIP_THOUGHT_SIGNATURE, findModel, ModelDef } from ".
 import { AntigravityPayload } from "./antigravity-client";
 import { cleanToolDeclarations } from "./schema-cleaner";
 
+/** A model id the bridge cannot map to anything Google serves. */
+export class UnknownModelError extends Error {
+  public readonly requestedModel: string;
+  constructor(requestedModel: string) {
+    super(
+      `Unknown model "${requestedModel}". The bridge could not map it to any model Google serves. ` +
+        `Valid ids: ${SUPPORTED_MODELS.map((m) => m.id).join(", ")}. ` +
+        `Run \`npm run bridge:models\` to see what your account is offered.`
+    );
+    this.name = "UnknownModelError";
+    this.requestedModel = requestedModel;
+  }
+}
+
 export class Transformer {
   /** Below this a thinking budget buys nothing, and some models reject it. */
   private static readonly MIN_THINKING_BUDGET = 1024;
@@ -91,8 +105,26 @@ export class Transformer {
    * which in several cases is not what it used to resolve to. `gemini-3-pro`
    * in particular resolved to `gemini-3-pro-low`, which Google does not offer.
    */
-  /** Retired ids already warned about, so a busy agent loop logs each once. */
+  /** Ids already warned about, so a busy agent loop logs each once. */
   private static warnedRetiredIds = new Set<string>();
+
+  /**
+   * Report an id that did not match exactly.
+   *
+   * Guessing silently is how `gemini-3.8-flash-tiered-high` — the shape a
+   * client produces when it appends a reasoning suffix — quietly became a
+   * different model generation. The guess is still made, because Claude Code
+   * sends Anthropic model names that have to land somewhere, but it is no
+   * longer invisible.
+   */
+  private static warnInexactModel(requested: string, resolved: string, reason: string): void {
+    if (this.warnedRetiredIds.has(requested)) return;
+    this.warnedRetiredIds.add(requested);
+    console.warn(
+      `[Model ${reason}] "${requested}" is not an exact model id; using "${resolved}". ` +
+        `See the model table in README.md, or run \`npm run bridge:models\`.`
+    );
+  }
 
   public static resolveModel(requestedModel: string): string {
     const raw = (requestedModel || "").toLowerCase().trim();
@@ -117,23 +149,34 @@ export class Transformer {
       // With no GitHub watchers on this project, the software itself is the
       // only thing that will tell an existing user their model changed under
       // them. Silent aliasing would hide that completely.
-      if (!this.warnedRetiredIds.has(clean)) {
-        this.warnedRetiredIds.add(clean);
-        console.warn(
-          `[Deprecated model] "${clean}" is a retired id and now resolves to "${retired[clean]}". ` +
-            `It previously resolved elsewhere — see the model table in README.md. Update your client config.`
-        );
-      }
+      this.warnInexactModel(clean, retired[clean], "deprecated");
       return retired[clean];
     }
 
-    if (clean.includes("claude") && clean.includes("sonnet")) return "claude-sonnet-4-6";
-    if (clean.includes("claude")) return "claude-opus-4-6-thinking";
-    if (clean.includes("pro")) return "gemini-3.1-pro-high";
-    if (clean.includes("lite")) return "gemini-3.1-flash-lite";
-    if (clean.includes("flash") || clean.includes("gemini")) return "gemini-3.6-flash-high";
+    // Clients legitimately send names the bridge does not list — Claude Code
+    // sends Anthropic's own model ids, for instance — so a nearest match is
+    // still better than refusing. It just has to be visible.
+    const guess =
+      clean.includes("claude") && clean.includes("sonnet")
+        ? "claude-sonnet-4-6"
+        : clean.includes("claude")
+          ? "claude-opus-4-6-thinking"
+          : clean.includes("pro")
+            ? "gemini-3.1-pro-high"
+            : clean.includes("lite")
+              ? "gemini-3.1-flash-lite"
+              : clean.includes("flash") || clean.includes("gemini")
+                ? "gemini-3.6-flash-high"
+                : null;
 
-    return clean || "gemini-3.6-flash-high";
+    if (guess) {
+      this.warnInexactModel(clean, guess, "approximated");
+      return guess;
+    }
+
+    // Forwarding an unmapped name only bought an opaque "invalid argument" 400
+    // from Google. Fail here, where the message can say what to use instead.
+    throw new UnknownModelError(requestedModel);
   }
 
   /**

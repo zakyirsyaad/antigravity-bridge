@@ -40,6 +40,8 @@ Everything else runs offline — no account, no network, no quota — by stubbin
 | `test:schema` | schema keywords are dropped, not hoisted into `properties` |
 | `test:usage` | both protocols record usage |
 | `test:storage` | malformed accounts file does not throw |
+| `test:auth` | non-loopback callers need a key; a proxy confers no exemption |
+| `test:models` | id resolution: exact, retired, approximated, and rejected |
 
 When stubbing, keep side effects off the real `~/.zcode` files and off `launchctl` — several suites
 assert that explicitly, and that is deliberate.
@@ -162,6 +164,12 @@ Reasoning config is per model, not global:
 
 Retired ids are kept as explicit aliases in `resolveModel()` so existing client configs keep working;
 each points at the model its name claimed, which is often not what it used to resolve to.
+
+**`resolveModel()` never resolves silently.** An inexact match warns once naming what it used, and
+an id matching nothing throws `UnknownModelError`, which `server.ts` turns into a 400. Approximation
+is deliberate — Claude Code sends Anthropic's own ids and refusing them would break the main use
+case — but a client that appends a reasoning suffix (`gemini-3.8-flash-tiered-high`) once silently
+got a different model generation, so the guess has to be audible.
 
 `thoughtsTokenCount` from Google is recorded via `UsageTracker`, so `bridge:usage` shows reasoning
 actually consumed. That is the number to tune budgets against — a declared budget says nothing about

@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 import { BRIDGE_DEFAULT_PORT, SUPPORTED_MODELS } from "./constants";
 import { OAuthManager } from "./oauth";
 import { AntigravityClient } from "./antigravity-client";
-import { Transformer } from "./transformer";
+import { Transformer, UnknownModelError } from "./transformer";
 import { UsageTracker } from "./usage-tracker";
 import { QuotaService } from "./quota-service";
 import { QuotaTracker } from "./quota-tracker";
@@ -420,6 +420,15 @@ export class BridgeServer {
           res.writeHead(404, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ error: { message: `Route ${pathname} not found`, type: "not_found" } }));
         } catch (err: any) {
+          // An unusable model id is the caller's mistake, not ours: say 400 so
+          // clients can tell it apart from a bridge failure.
+          if (err instanceof UnknownModelError) {
+            if (!res.headersSent) {
+              res.writeHead(400, { "Content-Type": "application/json" });
+              res.end(JSON.stringify({ error: { message: err.message, type: "invalid_request_error" } }));
+            }
+            return;
+          }
           console.error(`[Bridge Error] ${pathname}:`, err);
           if (!res.headersSent) {
             res.writeHead(500, { "Content-Type": "application/json" });
