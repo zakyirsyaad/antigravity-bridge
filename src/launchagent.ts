@@ -4,13 +4,24 @@ import { execSync } from "node:child_process";
 import { LAUNCH_AGENT_PLIST_PATH, USER_HOME } from "./constants";
 
 export class LaunchAgentService {
+  /**
+   * Resolve the project root from the CLI's own directory.
+   *
+   * Two layouts are supported: a standalone clone, where `bin/` sits next to
+   * package.json, and a vendored copy whose dependencies are hoisted to a host
+   * project root. Every caller must go through this — resolving the path by
+   * hand is how `switch` came to install a plist pointing at nothing.
+   */
+  public static resolveProjectDir(binDir: string): string {
+    const standalone = path.resolve(binDir, "..");
+    if (fs.existsSync(path.join(standalone, "package.json"))) {
+      return standalone;
+    }
+    return path.resolve(binDir, "..", "..", "..");
+  }
+
   public static install(projectDir: string): { success: boolean; message: string } {
     try {
-      const plistDir = path.dirname(LAUNCH_AGENT_PLIST_PATH);
-      if (!fs.existsSync(plistDir)) {
-        fs.mkdirSync(plistDir, { recursive: true });
-      }
-
       const nodeBin = process.execPath;
       let tsxCliMjs = path.join(projectDir, "node_modules", "tsx", "dist", "cli.mjs");
       if (!fs.existsSync(tsxCliMjs)) {
@@ -23,6 +34,24 @@ export class LaunchAgentService {
         const nestedCli = path.join(projectDir, "modules", "antigravity-bridge", "bin", "cli.ts");
         if (fs.existsSync(nestedCli)) cliScript = nestedCli;
       }
+
+      // Bail out before touching anything. Writing a plist that points at
+      // missing files and then unloading the running agent would leave the user
+      // with no bridge — and `launchctl load` failing on the broken plist is
+      // swallowed below, so they would never be told.
+      const missing = [tsxCliMjs, cliScript].filter((p) => !fs.existsSync(p));
+      if (missing.length > 0) {
+        return {
+          success: false,
+          message: `Cannot install LaunchAgent from ${projectDir} — not found: ${missing.join(", ")}`,
+        };
+      }
+
+      const plistDir = path.dirname(LAUNCH_AGENT_PLIST_PATH);
+      if (!fs.existsSync(plistDir)) {
+        fs.mkdirSync(plistDir, { recursive: true });
+      }
+
       const logDir = path.join(USER_HOME, ".zcode", "logs");
 
       if (!fs.existsSync(logDir)) {

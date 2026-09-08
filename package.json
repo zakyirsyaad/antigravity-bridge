@@ -12,6 +12,7 @@
     "dev": "tsx watch bin/cli.ts start",
     "bridge:start": "tsx bin/cli.ts start",
     "bridge:sync": "tsx bin/cli.ts sync",
+    "bridge:models": "tsx bin/cli.ts models",
     "bridge:login": "tsx bin/cli.ts login",
     "bridge:status": "tsx bin/cli.ts status",
     "bridge:usage": "tsx bin/cli.ts usage",
@@ -21,6 +22,15 @@
     "bridge:service:uninstall": "tsx bin/cli.ts service:uninstall",
     "test": "tsx test/bridge.test.ts",
     "test:bridge": "tsx test/bridge.test.ts",
+    "test:stream": "tsx test/streaming-sse.test.ts",
+    "test:security": "tsx test/api-pool-security.test.ts",
+    "test:refresh": "tsx test/token-refresh-race.test.ts",
+    "test:launchagent": "tsx test/launchagent-resolve.test.ts",
+    "test:budget": "tsx test/thinking-budget.test.ts",
+    "test:schema": "tsx test/schema-cleaner.test.ts",
+    "test:usage": "tsx test/openai-usage.test.ts",
+    "test:storage": "tsx test/accounts-storage.test.ts",
+    "test:auth": "tsx test/auth.test.ts",
     "build": "tsc"
   },
   "keywords": [

@@ -334,6 +334,55 @@ const ALLOWED_SCHEMA_KEYS = new Set([
   "items",
 ]);
 
+/**
+ * JSON Schema vocabulary that Antigravity cannot use.
+ *
+ * These are dropped outright. The distinction matters: an unrecognized key is
+ * hoisted into `properties` below, on the assumption it is a property written
+ * in shorthand — but doing that to a keyword advertises a parameter literally
+ * named `if` or `not` to the model, which then emits arguments the client has
+ * no way to dispatch. Anything a schema might legitimately contain as a
+ * *keyword* belongs in this list; keys nested under `properties` are never
+ * consulted against it, so a property genuinely named "if" survives.
+ */
+const NON_PROPERTY_SCHEMA_KEYWORDS = new Set([
+  ...UNSUPPORTED_KEYWORDS,
+  "if",
+  "then",
+  "else",
+  "not",
+  "allOf",
+  "anyOf",
+  "oneOf",
+  "patternProperties",
+  "dependencies",
+  "dependentSchemas",
+  "dependentRequired",
+  "unevaluatedProperties",
+  "unevaluatedItems",
+  "contains",
+  "prefixItems",
+  "minProperties",
+  "maxProperties",
+  "uniqueItems",
+  "multipleOf",
+  "minimum",
+  "maximum",
+  "readOnly",
+  "writeOnly",
+  "deprecated",
+  "discriminator",
+  "externalDocs",
+  "example",
+  "xml",
+]);
+
+/** A value only gets hoisted into `properties` if it reads like a schema. */
+function looksLikeSchema(value: any): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  return ["type", "properties", "items", "enum", "description"].some((k) => k in value);
+}
+
 function strictSanitizeSchemaKeys(schema: any): any {
   if (!schema || typeof schema !== "object") return schema;
   if (Array.isArray(schema)) return schema.map(strictSanitizeSchemaKeys);
@@ -354,10 +403,8 @@ function strictSanitizeSchemaKeys(schema: any): any {
       } else {
         result[key] = value;
       }
-    } else {
-      if (value && typeof value === "object" && !Array.isArray(value)) {
-        extraProperties[key] = strictSanitizeSchemaKeys(value);
-      }
+    } else if (!NON_PROPERTY_SCHEMA_KEYWORDS.has(key) && looksLikeSchema(value)) {
+      extraProperties[key] = strictSanitizeSchemaKeys(value);
     }
   }
 

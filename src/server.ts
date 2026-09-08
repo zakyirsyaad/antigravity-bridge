@@ -37,16 +37,118 @@ export class BridgeServer {
     });
   }
 
-  private setCorsHeaders(res: http.ServerResponse) {
-    res.setHeader("Access-Control-Allow-Origin", "*");
+  /**
+   * Requests arriving over loopback are trusted by default: the dashboard, the
+   * CLI and any local agent reach the bridge that way, and anything already
+   * running as this user can read ~/.zcode/antigravity-accounts.json directly
+   * anyway. Set BRIDGE_TRUST_LOCAL=0 to require a key even locally.
+   */
+  private isTrustedLocalRequest(req: http.IncomingMessage): boolean {
+    if (process.env.BRIDGE_TRUST_LOCAL === "0") return false;
+    const address = req.socket.remoteAddress || "";
+    return address === "127.0.0.1" || address === "::1" || address === "::ffff:127.0.0.1";
+  }
+
+  /** The key a caller presented, via either header clients already send. */
+  private presentedApiKey(req: http.IncomingMessage): string | null {
+    const authorization = req.headers.authorization;
+    if (typeof authorization === "string" && authorization.toLowerCase().startsWith("bearer ")) {
+      const value = authorization.slice(7).trim();
+      if (value) return value;
+    }
+    const apiKey = req.headers["x-api-key"];
+    if (typeof apiKey === "string" && apiKey.trim()) return apiKey.trim();
+    return null;
+  }
+
+  /**
+   * Thinking tokens Google reported for a response.
+   *
+   * Reported separately from candidatesTokenCount, and previously discarded, so
+   * `bridge:usage` always showed zero reasoning. It is the only way to tell
+   * whether a thinking budget is actually being used or is sitting idle — which
+   * is what a budget-vs-answer-window tradeoff has to be tuned against.
+   */
+  private static thoughtsTokens(resp: any): number {
+    const raw = resp?.response || resp;
+    return raw?.usageMetadata?.thoughtsTokenCount || 0;
+  }
+
+  /** Compare via fixed-length digests so the check does not leak the key. */
+  private static keysMatch(presented: string, expected: string): boolean {
+    const a = crypto.createHash("sha256").update(presented).digest();
+    const b = crypto.createHash("sha256").update(expected).digest();
+    return crypto.timingSafeEqual(a, b);
+  }
+
+  /**
+   * Returns null when the request may proceed, or the reason it may not.
+   *
+   * Fail-closed on purpose: a bridge reachable from a non-local address holds
+   * pooled Google quota and can delete accounts, so an unset key refuses remote
+   * callers rather than serving them. A localhost-only install sees no change.
+   */
+  private authorize(req: http.IncomingMessage): string | null {
+    if (this.isTrustedLocalRequest(req)) return null;
+
+    const expected = process.env.BRIDGE_API_KEY;
+    if (!expected) {
+      return "This bridge is reachable from a non-local address but BRIDGE_API_KEY is not set, so remote requests are refused. Set BRIDGE_API_KEY on the server and send it as 'Authorization: Bearer <key>' or 'x-api-key: <key>'.";
+    }
+
+    const presented = this.presentedApiKey(req);
+    if (!presented || !BridgeServer.keysMatch(presented, expected)) {
+      return "Missing or invalid API key. Send it as 'Authorization: Bearer <key>' or 'x-api-key: <key>'.";
+    }
+    return null;
+  }
+
+  /**
+   * The management API reads and mutates stored Google credentials, so it is
+   * held to a stricter policy than the inference endpoints, which stay open for
+   * browser-based clients.
+   */
+  private isManagementPath(pathname: string): boolean {
+    return pathname === "/api" || pathname.startsWith("/api/") || pathname.startsWith("/oauth/");
+  }
+
+  private setCorsHeaders(res: http.ServerResponse, isManagement: boolean) {
+    // Never hand out a wildcard on the management API: it would let any page the
+    // user has open read the pool state and drive the mutation endpoints.
+    if (!isManagement) {
+      res.setHeader("Access-Control-Allow-Origin", "*");
+    }
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
     res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-API-Key, anthropic-version");
+  }
+
+  /**
+   * Withholding the CORS header stops a foreign page reading a response, but a
+   * simple cross-origin POST still reaches the handler, so an account could be
+   * deleted without the attacker ever seeing the reply. Reject those outright.
+   *
+   * Requests carrying no Origin (curl, the CLI, native GUIs, and top-level
+   * navigations such as the dashboard's add-account link) are allowed through;
+   * a browser Origin must match the host the request was addressed to.
+   */
+  private isCrossOriginRequest(req: http.IncomingMessage): boolean {
+    const origin = req.headers.origin;
+    if (!origin) return false;
+    try {
+      return new URL(origin).host !== req.headers.host;
+    } catch {
+      return true;
+    }
   }
 
   public start(): Promise<number> {
     return new Promise((resolve, reject) => {
       this.server = http.createServer(async (req, res) => {
-        this.setCorsHeaders(res);
+        const url = new URL(req.url || "/", `http://localhost:${this.port}`);
+        const pathname = url.pathname.replace(/\/+$/, "");
+        const isManagement = this.isManagementPath(pathname);
+
+        this.setCorsHeaders(res, isManagement);
 
         if (req.method === "OPTIONS") {
           res.writeHead(204);
@@ -54,8 +156,35 @@ export class BridgeServer {
           return;
         }
 
-        const url = new URL(req.url || "/", `http://localhost:${this.port}`);
-        const pathname = url.pathname.replace(/\/+$/, "");
+        // The dashboard shell carries no secrets and has to load before it can
+        // present a key, so the HTML itself stays open. Its JSON variant does
+        // not: that one reports the signed-in account.
+        const acceptHeader = String(req.headers.accept || "");
+        const wantsJson = acceptHeader.includes("application/json") && !acceptHeader.includes("text/html");
+        const isDashboardShell =
+          (pathname === "" || pathname === "/dashboard") && req.method === "GET" && !wantsJson;
+
+        if (!isDashboardShell) {
+          const denial = this.authorize(req);
+          if (denial) {
+            res.writeHead(401, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: { message: denial, type: "unauthorized" } }));
+            return;
+          }
+        }
+
+        if (isManagement && this.isCrossOriginRequest(req)) {
+          res.writeHead(403, { "Content-Type": "application/json" });
+          res.end(
+            JSON.stringify({
+              error: {
+                message: "Cross-origin requests are not allowed on the management API",
+                type: "forbidden",
+              },
+            })
+          );
+          return;
+        }
 
         try {
           // Web Dashboard
@@ -350,8 +479,12 @@ export class BridgeServer {
         let currentBlockIndex = 0;
         let currentBlockType: "thinking" | "text" | null = null;
         let outputTokens = 0;
+        let sawToolUse = false;
+        let streamUsage: any = null;
 
         for await (const chunk of stream) {
+          const chunkUsage = chunk.response?.usageMetadata || chunk.usageMetadata;
+          if (chunkUsage) streamUsage = chunkUsage;
           const candidate = chunk.response?.candidates?.[0] || chunk.candidates?.[0];
           const parts = candidate?.content?.parts || [];
 
@@ -411,6 +544,7 @@ export class BridgeServer {
                 currentBlockIndex++;
               }
               currentBlockType = null;
+              sawToolUse = true;
               const toolUseId = `call_${crypto.randomBytes(8).toString("hex")}`;
               res.write(
                 `event: content_block_start\ndata: ${JSON.stringify({
@@ -448,7 +582,7 @@ export class BridgeServer {
         res.write(
           `event: message_delta\ndata: ${JSON.stringify({
             type: "message_delta",
-            delta: { stop_reason: "end_turn", stop_sequence: null },
+            delta: { stop_reason: sawToolUse ? "tool_use" : "end_turn", stop_sequence: null },
             usage: { output_tokens: outputTokens },
           })}\n\n`
         );
@@ -457,7 +591,12 @@ export class BridgeServer {
         res.write(`event: message_stop\ndata: ${JSON.stringify({ type: "message_stop" })}\n\n`);
         res.end();
 
-        UsageTracker.getInstance().recordUsage(requestedModel, 0, outputTokens, 0);
+        UsageTracker.getInstance().recordUsage(
+          requestedModel,
+          streamUsage?.promptTokenCount || 0,
+          streamUsage?.candidatesTokenCount || outputTokens,
+          streamUsage?.thoughtsTokenCount || 0
+        );
       } catch (streamErr: any) {
         console.error("[Stream Error]", streamErr);
         if (res.headersSent) {
@@ -484,7 +623,7 @@ export class BridgeServer {
         requestedModel,
         formatted.usage?.input_tokens || 0,
         formatted.usage?.output_tokens || 0,
-        0
+        BridgeServer.thoughtsTokens(resp)
       );
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify(formatted));
@@ -510,8 +649,20 @@ export class BridgeServer {
 
       try {
         const stream = await this.client.streamGenerateContent(payload);
+        // Estimated like the Anthropic streaming path: the SSE frames carry no
+        // usage metadata, so both protocols approximate rather than one of them
+        // silently reporting nothing.
+        let outputTokens = 0;
+        // Position of the next tool call within this turn. OpenAI clients
+        // accumulate tool_call deltas keyed by this index, so parallel calls
+        // must each get their own — sharing one index merges them into a
+        // single call with concatenated names and unparseable arguments.
+        let toolCallIndex = 0;
+        let streamUsage: any = null;
 
         for await (const chunk of stream) {
+          const chunkUsage = chunk.response?.usageMetadata || chunk.usageMetadata;
+          if (chunkUsage) streamUsage = chunkUsage;
           const candidate = chunk.response?.candidates?.[0] || chunk.candidates?.[0];
           const parts = candidate?.content?.parts || [];
 
@@ -535,6 +686,7 @@ export class BridgeServer {
                   ],
                 })}\n\n`
               );
+              outputTokens += Math.ceil(text.length / 4);
             } else if (text) {
               res.write(
                 `data: ${JSON.stringify({
@@ -551,6 +703,7 @@ export class BridgeServer {
                   ],
                 })}\n\n`
               );
+              outputTokens += Math.ceil(text.length / 4);
             } else if (part.functionCall) {
               const toolCallId = part.functionCall.id || `call_${crypto.randomBytes(8).toString("hex")}`;
               res.write(
@@ -565,7 +718,7 @@ export class BridgeServer {
                       delta: {
                         tool_calls: [
                           {
-                            index: 0,
+                            index: toolCallIndex,
                             id: toolCallId,
                             type: "function",
                             function: {
@@ -580,6 +733,7 @@ export class BridgeServer {
                   ],
                 })}\n\n`
               );
+              toolCallIndex++;
             }
           }
         }
@@ -594,13 +748,20 @@ export class BridgeServer {
               {
                 index: 0,
                 delta: {},
-                finish_reason: "stop",
+                finish_reason: toolCallIndex > 0 ? "tool_calls" : "stop",
               },
             ],
           })}\n\n`
         );
         res.write("data: [DONE]\n\n");
         res.end();
+
+        UsageTracker.getInstance().recordUsage(
+          requestedModel,
+          streamUsage?.promptTokenCount || 0,
+          streamUsage?.candidatesTokenCount || outputTokens,
+          streamUsage?.thoughtsTokenCount || 0
+        );
       } catch (streamErr: any) {
         console.error("[OpenAI Stream Error]", streamErr);
         res.write(`data: ${JSON.stringify({ error: { message: streamErr.message } })}\n\n`);
@@ -610,6 +771,12 @@ export class BridgeServer {
     } else {
       const resp = await this.client.generateContent(payload);
       const formatted = Transformer.antigravityToOpenAI(resp, requestedModel);
+      UsageTracker.getInstance().recordUsage(
+        requestedModel,
+        formatted.usage?.prompt_tokens || 0,
+        formatted.usage?.completion_tokens || 0,
+        BridgeServer.thoughtsTokens(resp)
+      );
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify(formatted));
     }

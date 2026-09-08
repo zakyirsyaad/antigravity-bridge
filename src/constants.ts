@@ -51,124 +51,231 @@ export function getAntigravityHeaders() {
   };
 }
 
+/**
+ * A model the bridge exposes.
+ *
+ * `id` is both what clients send and what Google receives — there is no
+ * translation layer any more. The previous table mapped friendly ids onto
+ * different Google models (five distinct flash ids all resolved to
+ * `gemini-3-flash`, and `gemini-3-pro` resolved to a model Google no longer
+ * offers at all), so the advertised name told you nothing about what actually
+ * ran.
+ *
+ * Every field below is Google's own metadata, taken from
+ * `v1internal:fetchAvailableModels`. Re-check it with `npm run bridge:models`,
+ * which reports drift rather than letting this table rot silently.
+ *
+ * Note that Google's ids and display names disagree in places — `gemini-3.5
+ * -flash-low` is presented as "Gemini 3.5 Flash (Medium)". That inconsistency
+ * is upstream; reproducing it faithfully beats inventing our own names.
+ */
 export interface ModelDef {
+  /** Sent to Google verbatim. */
   id: string;
-  targetModel?: string;
+  /** Google's displayName. */
   name: string;
-  family: "claude" | "gemini";
+  family: "claude" | "gemini" | "openai";
   contextLimit: number;
   outputLimit: number;
-  supportsThinking?: boolean;
-  defaultThinkingBudget?: number;
-  thinkingLevel?: "minimal" | "low" | "medium" | "high";
+  supportsThinking: boolean;
+  /**
+   * Google's declared default thinking budget. -1 means the model sizes its own
+   * reasoning; in that case the bridge forwards -1 rather than pinning a number,
+   * because an explicit budget would switch dynamic thinking off.
+   */
+  thinkingBudget?: number;
+  /** Smallest budget the model accepts. Requests below this are raised to it. */
+  minThinkingBudget?: number;
 }
 
 export const SUPPORTED_MODELS: ModelDef[] = [
+  // Claude, via Antigravity
   {
     id: "claude-opus-4-6-thinking",
-    name: "Claude Opus 4.6 Thinking (Antigravity)",
+    name: "Claude Opus 4.6 (Thinking)",
     family: "claude",
-    contextLimit: 200000,
+    contextLimit: 250000,
     outputLimit: 64000,
     supportsThinking: true,
-    defaultThinkingBudget: 32768,
+    thinkingBudget: 1024,
   },
   {
     id: "claude-sonnet-4-6",
-    name: "Claude Sonnet 4.6 (Antigravity)",
+    name: "Claude Sonnet 4.6 (Thinking)",
     family: "claude",
-    contextLimit: 200000,
+    contextLimit: 250000,
     outputLimit: 64000,
-    supportsThinking: false,
+    supportsThinking: true,
+    thinkingBudget: 1024,
   },
+
+  // Gemini Pro. The -high variant reasons roughly ten times as hard as -low;
+  // the tier is fixed by the model name, not by thinking_budget.
   {
-    id: "gemini-3.1-pro",
-    targetModel: "gemini-3.1-pro-low",
-    name: "Gemini 3.1 Pro (Antigravity)",
+    id: "gemini-3.1-pro-high",
+    name: "Gemini 3.1 Pro (High)",
     family: "gemini",
     contextLimit: 1048576,
     outputLimit: 65535,
     supportsThinking: true,
-    thinkingLevel: "low",
+    thinkingBudget: 10001,
+    minThinkingBudget: 128,
   },
   {
-    id: "gemini-3-pro",
-    targetModel: "gemini-3-pro-low",
-    name: "Gemini 3 Pro (Antigravity)",
+    id: "gemini-3.1-pro-low",
+    name: "Gemini 3.1 Pro (Low)",
     family: "gemini",
     contextLimit: 1048576,
     outputLimit: 65535,
     supportsThinking: true,
-    thinkingLevel: "low",
-  },
-  {
-    id: "gemini-3.8-flash",
-    targetModel: "gemini-3-flash",
-    name: "Gemini 3.8 Flash (Antigravity)",
-    family: "gemini",
-    contextLimit: 1048576,
-    outputLimit: 65536,
-    supportsThinking: true,
-    thinkingLevel: "high",
-    defaultThinkingBudget: 32768,
-  },
-  {
-    id: "gemini-3.8-flash-high",
-    targetModel: "gemini-3-flash",
-    name: "Gemini 3.8 Flash High (Antigravity)",
-    family: "gemini",
-    contextLimit: 1048576,
-    outputLimit: 65536,
-    supportsThinking: true,
-    thinkingLevel: "high",
-    defaultThinkingBudget: 32768,
-  },
-  {
-    id: "gemini-3.7-flash",
-    targetModel: "gemini-3-flash",
-    name: "Gemini 3.7 Flash (Antigravity)",
-    family: "gemini",
-    contextLimit: 1048576,
-    outputLimit: 65536,
-    supportsThinking: true,
-    thinkingLevel: "high",
-  },
-  {
-    id: "gemini-3.7-flash-high",
-    targetModel: "gemini-3-flash",
-    name: "Gemini 3.7 Flash High (Antigravity)",
-    family: "gemini",
-    contextLimit: 1048576,
-    outputLimit: 65536,
-    supportsThinking: true,
-    thinkingLevel: "high",
-  },
-  {
-    id: "gemini-3-flash",
-    targetModel: "gemini-3-flash",
-    name: "Gemini 3 Flash (Antigravity)",
-    family: "gemini",
-    contextLimit: 1048576,
-    outputLimit: 65536,
-    supportsThinking: true,
-    thinkingLevel: "high",
-  },
-  {
-    id: "gemini-2.5-flash",
-    targetModel: "gemini-2.5-flash",
-    name: "Gemini 2.5 Flash (Antigravity)",
-    family: "gemini",
-    contextLimit: 1048576,
-    outputLimit: 65536,
-    supportsThinking: false,
+    thinkingBudget: 1001,
+    minThinkingBudget: 128,
   },
   {
     id: "gemini-2.5-pro",
-    targetModel: "gemini-2.5-pro",
-    name: "Gemini 2.5 Pro (Antigravity)",
+    name: "Gemini 2.5 Pro",
+    family: "gemini",
+    contextLimit: 1048576,
+    outputLimit: 65535,
+    supportsThinking: true,
+    thinkingBudget: 1024,
+    minThinkingBudget: 128,
+  },
+
+  // Gemini 3.6 Flash — the newest family. Google's own default agent model is
+  // gemini-3.6-flash-high.
+  {
+    id: "gemini-3.6-flash-high",
+    name: "Gemini 3.6 Flash (High)",
     family: "gemini",
     contextLimit: 1048576,
     outputLimit: 65536,
+    supportsThinking: true,
+    thinkingBudget: -1,
+    minThinkingBudget: 32,
+  },
+  {
+    id: "gemini-3.6-flash-medium",
+    name: "Gemini 3.6 Flash (Medium)",
+    family: "gemini",
+    contextLimit: 1048576,
+    outputLimit: 65536,
+    supportsThinking: true,
+    thinkingBudget: 4000,
+    minThinkingBudget: 32,
+  },
+  {
+    id: "gemini-3.6-flash-low",
+    name: "Gemini 3.6 Flash (Low)",
+    family: "gemini",
+    contextLimit: 1048576,
+    outputLimit: 65536,
+    supportsThinking: true,
+    thinkingBudget: 1000,
+    minThinkingBudget: 32,
+  },
+
+  // Gemini 3.5 Flash
+  {
+    id: "gemini-3-flash-agent",
+    name: "Gemini 3.5 Flash (High)",
+    family: "gemini",
+    contextLimit: 1048576,
+    outputLimit: 65536,
+    supportsThinking: true,
+    thinkingBudget: -1,
+    minThinkingBudget: 32,
+  },
+  {
+    id: "gemini-3.5-flash-low",
+    name: "Gemini 3.5 Flash (Medium)",
+    family: "gemini",
+    contextLimit: 1048576,
+    outputLimit: 65536,
+    supportsThinking: true,
+    thinkingBudget: 4000,
+    minThinkingBudget: 32,
+  },
+  {
+    id: "gemini-3.5-flash-extra-low",
+    name: "Gemini 3.5 Flash (Low)",
+    family: "gemini",
+    contextLimit: 1048576,
+    outputLimit: 65536,
+    supportsThinking: true,
+    thinkingBudget: 1000,
+    minThinkingBudget: 32,
+  },
+
+  // Tiered flash models. These carry no displayName upstream because they are
+  // not a fixed tier: Antigravity's own model picker maps its "flash" option to
+  // gemini-3.8-flash-tiered and lets the user slide reasoning from low to high,
+  // which is why the budget is dynamic. The tier is a per-request parameter, so
+  // reasoning_effort / thinking.budget_tokens is how you choose it here.
+  {
+    id: "gemini-3.8-flash-tiered",
+    name: "Gemini 3.8 Flash (Tiered)",
+    family: "gemini",
+    contextLimit: 1048576,
+    outputLimit: 65536,
+    supportsThinking: true,
+    thinkingBudget: -1,
+    minThinkingBudget: 32,
+  },
+  {
+    id: "gemini-3.7-flash-tiered",
+    name: "Gemini 3.7 Flash (Tiered)",
+    family: "gemini",
+    contextLimit: 1048576,
+    outputLimit: 65536,
+    supportsThinking: true,
+    thinkingBudget: -1,
+    minThinkingBudget: 32,
+  },
+  {
+    id: "gemini-3.6-flash-tiered",
+    name: "Gemini 3.6 Flash (Tiered)",
+    family: "gemini",
+    contextLimit: 1048576,
+    outputLimit: 65536,
+    supportsThinking: true,
+    thinkingBudget: -1,
+    minThinkingBudget: 32,
+  },
+
+  // Gemini 3 Flash
+  {
+    id: "gemini-3-flash",
+    name: "Gemini 3 Flash",
+    family: "gemini",
+    contextLimit: 1048576,
+    outputLimit: 65536,
+    supportsThinking: true,
+    thinkingBudget: -1,
+    minThinkingBudget: 32,
+  },
+  {
+    id: "gemini-3.1-flash-lite",
+    name: "Gemini 3.1 Flash Lite",
+    family: "gemini",
+    contextLimit: 1048576,
+    outputLimit: 65535,
     supportsThinking: false,
   },
+
+  // Other providers surfaced through Antigravity
+  {
+    id: "gpt-oss-120b-medium",
+    name: "GPT-OSS 120B (Medium)",
+    family: "openai",
+    contextLimit: 131072,
+    outputLimit: 32768,
+    supportsThinking: true,
+    thinkingBudget: 8192,
+  },
 ];
+
+/** Look a model up by the id a client sent. */
+export function findModel(id: string): ModelDef | undefined {
+  return SUPPORTED_MODELS.find((m) => m.id === id);
+}

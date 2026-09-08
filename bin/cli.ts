@@ -1,9 +1,8 @@
-import fs from "node:fs";
-import path from "node:path";
 import { BridgeServer } from "../src/server";
 import { OAuthManager } from "../src/oauth";
 import { syncZCodeConfig } from "../src/zcode-sync";
 import { LaunchAgentService } from "../src/launchagent";
+import { checkModelDrift } from "../src/model-sync";
 import { UsageTracker } from "../src/usage-tracker";
 import { BRIDGE_DEFAULT_PORT, SUPPORTED_MODELS } from "../src/constants";
 
@@ -99,11 +98,57 @@ async function main() {
       try {
         const switched = oauth.switchAccount(target);
         console.log(`\n✓ Successfully switched active account to: ${switched.email || "Google Account"}`);
-        const projectDir = path.resolve(__dirname, "..", "..", "..");
-        LaunchAgentService.install(projectDir);
-        console.log(`✓ Background service reloaded and active.`);
+
+        // Reload the daemon so it picks up the new active account. Report what
+        // actually happened: silently assuming success here is how a failed
+        // reload used to look identical to a working one.
+        const result = LaunchAgentService.install(LaunchAgentService.resolveProjectDir(__dirname));
+        if (result.success) {
+          console.log(`✓ Background service reloaded and active.`);
+        } else {
+          console.warn(`! Account switched, but the background service was NOT reloaded: ${result.message}`);
+          console.warn(`  Restart it yourself so the new account takes effect.`);
+        }
       } catch (err: any) {
         console.error(`✗ Failed to switch account: ${err.message}`);
+        process.exit(1);
+      }
+      break;
+    }
+
+    case "models": {
+      try {
+        console.log("\nComparing the model table against what Google serves...\n");
+        const drift = await checkModelDrift();
+
+        console.log(`Exposed by this bridge : ${SUPPORTED_MODELS.length}`);
+        console.log(`Offered by Google      : ${drift.totalUpstream}`);
+        console.log(`Google's default agent : ${drift.defaultAgentModelId || "-"}\n`);
+
+        if (drift.missing.length) {
+          console.log("✗ BROKEN — exposed here but no longer served. Requests to these fail:");
+          drift.missing.forEach((m) => console.log(`    ${m.id}  (${m.name})`));
+          console.log("");
+        }
+        if (drift.changed.length) {
+          console.log("! Metadata drifted from Google's:");
+          drift.changed.forEach((c) => console.log(`    ${c.id}  ${c.field}: ours=${c.ours} theirs=${c.theirs}`));
+          console.log("");
+        }
+        if (drift.unexposed.length) {
+          console.log("+ Thinking-capable models Google offers that this bridge does not expose:");
+          drift.unexposed.forEach((m) =>
+            console.log(`    ${m.id.padEnd(30)} budget=${String(m.thinkingBudget).padEnd(7)} ${m.displayName}`)
+          );
+          console.log("");
+        }
+        if (!drift.missing.length && !drift.changed.length && !drift.unexposed.length) {
+          console.log("✓ The model table matches Google exactly.\n");
+        } else {
+          console.log("Edit SUPPORTED_MODELS in src/constants.ts to reconcile.\n");
+        }
+      } catch (err: any) {
+        console.error(`✗ Could not check models: ${err.message}`);
         process.exit(1);
       }
       break;
@@ -124,9 +169,7 @@ async function main() {
     }
 
     case "service:install": {
-      const isStandalone = fs.existsSync(path.join(__dirname, "..", "package.json"));
-      const projectDir = isStandalone ? path.resolve(__dirname, "..") : path.resolve(__dirname, "..", "..", "..");
-      const result = LaunchAgentService.install(projectDir);
+      const result = LaunchAgentService.install(LaunchAgentService.resolveProjectDir(__dirname));
       if (result.success) {
         console.log(`✓ ${result.message}`);
       } else {

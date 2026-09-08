@@ -40,6 +40,24 @@ export interface AccountsStorage {
   activeAccountIndex: number;
 }
 
+/**
+ * Account fields that are safe to serialize over HTTP.
+ *
+ * The management API is unauthenticated, so anything reachable from it must
+ * never carry OAuth material: a refresh token does not expire and grants
+ * cloud-platform scope. Keep accessToken/refreshToken out of this type.
+ */
+export interface PublicAccountSummary {
+  email?: string;
+  name?: string;
+  projectId?: string;
+}
+
+export function toPublicAccountSummary(account: AccountToken | null): PublicAccountSummary | null {
+  if (!account) return null;
+  return { email: account.email, name: account.name, projectId: account.projectId };
+}
+
 function base64URLEncode(str: Buffer): string {
   return str
     .toString("base64")
@@ -62,7 +80,14 @@ let memoryToken: AccountToken | null = null;
 
 export class OAuthManager {
   private static instance: OAuthManager;
-  private refreshPromise: Promise<string> | null = null;
+  /**
+   * In-flight token refreshes, keyed by refresh token.
+   *
+   * Keyed rather than single, because the active account can change under us:
+   * a 429 failover swaps it mid-flight, and a single shared promise would hand
+   * the new account's caller the previous account's access token.
+   */
+  private refreshPromises = new Map<string, Promise<string>>();
   private autoFailoverEnabled: boolean = true;
   private poolEvents: PoolEvent[] = [];
 
@@ -71,6 +96,26 @@ export class OAuthManager {
       OAuthManager.instance = new OAuthManager();
     }
     return OAuthManager.instance;
+  }
+
+  /**
+   * Read the accounts file, always returning a well-formed shape.
+   *
+   * A truncated write, or the `{ provider: {} }`-shaped file this codebase
+   * writes elsewhere, parses fine as JSON but has no `accounts` array — and
+   * callers that dereferenced it directly threw a TypeError outside their
+   * try/catch, or silently failed to persist.
+   */
+  private readStorage(): AccountsStorage {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(ACCOUNTS_STORAGE_PATH, "utf-8"));
+      return {
+        accounts: Array.isArray(parsed?.accounts) ? parsed.accounts : [],
+        activeAccountIndex: typeof parsed?.activeAccountIndex === "number" ? parsed.activeAccountIndex : 0,
+      };
+    } catch {
+      return { accounts: [], activeAccountIndex: 0 };
+    }
   }
 
   /**
@@ -137,14 +182,9 @@ export class OAuthManager {
         fs.mkdirSync(dirname, { recursive: true });
       }
 
-      let storage: AccountsStorage = { accounts: [], activeAccountIndex: 0 };
-      if (fs.existsSync(ACCOUNTS_STORAGE_PATH)) {
-        try {
-          storage = JSON.parse(fs.readFileSync(ACCOUNTS_STORAGE_PATH, "utf-8"));
-        } catch {
-          storage = { accounts: [], activeAccountIndex: 0 };
-        }
-      }
+      const storage: AccountsStorage = fs.existsSync(ACCOUNTS_STORAGE_PATH)
+        ? this.readStorage()
+        : { accounts: [], activeAccountIndex: 0 };
 
       const existingIdx = storage.accounts.findIndex(
         (a) => (token.email && a.email === token.email) || a.refreshToken === token.refreshToken
@@ -242,13 +282,7 @@ export class OAuthManager {
   public deleteAccountByEmail(email: string): boolean {
     if (!fs.existsSync(ACCOUNTS_STORAGE_PATH)) return false;
 
-    let storage: AccountsStorage;
-    try {
-      storage = JSON.parse(fs.readFileSync(ACCOUNTS_STORAGE_PATH, "utf-8"));
-    } catch {
-      return false;
-    }
-
+    const storage = this.readStorage();
     const initialLen = storage.accounts.length;
     storage.accounts = storage.accounts.filter(
       (a) => a.email?.toLowerCase() !== email.toLowerCase()
@@ -365,7 +399,7 @@ export class OAuthManager {
   public getPoolStatus(): {
     autoFailoverEnabled: boolean;
     totalAccounts: number;
-    activeAccount: AccountToken | null;
+    activeAccount: PublicAccountSummary | null;
     activeIndex: number;
     readyCount: number;
     coolingDownCount: number;
@@ -417,7 +451,7 @@ export class OAuthManager {
     return {
       autoFailoverEnabled: this.autoFailoverEnabled,
       totalAccounts: accounts.length,
-      activeAccount: activeAcc,
+      activeAccount: toPublicAccountSummary(activeAcc),
       activeIndex,
       readyCount,
       coolingDownCount,
@@ -427,9 +461,25 @@ export class OAuthManager {
   }
 
   /**
+   * Look an account up by its refresh token, which is stable per account —
+   * unlike "the active account", which failover can change at any moment.
+   */
+  private findAccountByRefreshToken(refreshToken: string): AccountToken | null {
+    return this.listAccounts().accounts.find((a) => a.refreshToken === refreshToken) || null;
+  }
+
+  /**
    * Refresh Google OAuth Access Token using Refresh Token
    */
   public async refreshAccessToken(refreshToken: string): Promise<AccountToken> {
+    // Resolve identity from the account that owns this refresh token, and do it
+    // before the network round-trip. Reading module state afterwards would be a
+    // race: a 429 failover can swap the active account while the request is in
+    // flight, and the refreshed token would then be stamped with the *new*
+    // account's email, which saveAccount() matches on — overwriting that
+    // account's stored entry with this token.
+    const owner = this.findAccountByRefreshToken(refreshToken);
+
     const params = new URLSearchParams({
       client_id: ANTIGRAVITY_CLIENT_ID,
       client_secret: ANTIGRAVITY_CLIENT_SECRET,
@@ -455,8 +505,8 @@ export class OAuthManager {
     };
 
     const expiresAt = Date.now() + (data.expires_in || 3600) * 1000 - 60000; // 1 min buffer
-    let email = memoryToken?.email;
-    let name = memoryToken?.name;
+    let email = owner?.email;
+    let name = owner?.name;
 
     if (!email) {
       try {
@@ -477,7 +527,7 @@ export class OAuthManager {
       accessToken: data.access_token,
       refreshToken: refreshToken,
       expiresAt: expiresAt,
-      projectId: memoryToken?.projectId || DEFAULT_PROJECT_ID,
+      projectId: owner?.projectId || DEFAULT_PROJECT_ID,
     };
 
     this.saveAccount(updated);
@@ -514,20 +564,23 @@ export class OAuthManager {
       return acc.accessToken;
     }
 
-    if (this.refreshPromise) {
-      return this.refreshPromise;
+    const refreshToken = acc.refreshToken;
+    const inFlight = this.refreshPromises.get(refreshToken);
+    if (inFlight) {
+      return inFlight;
     }
 
-    this.refreshPromise = (async () => {
+    const refresh = (async () => {
       try {
-        const refreshed = await this.refreshAccessToken(acc.refreshToken);
+        const refreshed = await this.refreshAccessToken(refreshToken);
         return refreshed.accessToken;
       } finally {
-        this.refreshPromise = null;
+        this.refreshPromises.delete(refreshToken);
       }
     })();
 
-    return this.refreshPromise;
+    this.refreshPromises.set(refreshToken, refresh);
+    return refresh;
   }
 
   /** Get a valid token for a non-active account without changing the active account. */
@@ -563,7 +616,7 @@ export class OAuthManager {
 
   private updateStoredAccount(updated: AccountToken) {
     try {
-      const storage: AccountsStorage = JSON.parse(fs.readFileSync(ACCOUNTS_STORAGE_PATH, "utf-8"));
+      const storage = this.readStorage();
       const index = storage.accounts.findIndex((account) => account.refreshToken === updated.refreshToken);
       if (index >= 0) {
         storage.accounts[index] = updated;
