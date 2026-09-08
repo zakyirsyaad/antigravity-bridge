@@ -80,7 +80,14 @@ let memoryToken: AccountToken | null = null;
 
 export class OAuthManager {
   private static instance: OAuthManager;
-  private refreshPromise: Promise<string> | null = null;
+  /**
+   * In-flight token refreshes, keyed by refresh token.
+   *
+   * Keyed rather than single, because the active account can change under us:
+   * a 429 failover swaps it mid-flight, and a single shared promise would hand
+   * the new account's caller the previous account's access token.
+   */
+  private refreshPromises = new Map<string, Promise<string>>();
   private autoFailoverEnabled: boolean = true;
   private poolEvents: PoolEvent[] = [];
 
@@ -445,9 +452,25 @@ export class OAuthManager {
   }
 
   /**
+   * Look an account up by its refresh token, which is stable per account —
+   * unlike "the active account", which failover can change at any moment.
+   */
+  private findAccountByRefreshToken(refreshToken: string): AccountToken | null {
+    return this.listAccounts().accounts.find((a) => a.refreshToken === refreshToken) || null;
+  }
+
+  /**
    * Refresh Google OAuth Access Token using Refresh Token
    */
   public async refreshAccessToken(refreshToken: string): Promise<AccountToken> {
+    // Resolve identity from the account that owns this refresh token, and do it
+    // before the network round-trip. Reading module state afterwards would be a
+    // race: a 429 failover can swap the active account while the request is in
+    // flight, and the refreshed token would then be stamped with the *new*
+    // account's email, which saveAccount() matches on — overwriting that
+    // account's stored entry with this token.
+    const owner = this.findAccountByRefreshToken(refreshToken);
+
     const params = new URLSearchParams({
       client_id: ANTIGRAVITY_CLIENT_ID,
       client_secret: ANTIGRAVITY_CLIENT_SECRET,
@@ -473,8 +496,8 @@ export class OAuthManager {
     };
 
     const expiresAt = Date.now() + (data.expires_in || 3600) * 1000 - 60000; // 1 min buffer
-    let email = memoryToken?.email;
-    let name = memoryToken?.name;
+    let email = owner?.email;
+    let name = owner?.name;
 
     if (!email) {
       try {
@@ -495,7 +518,7 @@ export class OAuthManager {
       accessToken: data.access_token,
       refreshToken: refreshToken,
       expiresAt: expiresAt,
-      projectId: memoryToken?.projectId || DEFAULT_PROJECT_ID,
+      projectId: owner?.projectId || DEFAULT_PROJECT_ID,
     };
 
     this.saveAccount(updated);
@@ -532,20 +555,23 @@ export class OAuthManager {
       return acc.accessToken;
     }
 
-    if (this.refreshPromise) {
-      return this.refreshPromise;
+    const refreshToken = acc.refreshToken;
+    const inFlight = this.refreshPromises.get(refreshToken);
+    if (inFlight) {
+      return inFlight;
     }
 
-    this.refreshPromise = (async () => {
+    const refresh = (async () => {
       try {
-        const refreshed = await this.refreshAccessToken(acc.refreshToken);
+        const refreshed = await this.refreshAccessToken(refreshToken);
         return refreshed.accessToken;
       } finally {
-        this.refreshPromise = null;
+        this.refreshPromises.delete(refreshToken);
       }
     })();
 
-    return this.refreshPromise;
+    this.refreshPromises.set(refreshToken, refresh);
+    return refresh;
   }
 
   /** Get a valid token for a non-active account without changing the active account. */
