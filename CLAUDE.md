@@ -133,9 +133,11 @@ of erroring.
 - **Client credentials in `constants.ts`** are the public Antigravity desktop app's, assembled from
   split string literals to dodge secret scanners. Override with `ANTIGRAVITY_CLIENT_ID` /
   `ANTIGRAVITY_CLIENT_SECRET`.
-- **LaunchAgent path resolution is inconsistent**: `service:install` detects standalone vs. embedded
-  layout, but the `switch` command still hardcodes `path.resolve(__dirname, "..", "..", "..")`,
-  which is only correct when the repo is vendored as `modules/antigravity-bridge`.
+- **LaunchAgent paths go through `LaunchAgentService.resolveProjectDir()`** — never resolve the
+  project root by hand. It distinguishes a standalone clone (`bin/` beside package.json) from a
+  vendored copy with hoisted deps, and `switch` and `service:install` disagreeing about that is
+  exactly what silently killed the daemon before. `install()` validates the resolved tsx CLI and
+  `bin/cli.ts` *before* unloading anything, because a `launchctl load` failure is still swallowed.
 - `.gitignore` excludes `src/**/*.js`, `bin/**/*.js`, `test/**/*.js` — stray compiled JS next to the
   sources is invisible to git and will shadow nothing, but can confuse greps.
 
