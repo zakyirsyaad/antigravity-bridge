@@ -17,12 +17,32 @@ CLI subcommands all route through `bin/cli.ts <command>`: `start`, `login`, `sta
 
 ### Testing
 
-`test/bridge.test.ts` is a hand-rolled sequential script, not a framework suite. It boots a real
-`BridgeServer` on port 52131 and issues **real requests to Google's CloudCode API**, so it requires
-a logged-in account (`npm run bridge:login`) and consumes real quota. It throws on the first
-failure, so there is no "run a single test" flag — comment out the numbered blocks you don't want,
-or copy one block into a scratch script. The block numbering in the console output is stale
-(`[2/5]`, `[3/5]`… while 7 tests actually run); ignore it.
+All suites are hand-rolled sequential scripts, not a framework. They share a house style: a local
+`expect(label, actual, wanted)` that counts failures, numbered `[n/m]` sections, and a throw at the
+end that exits non-zero. There is no "run a single test" flag — copy the block you want into a
+scratch script.
+
+**`npm test` (`test/bridge.test.ts`) is the odd one out**: it issues **real requests to Google's
+CloudCode API**, so it needs a logged-in account (`npm run bridge:login`) and consumes real quota.
+It throws on the first failure. Its console numbering is stale (`[2/5]`, `[3/5]`… while 7 tests
+run); ignore it.
+
+Everything else runs offline — no account, no network, no quota — by stubbing `AntigravityClient`,
+`OAuthManager`, `UsageTracker`, or `fs`. Prefer adding to these; CI can run them.
+
+| Script | Guards |
+|---|---|
+| `test:stream` | SSE framing: turn terminators, parallel tool-call indices |
+| `test:security` | management API leaks no OAuth tokens; cross-origin rejected |
+| `test:refresh` | token refresh is bound to its own account, not the active one |
+| `test:launchagent` | project-root resolution; `install()` rejects a bad root |
+| `test:budget` | thinking budget fits inside the caller's `max_tokens` |
+| `test:schema` | schema keywords are dropped, not hoisted into `properties` |
+| `test:usage` | both protocols record usage |
+| `test:storage` | malformed accounts file does not throw |
+
+When stubbing, keep side effects off the real `~/.zcode` files and off `launchctl` — several suites
+assert that explicitly, and that is deliberate.
 
 ### Build vs. run
 
