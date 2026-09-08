@@ -62,26 +62,38 @@ async function runTests() {
   console.log(`✓ Server started on port ${TEST_PORT}\n`);
 
   try {
-    console.log("[1/6] Loopback is trusted by default, no key needed ...");
+    console.log("[1/7] Loopback is trusted by default, no key needed ...");
     delete process.env.BRIDGE_API_KEY;
     expect("GET /api/pool", await status("/api/pool"), 200);
 
+    console.log("\n[1b/7] A proxied request is NOT treated as local ...");
+    // nginx and friends proxy from 127.0.0.1, so the socket address says
+    // loopback for every caller on the internet. The forwarding headers are the
+    // only thing distinguishing them.
+    delete process.env.BRIDGE_API_KEY;
+    expect("X-Forwarded-For, no key", await status("/api/pool", { headers: { "X-Forwarded-For": "203.0.113.7" } }), 401);
+    expect("X-Real-IP, no key", await status("/api/pool", { headers: { "X-Real-IP": "203.0.113.7" } }), 401);
+    process.env.BRIDGE_API_KEY = KEY;
+    expect("proxied with the key", await status("/api/pool", { headers: { "X-Forwarded-For": "203.0.113.7", "x-api-key": KEY } }), 200);
+    expect("proxied, wrong key", await status("/api/pool", { headers: { "X-Forwarded-For": "203.0.113.7", "x-api-key": "no" } }), 401);
+    delete process.env.BRIDGE_API_KEY;
+
     await asRemote(async () => {
-      console.log("\n[2/6] Remote caller with BRIDGE_API_KEY unset is refused ...");
+      console.log("\n[2/7] Remote caller with BRIDGE_API_KEY unset is refused ...");
       delete process.env.BRIDGE_API_KEY;
       expect("GET /api/pool", await status("/api/pool"), 401);
       expect("POST /api/pool/delete", await status("/api/pool/delete", { method: "POST", body: "{}" }), 401);
 
-      console.log("\n[3/6] Remote caller with no or wrong key is refused ...");
+      console.log("\n[3/7] Remote caller with no or wrong key is refused ...");
       process.env.BRIDGE_API_KEY = KEY;
       expect("no key", await status("/api/pool"), 401);
       expect("wrong key", await status("/api/pool", { headers: { "x-api-key": "nope" } }), 401);
 
-      console.log("\n[4/6] Remote caller with the right key is served ...");
+      console.log("\n[4/7] Remote caller with the right key is served ...");
       expect("x-api-key", await status("/api/pool", { headers: { "x-api-key": KEY } }), 200);
       expect("Authorization: Bearer", await status("/api/pool", { headers: { Authorization: `Bearer ${KEY}` } }), 200);
 
-      console.log("\n[5/6] Inference endpoints are protected too ...");
+      console.log("\n[5/7] Inference endpoints are protected too ...");
       const body = JSON.stringify({ model: "gemini-3-flash", messages: [{ role: "user", content: "x" }] });
       const json = { "Content-Type": "application/json" };
       expect("no key", await status("/v1/chat/completions", { method: "POST", headers: json, body }), 401);
@@ -96,7 +108,7 @@ async function runTests() {
         200
       );
 
-      console.log("\n[6/6] Dashboard shell loads so it can ask for a key ...");
+      console.log("\n[6/7] Dashboard shell loads so it can ask for a key ...");
       expect("GET / (html)", await status("/", { headers: { Accept: "text/html" } }), 200);
       expect("GET / (json variant)", await status("/", { headers: { Accept: "application/json" } }), 401);
       expect("OPTIONS preflight", await status("/api/pool", { method: "OPTIONS" }), 204);

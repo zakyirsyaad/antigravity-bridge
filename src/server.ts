@@ -45,6 +45,19 @@ export class BridgeServer {
    */
   private isTrustedLocalRequest(req: http.IncomingMessage): boolean {
     if (process.env.BRIDGE_TRUST_LOCAL === "0") return false;
+
+    // A reverse proxy terminates the client connection itself, so the socket
+    // address is the proxy's own loopback address for *every* caller. Trusting
+    // it alone hands the whole internet a loopback exemption — which is exactly
+    // what happened behind nginx. Any forwarding header means the request did
+    // not arrive directly from this machine.
+    //
+    // Spoofing only tightens this: a local caller that sets the header loses
+    // its exemption, and a remote one cannot make the socket address loopback.
+    if (req.headers["x-forwarded-for"] || req.headers["x-real-ip"] || req.headers["forwarded"]) {
+      return false;
+    }
+
     const address = req.socket.remoteAddress || "";
     return address === "127.0.0.1" || address === "::1" || address === "::ffff:127.0.0.1";
   }
