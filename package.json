@@ -25,6 +25,7 @@
     "test:security": "tsx test/api-pool-security.test.ts",
     "test:refresh": "tsx test/token-refresh-race.test.ts",
     "test:launchagent": "tsx test/launchagent-resolve.test.ts",
+    "test:budget": "tsx test/thinking-budget.test.ts",
     "build": "tsc"
   },
   "keywords": [

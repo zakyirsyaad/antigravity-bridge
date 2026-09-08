@@ -4,6 +4,44 @@ import { AntigravityPayload } from "./antigravity-client";
 import { cleanToolDeclarations } from "./schema-cleaner";
 
 export class Transformer {
+  /** Below this a thinking budget buys nothing, and some models reject it. */
+  private static readonly MIN_THINKING_BUDGET = 1024;
+  private static readonly DEFAULT_MAX_OUTPUT_TOKENS = 64000;
+
+  /**
+   * Fit the thinking budget inside the caller's output cap.
+   *
+   * Thinking tokens are billed as output tokens and count against
+   * maxOutputTokens, so the budget has to leave room for a visible answer —
+   * otherwise the model spends the whole window reasoning and returns nothing.
+   *
+   * The previous code had this backwards: it raised maxOutputTokens to 64000
+   * whenever the budget did not fit, so `max_tokens: 100` became 64000. That
+   * discards an explicit cap and burns far more of the pooled quota than the
+   * caller asked for. Shrink the budget instead.
+   */
+  private static applyThinkingConfig(generationConfig: any, requestedBudget: number): void {
+    if (requestedBudget <= 0) {
+      generationConfig.thinkingConfig = { include_thoughts: false, thinking_budget: 0 };
+      return;
+    }
+
+    // No explicit cap from the caller — size the window around the budget.
+    if (!generationConfig.maxOutputTokens) {
+      generationConfig.maxOutputTokens = Math.max(this.DEFAULT_MAX_OUTPUT_TOKENS, requestedBudget + 8192);
+      generationConfig.thinkingConfig = { include_thoughts: true, thinking_budget: requestedBudget };
+      return;
+    }
+
+    // Honour the cap, reserving at least half the window for the answer.
+    const budget = Math.min(requestedBudget, Math.floor(generationConfig.maxOutputTokens / 2));
+    if (budget < this.MIN_THINKING_BUDGET) {
+      generationConfig.thinkingConfig = { include_thoughts: false, thinking_budget: 0 };
+      return;
+    }
+    generationConfig.thinkingConfig = { include_thoughts: true, thinking_budget: budget };
+  }
+
   /**
    * Resolve target model name in Antigravity API
    */
@@ -180,20 +218,7 @@ export class Transformer {
           budget = body.thinking.budget_tokens;
         }
       }
-      if (budget > 0) {
-        generationConfig.thinkingConfig = {
-          include_thoughts: true,
-          thinking_budget: budget,
-        };
-        if (!generationConfig.maxOutputTokens || generationConfig.maxOutputTokens <= budget) {
-          generationConfig.maxOutputTokens = Math.max(64000, budget + 8192);
-        }
-      } else {
-        generationConfig.thinkingConfig = {
-          include_thoughts: false,
-          thinking_budget: 0,
-        };
-      }
+      this.applyThinkingConfig(generationConfig, budget);
     }
 
     // Tools conversion
@@ -354,20 +379,7 @@ export class Transformer {
         budget = 0;
       }
 
-      if (budget > 0) {
-        generationConfig.thinkingConfig = {
-          include_thoughts: true,
-          thinking_budget: budget,
-        };
-        if (!generationConfig.maxOutputTokens || generationConfig.maxOutputTokens <= budget) {
-          generationConfig.maxOutputTokens = Math.max(64000, budget + 8192);
-        }
-      } else {
-        generationConfig.thinkingConfig = {
-          include_thoughts: false,
-          thinking_budget: 0,
-        };
-      }
+      this.applyThinkingConfig(generationConfig, budget);
     }
 
     let tools: any[] | undefined = undefined;
