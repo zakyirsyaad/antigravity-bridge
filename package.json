@@ -22,6 +22,7 @@
     "test": "tsx test/bridge.test.ts",
     "test:bridge": "tsx test/bridge.test.ts",
     "test:stream": "tsx test/streaming-stop-reason.test.ts",
+    "test:security": "tsx test/api-pool-security.test.ts",
     "build": "tsc"
   },
   "keywords": [

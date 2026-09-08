@@ -37,16 +37,52 @@ export class BridgeServer {
     });
   }
 
-  private setCorsHeaders(res: http.ServerResponse) {
-    res.setHeader("Access-Control-Allow-Origin", "*");
+  /**
+   * The management API reads and mutates stored Google credentials, so it is
+   * held to a stricter policy than the inference endpoints, which stay open for
+   * browser-based clients.
+   */
+  private isManagementPath(pathname: string): boolean {
+    return pathname === "/api" || pathname.startsWith("/api/") || pathname.startsWith("/oauth/");
+  }
+
+  private setCorsHeaders(res: http.ServerResponse, isManagement: boolean) {
+    // Never hand out a wildcard on the management API: it would let any page the
+    // user has open read the pool state and drive the mutation endpoints.
+    if (!isManagement) {
+      res.setHeader("Access-Control-Allow-Origin", "*");
+    }
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
     res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-API-Key, anthropic-version");
+  }
+
+  /**
+   * Withholding the CORS header stops a foreign page reading a response, but a
+   * simple cross-origin POST still reaches the handler, so an account could be
+   * deleted without the attacker ever seeing the reply. Reject those outright.
+   *
+   * Requests carrying no Origin (curl, the CLI, native GUIs, and top-level
+   * navigations such as the dashboard's add-account link) are allowed through;
+   * a browser Origin must match the host the request was addressed to.
+   */
+  private isCrossOriginRequest(req: http.IncomingMessage): boolean {
+    const origin = req.headers.origin;
+    if (!origin) return false;
+    try {
+      return new URL(origin).host !== req.headers.host;
+    } catch {
+      return true;
+    }
   }
 
   public start(): Promise<number> {
     return new Promise((resolve, reject) => {
       this.server = http.createServer(async (req, res) => {
-        this.setCorsHeaders(res);
+        const url = new URL(req.url || "/", `http://localhost:${this.port}`);
+        const pathname = url.pathname.replace(/\/+$/, "");
+        const isManagement = this.isManagementPath(pathname);
+
+        this.setCorsHeaders(res, isManagement);
 
         if (req.method === "OPTIONS") {
           res.writeHead(204);
@@ -54,8 +90,18 @@ export class BridgeServer {
           return;
         }
 
-        const url = new URL(req.url || "/", `http://localhost:${this.port}`);
-        const pathname = url.pathname.replace(/\/+$/, "");
+        if (isManagement && this.isCrossOriginRequest(req)) {
+          res.writeHead(403, { "Content-Type": "application/json" });
+          res.end(
+            JSON.stringify({
+              error: {
+                message: "Cross-origin requests are not allowed on the management API",
+                type: "forbidden",
+              },
+            })
+          );
+          return;
+        }
 
         try {
           // Web Dashboard

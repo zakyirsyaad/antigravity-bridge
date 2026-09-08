@@ -40,6 +40,24 @@ export interface AccountsStorage {
   activeAccountIndex: number;
 }
 
+/**
+ * Account fields that are safe to serialize over HTTP.
+ *
+ * The management API is unauthenticated, so anything reachable from it must
+ * never carry OAuth material: a refresh token does not expire and grants
+ * cloud-platform scope. Keep accessToken/refreshToken out of this type.
+ */
+export interface PublicAccountSummary {
+  email?: string;
+  name?: string;
+  projectId?: string;
+}
+
+export function toPublicAccountSummary(account: AccountToken | null): PublicAccountSummary | null {
+  if (!account) return null;
+  return { email: account.email, name: account.name, projectId: account.projectId };
+}
+
 function base64URLEncode(str: Buffer): string {
   return str
     .toString("base64")
@@ -365,7 +383,7 @@ export class OAuthManager {
   public getPoolStatus(): {
     autoFailoverEnabled: boolean;
     totalAccounts: number;
-    activeAccount: AccountToken | null;
+    activeAccount: PublicAccountSummary | null;
     activeIndex: number;
     readyCount: number;
     coolingDownCount: number;
@@ -417,7 +435,7 @@ export class OAuthManager {
     return {
       autoFailoverEnabled: this.autoFailoverEnabled,
       totalAccounts: accounts.length,
-      activeAccount: activeAcc,
+      activeAccount: toPublicAccountSummary(activeAcc),
       activeIndex,
       readyCount,
       coolingDownCount,
