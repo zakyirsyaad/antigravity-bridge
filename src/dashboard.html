@@ -1124,10 +1124,10 @@ providers:
     api_key: "antigravity-local"
 
 # Run Hermes with Antigravity provider:
-hermes --provider antigravity -m gemini-3.6-flash-high -z "Check workspace files"
+hermes --provider antigravity -m gemini-3.8-flash-tiered -z "Check workspace files"
 
 # Or start interactive TUI:
-hermes --provider antigravity -m gemini-3.6-flash-high --tui</pre>
+hermes --provider antigravity -m gemini-3.8-flash-tiered --tui</pre>
           </div>
         </div>
 
@@ -1140,7 +1140,9 @@ hermes --provider antigravity -m gemini-3.6-flash-high --tui</pre>
             <button class="code-copy-btn" onclick="copyCode('snippet-cursor', this)">Copy</button>
             <pre id="snippet-cursor">Base URL: http://127.0.0.1:52130/v1
 API Key: antigravity-local
-Model: gemini-3.6-flash-high (or claude-sonnet-4-6)</pre>
+Model: gemini-3.8-flash-tiered  (newest; reasoning_effort low|medium|high)
+       gemini-3.6-flash-high   (default agent model per Google)
+       claude-sonnet-4-6</pre>
           </div>
         </div>
 
@@ -1159,7 +1161,7 @@ client = OpenAI(
 )
 
 response = client.chat.completions.create(
-    model="gemini-3.6-flash-high",
+    model="gemini-3.8-flash-tiered",
     messages=[{"role": "user", "content": "Hello!"}],
     extra_body={"reasoning_effort": "high"}
 )
@@ -1177,7 +1179,7 @@ print(response.choices[0].message.content)</pre>
             <pre id="snippet-curl">curl -X POST http://127.0.0.1:52130/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer antigravity-local" \
-  -d '{"model":"gemini-3.6-flash-high","messages":[{"role":"user","content":"Ping"}]}'</pre>
+  -d '{"model":"gemini-3.8-flash-tiered","messages":[{"role":"user","content":"Ping"}]}'</pre>
           </div>
         </div>
       </div>
@@ -1556,16 +1558,18 @@ print(response.choices[0].message.content)</pre>
           '    base_url: "' + baseUrl + '/v1"\n' +
           '    api_key: "' + apiKey + '"\n\n' +
           '# Run Hermes with Antigravity provider:\n' +
-          'hermes --provider antigravity -m gemini-3.6-flash-high -z "Check workspace files"\n\n' +
+          'hermes --provider antigravity -m gemini-3.8-flash-tiered -z "Check workspace files"\n\n' +
           '# Or start interactive TUI:\n' +
-          'hermes --provider antigravity -m gemini-3.6-flash-high --tui';
+          'hermes --provider antigravity -m gemini-3.8-flash-tiered --tui';
       }
 
       const elCursor = document.getElementById("snippet-cursor");
       if (elCursor) {
         elCursor.textContent = 'Base URL: ' + baseUrl + '/v1\n' +
           'API Key: ' + apiKey + '\n' +
-          'Model: gemini-3.6-flash-high (or claude-sonnet-4-6)';
+          'Model: gemini-3.8-flash-tiered  (newest; reasoning_effort low|medium|high)\n' +
+          '       gemini-3.6-flash-high   (default agent model per Google)\n' +
+          '       claude-sonnet-4-6';
       }
 
       const elPython = document.getElementById("snippet-python");
@@ -1576,7 +1580,7 @@ print(response.choices[0].message.content)</pre>
           '    api_key="' + apiKey + '"\n' +
           ')\n\n' +
           'response = client.chat.completions.create(\n' +
-          '    model="gemini-3.6-flash-high",\n' +
+          '    model="gemini-3.8-flash-tiered",\n' +
           '    messages=[{"role": "user", "content": "Hello!"}],\n' +
           '    extra_body={"reasoning_effort": "high"}\n' +
           ')\n' +
@@ -1588,7 +1592,7 @@ print(response.choices[0].message.content)</pre>
         elCurl.textContent = 'curl -X POST ' + baseUrl + '/v1/chat/completions \\\n' +
           '  -H "Content-Type: application/json" \\\n' +
           '  -H "Authorization: Bearer ' + apiKey + '" \\\n' +
-          '  -d \'{"model":"gemini-3.6-flash-high","messages":[{"role":"user","content":"Ping"}]}\'';
+          '  -d \'{"model":"gemini-3.8-flash-tiered","messages":[{"role":"user","content":"Ping"}]}\'';
       }
     }
 
