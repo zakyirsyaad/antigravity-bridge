@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.DS_Store
+*.log
+.env
+.env.local
+.sessions/
+*.tsbuildinfo
+src/**/*.js
+bin/**/*.js
+test/**/*.js

@@ -1,0 +1,1408 @@
+<!DOCTYPE html>
+<html lang="en" class="dark" data-theme="zinc">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Antigravity Bridge — Multi-Account Pool & Gateway</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600;700&display=swap" rel="stylesheet">
+  <style>
+    /* -------------------------------------------------------------
+       THEME DEFINITIONS: Minimalist OLED Zinc (Default) & Variants
+       ------------------------------------------------------------- */
+    :root, [data-theme="zinc"] {
+      --bg: #000000;
+      --bg-gradient: radial-gradient(circle at 50% -10%, rgba(255, 255, 255, 0.05) 0%, transparent 60%),
+                     radial-gradient(circle at 90% 20%, rgba(255, 255, 255, 0.02) 0%, transparent 40%),
+                     linear-gradient(to bottom, #000000 0%, #050507 100%);
+      
+      --surface-card: #09090b;
+      --surface-card-hover: #121215;
+      --surface-elevated: #18181b;
+      --surface-input: #0b0b0e;
+      --surface-highlight: #27272a;
+      
+      --border-subtle: rgba(255, 255, 255, 0.08);
+      --border-hover: rgba(255, 255, 255, 0.18);
+      --border-active: rgba(255, 255, 255, 0.35);
+
+      --text-main: #fafafa;
+      --text-muted: #a1a1aa;
+      --text-faint: #71717a;
+      
+      --primary: #ffffff;
+      --primary-text: #000000;
+      --primary-hover: #f4f4f5;
+      --primary-glow: rgba(255, 255, 255, 0.16);
+
+      --card-active-bg: linear-gradient(180deg, #141418 0%, #09090b 100%);
+      --card-active-border: rgba(255, 255, 255, 0.35);
+      --card-active-glow: 0 0 24px rgba(255, 255, 255, 0.07), 0 12px 32px -8px rgba(0, 0, 0, 0.8);
+
+      --meter-track-bg: #18181b;
+      --meter-fill-high: linear-gradient(90deg, #a1a1aa, #ffffff);
+      --meter-text-high: #ffffff;
+      --meter-fill-med: linear-gradient(90deg, #52525b, #a1a1aa);
+      --meter-text-med: #d4d4d8;
+
+      --emerald: #10b981;
+      --emerald-glow: rgba(16, 185, 129, 0.22);
+      --amber: #f59e0b;
+      --amber-glow: rgba(245, 158, 11, 0.22);
+      --rose: #f43f5e;
+      --rose-glow: rgba(244, 63, 94, 0.22);
+
+      --radius-sm: 6px;
+      --radius-md: 10px;
+      --radius-lg: 16px;
+      --radius-xl: 20px;
+    }
+
+    [data-theme="gemini"] {
+      --bg: #07070d;
+      --bg-gradient: radial-gradient(circle at 50% -10%, rgba(139, 92, 246, 0.12) 0%, transparent 60%),
+                     radial-gradient(circle at 90% 20%, rgba(99, 102, 241, 0.08) 0%, transparent 40%),
+                     linear-gradient(to bottom, #07070d 0%, #0c0b16 100%);
+      --surface-card: #0e0e1a;
+      --surface-card-hover: #161626;
+      --surface-elevated: #1f1f35;
+      --surface-input: #0a0a14;
+      --surface-highlight: #2c2c4a;
+      --border-subtle: rgba(139, 92, 246, 0.14);
+      --border-hover: rgba(139, 92, 246, 0.3);
+      --border-active: rgba(139, 92, 246, 0.5);
+      --text-main: #f8fafc;
+      --text-muted: #94a3b8;
+      --text-faint: #64748b;
+      --primary: #8b5cf6;
+      --primary-text: #ffffff;
+      --primary-hover: #7c3aed;
+      --primary-glow: rgba(139, 92, 246, 0.3);
+      --card-active-bg: linear-gradient(180deg, #18152e 0%, #0e0e1a 100%);
+      --card-active-border: rgba(139, 92, 246, 0.5);
+      --card-active-glow: 0 0 28px rgba(139, 92, 246, 0.2), 0 12px 32px -8px rgba(0, 0, 0, 0.8);
+      --meter-track-bg: #1a1a2e;
+      --meter-fill-high: linear-gradient(90deg, #6366f1, #a855f7);
+      --meter-text-high: #c4b5fd;
+      --meter-fill-med: linear-gradient(90deg, #4f46e5, #818cf8);
+      --meter-text-med: #a5b4fc;
+    }
+
+    [data-theme="claude"] {
+      --bg: #111110;
+      --bg-gradient: radial-gradient(circle at 50% -10%, rgba(217, 119, 6, 0.08) 0%, transparent 60%),
+                     radial-gradient(circle at 90% 20%, rgba(194, 65, 12, 0.05) 0%, transparent 40%),
+                     linear-gradient(to bottom, #111110 0%, #171614 100%);
+      --surface-card: #191817;
+      --surface-card-hover: #232220;
+      --surface-elevated: #2d2b28;
+      --surface-input: #141312;
+      --surface-highlight: #3a3834;
+      --border-subtle: rgba(255, 255, 255, 0.08);
+      --border-hover: rgba(217, 119, 6, 0.3);
+      --border-active: rgba(217, 119, 6, 0.5);
+      --text-main: #fbfbfa;
+      --text-muted: #a8a29e;
+      --text-faint: #78716c;
+      --primary: #d97706;
+      --primary-text: #ffffff;
+      --primary-hover: #b45309;
+      --primary-glow: rgba(217, 119, 6, 0.25);
+      --card-active-bg: linear-gradient(180deg, #28211b 0%, #191817 100%);
+      --card-active-border: rgba(217, 119, 6, 0.5);
+      --card-active-glow: 0 0 28px rgba(217, 119, 6, 0.15), 0 12px 32px -8px rgba(0, 0, 0, 0.8);
+      --meter-track-bg: #292724;
+      --meter-fill-high: linear-gradient(90deg, #d97706, #f59e0b);
+      --meter-text-high: #fcd34d;
+      --meter-fill-med: linear-gradient(90deg, #b45309, #d97706);
+      --meter-text-med: #fbbf24;
+    }
+
+    [data-theme="emerald"] {
+      --bg: #030806;
+      --bg-gradient: radial-gradient(circle at 50% -10%, rgba(16, 185, 129, 0.1) 0%, transparent 60%),
+                     radial-gradient(circle at 90% 20%, rgba(5, 150, 105, 0.06) 0%, transparent 40%),
+                     linear-gradient(to bottom, #030806 0%, #06110d 100%);
+      --surface-card: #08120d;
+      --surface-card-hover: #0e1c15;
+      --surface-elevated: #14271e;
+      --surface-input: #050d09;
+      --surface-highlight: #1d382b;
+      --border-subtle: rgba(16, 185, 129, 0.12);
+      --border-hover: rgba(16, 185, 129, 0.28);
+      --border-active: rgba(16, 185, 129, 0.5);
+      --text-main: #f0fdf4;
+      --text-muted: #86efac;
+      --text-faint: #4ade80;
+      --primary: #10b981;
+      --primary-text: #022c22;
+      --primary-hover: #059669;
+      --primary-glow: rgba(16, 185, 129, 0.25);
+      --card-active-bg: linear-gradient(180deg, #0b1e15 0%, #08120d 100%);
+      --card-active-border: rgba(16, 185, 129, 0.5);
+      --card-active-glow: 0 0 28px rgba(16, 185, 129, 0.2), 0 12px 32px -8px rgba(0, 0, 0, 0.8);
+      --meter-track-bg: #14271e;
+      --meter-fill-high: linear-gradient(90deg, #059669, #34d399);
+      --meter-text-high: #6ee7b7;
+      --meter-fill-med: linear-gradient(90deg, #047857, #10b981);
+      --meter-text-med: #a7f3d0;
+    }
+
+    /* Base Reset & Architecture */
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html {
+      color-scheme: dark;
+    }
+
+    /* Custom Sleek Dark Scrollbars */
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: var(--surface-input);
+    }
+    ::-webkit-scrollbar-thumb {
+      background: var(--surface-highlight);
+      border-radius: 9999px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: var(--border-hover);
+    }
+    ::-webkit-scrollbar-corner {
+      background: var(--surface-input);
+    }
+
+    body {
+      font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background-color: var(--bg);
+      background-image: var(--bg-gradient);
+      background-attachment: fixed;
+      color: var(--text-main);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+      transition: background-color 0.3s ease;
+    }
+
+    /* Top Navigation Header */
+    header {
+      border-bottom: 1px solid var(--border-subtle);
+      background: rgba(9, 9, 11, 0.85);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      padding: 0.9rem 2.25rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      transition: border-color 0.3s ease;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 0.85rem;
+    }
+
+    .logo-badge {
+      width: 2.35rem;
+      height: 2.35rem;
+      background: linear-gradient(135deg, #27272a, #09090b);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 0 16px rgba(255, 255, 255, 0.08);
+      position: relative;
+    }
+
+    .logo-badge svg {
+      width: 1.25rem;
+      height: 1.25rem;
+      fill: #ffffff;
+    }
+
+    .brand-title {
+      display: flex;
+      flex-direction: column;
+      gap: 0.1rem;
+    }
+
+    .brand-title h1 {
+      font-size: 1.125rem;
+      font-weight: 800;
+      letter-spacing: -0.025em;
+      color: #ffffff;
+    }
+
+    .brand-title-sub {
+      display: flex;
+      align-items: center;
+      gap: 0.45rem;
+      font-size: 0.725rem;
+      color: var(--text-muted);
+      font-weight: 500;
+    }
+
+    .status-dot-pulse {
+      width: 0.5rem;
+      height: 0.5rem;
+      background-color: var(--emerald);
+      border-radius: 9999px;
+      box-shadow: 0 0 8px var(--emerald);
+      animation: pulse-glow 2s infinite;
+    }
+
+    @keyframes pulse-glow {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.6; transform: scale(1.15); }
+    }
+
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 0.85rem;
+    }
+
+    /* Theme Switcher Dropdown / Pill */
+    .theme-select-wrapper {
+      display: flex;
+      align-items: center;
+      background: var(--surface-input);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-md);
+      padding: 0.25rem 0.6rem;
+      gap: 0.4rem;
+    }
+
+    .theme-select-wrapper svg {
+      width: 14px;
+      height: 14px;
+      color: var(--text-muted);
+      flex-shrink: 0;
+    }
+
+    .theme-select {
+      background: transparent;
+      border: none;
+      color: var(--text-main);
+      font-family: inherit;
+      font-size: 0.775rem;
+      font-weight: 600;
+      cursor: pointer;
+      outline: none;
+    }
+
+    .theme-select option {
+      background: #09090b;
+      color: #fafafa;
+    }
+
+    /* Buttons & Toggles */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.55rem 1.15rem;
+      font-size: 0.8125rem;
+      font-weight: 600;
+      border-radius: var(--radius-md);
+      border: 1px solid var(--border-subtle);
+      background: var(--surface-elevated);
+      color: var(--text-main);
+      cursor: pointer;
+      transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+      text-decoration: none;
+      user-select: none;
+    }
+
+    .btn:hover {
+      background: var(--surface-highlight);
+      border-color: var(--border-hover);
+      color: #ffffff;
+      transform: translateY(-1px);
+    }
+
+    .btn:active {
+      transform: translateY(0);
+    }
+
+    .btn-primary {
+      background: var(--primary);
+      border: 1px solid rgba(255, 255, 255, 0.9);
+      color: var(--primary-text);
+      font-weight: 700;
+      box-shadow: 0 2px 10px var(--primary-glow);
+    }
+
+    .btn-primary:hover {
+      background: var(--primary-hover);
+      box-shadow: 0 4px 18px var(--primary-glow);
+      transform: translateY(-1px);
+    }
+
+    .btn-sm {
+      padding: 0.35rem 0.75rem;
+      font-size: 0.75rem;
+    }
+
+    .toggle-pill {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      background: var(--surface-input);
+      border: 1px solid var(--border-subtle);
+      padding: 0.4rem 0.85rem;
+      border-radius: 9999px;
+      font-size: 0.775rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .toggle-pill:hover {
+      border-color: var(--border-hover);
+      background: var(--surface-elevated);
+    }
+
+    .toggle-led {
+      width: 0.65rem;
+      height: 0.65rem;
+      border-radius: 9999px;
+      background: var(--emerald);
+      box-shadow: 0 0 10px var(--emerald);
+      transition: all 0.3s ease;
+    }
+
+    .toggle-led.off {
+      background: var(--rose);
+      box-shadow: 0 0 10px var(--rose);
+    }
+
+    /* Main Container */
+    main {
+      flex: 1;
+      max-width: 1320px;
+      width: 100%;
+      margin: 0 auto;
+      padding: 2.25rem 2rem;
+      display: flex;
+      flex-direction: column;
+      gap: 2.25rem;
+    }
+
+    /* KPI Summary Stats Grid */
+    .kpi-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 1.25rem;
+    }
+
+    .kpi-card {
+      background: var(--surface-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-lg);
+      padding: 1.35rem 1.5rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.45rem;
+      position: relative;
+      overflow: hidden;
+      box-shadow: 0 8px 24px -6px rgba(0, 0, 0, 0.5);
+      transition: all 0.25s ease;
+    }
+
+    .kpi-card:hover {
+      border-color: var(--border-hover);
+      transform: translateY(-2px);
+    }
+
+    .kpi-card::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, var(--border-hover), transparent);
+    }
+
+    .kpi-label {
+      font-size: 0.775rem;
+      color: var(--text-muted);
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .kpi-value {
+      font-size: 1.85rem;
+      font-weight: 800;
+      letter-spacing: -0.03em;
+      font-variant-numeric: tabular-nums;
+      color: var(--text-main);
+    }
+
+    .kpi-sub {
+      font-size: 0.75rem;
+      color: var(--text-faint);
+      display: flex;
+      align-items: center;
+      gap: 0.35rem;
+    }
+
+    /* Section Headers */
+    .section-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 1.25rem;
+    }
+
+    .section-head-title {
+      display: flex;
+      align-items: center;
+      gap: 0.65rem;
+    }
+
+    .section-head-title h2 {
+      font-size: 1.15rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+
+    .section-head-badge {
+      font-size: 0.7rem;
+      font-weight: 700;
+      background: var(--surface-elevated);
+      color: var(--text-muted);
+      padding: 0.2rem 0.55rem;
+      border-radius: 9999px;
+      border: 1px solid var(--border-subtle);
+    }
+
+    /* Account Grid & Cards (Stitch Spec) */
+    .account-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+      gap: 1.5rem;
+    }
+
+    .account-card {
+      background: var(--surface-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-xl);
+      padding: 1.4rem;
+      display: flex;
+      flex-direction: column;
+      gap: 1.15rem;
+      position: relative;
+      transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+      box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.6);
+    }
+
+    .account-card:hover {
+      border-color: var(--border-hover);
+      background: var(--surface-card-hover);
+      transform: translateY(-2px);
+    }
+
+    .account-card.active-account {
+      border-color: var(--card-active-border);
+      background: var(--card-active-bg);
+      box-shadow: var(--card-active-glow);
+    }
+
+    .account-card.cooling-account {
+      border-color: rgba(245, 158, 11, 0.35);
+      background: linear-gradient(180deg, #18140c 0%, var(--surface-card) 100%);
+    }
+
+    .card-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.85rem;
+    }
+
+    .card-identity {
+      display: flex;
+      align-items: center;
+      gap: 0.85rem;
+      flex: 1;
+      min-width: 0;
+    }
+
+    .avatar {
+      width: 2.75rem;
+      height: 2.75rem;
+      border-radius: 14px;
+      background: var(--surface-elevated);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 800;
+      font-size: 1.05rem;
+      color: #ffffff;
+      border: 1px solid var(--border-subtle);
+      flex-shrink: 0;
+      position: relative;
+    }
+
+    .account-card.active-account .avatar {
+      background: var(--surface-highlight);
+      border-color: var(--border-active);
+      box-shadow: 0 0 14px rgba(255, 255, 255, 0.12);
+    }
+
+    .acc-meta {
+      display: flex;
+      flex-direction: column;
+      gap: 0.2rem;
+      overflow: hidden;
+    }
+
+    .acc-email {
+      font-size: 0.95rem;
+      font-weight: 700;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      color: var(--text-main);
+    }
+
+    .acc-badges {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+    }
+
+    .tier-chip {
+      font-size: 0.65rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      padding: 0.15rem 0.5rem;
+      border-radius: var(--radius-sm);
+      background: var(--surface-elevated);
+      color: var(--text-muted);
+      border: 1px solid var(--border-subtle);
+    }
+
+    .status-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      padding: 0.2rem 0.65rem;
+      border-radius: 9999px;
+      font-size: 0.7rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .chip-active {
+      background: rgba(255, 255, 255, 0.12);
+      color: #ffffff;
+      border: 1px solid rgba(255, 255, 255, 0.3);
+    }
+
+    .chip-ready {
+      background: rgba(161, 161, 170, 0.1);
+      color: var(--text-muted);
+      border: 1px solid var(--border-subtle);
+    }
+
+    .chip-cooling {
+      background: rgba(245, 158, 11, 0.12);
+      color: var(--amber);
+      border: 1px solid rgba(245, 158, 11, 0.3);
+    }
+
+    /* Live Quota Meters Container */
+    .quota-meters-box {
+      background: var(--surface-input);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-md);
+      padding: 0.9rem 1rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.85rem;
+    }
+
+    .meter-item {
+      display: flex;
+      flex-direction: column;
+      gap: 0.35rem;
+    }
+
+    .meter-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 0.775rem;
+    }
+
+    .meter-name {
+      color: var(--text-muted);
+      font-weight: 600;
+    }
+
+    .meter-pct {
+      font-family: 'JetBrains Mono', monospace;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+      font-size: 0.8125rem;
+    }
+
+    .meter-track {
+      height: 6px;
+      background: var(--meter-track-bg);
+      border: 1px solid var(--border-subtle);
+      border-radius: 9999px;
+      overflow: hidden;
+      position: relative;
+    }
+
+    .meter-fill {
+      height: 100%;
+      border-radius: 9999px;
+      transition: width 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    .meter-bottom {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 0.6875rem;
+      font-family: 'JetBrains Mono', monospace;
+      color: var(--text-faint);
+    }
+
+    .fill-high { background: var(--meter-fill-high); }
+    .fill-med { background: var(--meter-fill-med); }
+    .fill-amber { background: linear-gradient(90deg, #f59e0b, #fbbf24); }
+    .fill-rose { background: linear-gradient(90deg, #f43f5e, #fb7185); }
+
+    .color-high { color: var(--meter-text-high); }
+    .color-med { color: var(--meter-text-med); }
+    .color-amber { color: var(--amber); }
+    .color-rose { color: var(--rose); }
+
+    .cooldown-alert {
+      background: rgba(245, 158, 11, 0.08);
+      border: 1px solid rgba(245, 158, 11, 0.25);
+      border-radius: var(--radius-sm);
+      padding: 0.55rem 0.85rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 0.75rem;
+    }
+
+    .cooldown-clock {
+      font-family: 'JetBrains Mono', monospace;
+      font-weight: 700;
+      color: var(--amber);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .card-footer {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin-top: auto;
+      padding-top: 0.25rem;
+    }
+
+    .btn-action {
+      flex: 1;
+      justify-content: center;
+    }
+
+    .btn-icon-danger {
+      padding: 0.45rem 0.75rem;
+      color: var(--rose);
+      background: transparent;
+      border-color: transparent;
+    }
+
+    .btn-icon-danger:hover {
+      background: rgba(244, 63, 94, 0.12);
+      border-color: rgba(244, 63, 94, 0.3);
+    }
+
+    /* Integration Panel */
+    .tabs-wrapper {
+      background: var(--surface-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-lg);
+      overflow: hidden;
+    }
+
+    .tabs-bar {
+      display: flex;
+      border-bottom: 1px solid var(--border-subtle);
+      background: var(--surface-input);
+      overflow-x: auto;
+      overflow-y: hidden;
+      padding: 0.35rem 0.5rem 0 0.5rem;
+      gap: 0.35rem;
+      scrollbar-width: none;
+      -ms-overflow-style: none;
+    }
+
+    .tabs-bar::-webkit-scrollbar {
+      display: none;
+      width: 0;
+      height: 0;
+    }
+
+    .tab-item {
+      padding: 0.65rem 1.15rem;
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      font-family: inherit;
+      font-weight: 600;
+      font-size: 0.8125rem;
+      cursor: pointer;
+      border-radius: var(--radius-md) var(--radius-md) 0 0;
+      transition: all 0.2s ease;
+      white-space: nowrap;
+    }
+
+    .tab-item:hover {
+      color: var(--text-main);
+      background: rgba(255, 255, 255, 0.03);
+    }
+
+    .tab-item.active {
+      color: var(--text-main);
+      background: var(--surface-card);
+      border: 1px solid var(--border-subtle);
+      border-bottom-color: var(--surface-card);
+      margin-bottom: -1px;
+    }
+
+    .tab-pane {
+      padding: 1.5rem;
+      display: none;
+    }
+
+    .tab-pane.active {
+      display: block;
+    }
+
+    .code-display {
+      background: var(--surface-input);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-md);
+      padding: 1.15rem 1.25rem;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.8125rem;
+      color: #e4e4e7;
+      position: relative;
+      overflow-x: auto;
+      line-height: 1.6;
+    }
+
+    .code-copy-btn {
+      position: absolute;
+      top: 0.75rem;
+      right: 0.75rem;
+      padding: 0.3rem 0.65rem;
+      font-size: 0.725rem;
+      border-radius: var(--radius-sm);
+      background: var(--surface-elevated);
+      border: 1px solid var(--border-subtle);
+      color: var(--text-muted);
+      font-family: inherit;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .code-copy-btn:hover {
+      color: #ffffff;
+      border-color: var(--border-hover);
+      background: var(--surface-highlight);
+    }
+
+    /* Live Feed */
+    .feed-container {
+      max-height: 240px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+
+    .feed-row {
+      display: flex;
+      align-items: center;
+      gap: 0.85rem;
+      padding: 0.6rem 0.85rem;
+      background: var(--surface-input);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-sm);
+      font-size: 0.8rem;
+    }
+
+    .feed-time {
+      color: var(--text-faint);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.725rem;
+    }
+
+    .feed-tag {
+      font-size: 0.675rem;
+      font-weight: 700;
+      padding: 0.1rem 0.45rem;
+      border-radius: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .tag-failover { background: rgba(245, 158, 11, 0.15); color: var(--amber); }
+    .tag-switch { background: rgba(255, 255, 255, 0.12); color: #ffffff; border: 1px solid rgba(255, 255, 255, 0.2); }
+    .tag-info { background: rgba(161, 161, 170, 0.1); color: var(--text-muted); }
+  </style>
+</head>
+<body>
+
+  <!-- Top App Navigation -->
+  <header>
+    <div class="brand">
+      <div class="logo-badge">
+        <svg viewBox="0 0 24 24">
+          <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+        </svg>
+      </div>
+      <div class="brand-title">
+        <h1>Antigravity Bridge</h1>
+        <div class="brand-title-sub">
+          <span class="status-dot-pulse"></span>
+          <span>Google CloudCode Pool & Universal Gateway</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="header-actions">
+      <!-- Theme Switcher -->
+      <div class="theme-select-wrapper">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="5"></circle>
+          <line x1="12" y1="1" x2="12" y2="3"></line>
+          <line x1="12" y1="21" x2="12" y2="23"></line>
+          <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+          <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+          <line x1="1" y1="12" x2="3" y2="12"></line>
+          <line x1="21" y1="12" x2="23" y2="12"></line>
+          <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+          <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+        </svg>
+        <select class="theme-select" id="themeSelect" onchange="changeTheme(this.value)">
+          <option value="zinc">OLED Zinc</option>
+          <option value="gemini">Gemini Cosmic</option>
+          <option value="claude">Claude Studio</option>
+          <option value="emerald">Cyber Emerald</option>
+        </select>
+      </div>
+
+      <div class="toggle-pill" id="toggleFailoverBtn" title="Toggle automatic failover on HTTP 429">
+        <div class="toggle-led" id="failoverLed"></div>
+        <span id="failoverStatusText">Auto-Failover: ON</span>
+      </div>
+      <a href="/api/pool/auth-url" class="btn btn-primary" target="_blank">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="12" y1="5" x2="12" y2="19"></line>
+          <line x1="5" y1="12" x2="19" y2="12"></line>
+        </svg>
+        <span>Add Account</span>
+      </a>
+    </div>
+  </header>
+
+  <main>
+    <!-- KPI Hero Row -->
+    <div class="kpi-grid">
+      <div class="kpi-card">
+        <div class="kpi-label">
+          <span>Managed Accounts</span>
+          <span>👥</span>
+        </div>
+        <div class="kpi-value" id="kpiTotalAccounts">--</div>
+        <div class="kpi-sub" id="kpiPoolMultiplier">Combined Quota Buffer</div>
+      </div>
+
+      <div class="kpi-card">
+        <div class="kpi-label">
+          <span>Rolling 5-Hour Pool</span>
+          <span>⏱️</span>
+        </div>
+        <div class="kpi-value color-high" id="kpi5hAverage">--%</div>
+        <div class="kpi-sub">Instant Request Availability</div>
+      </div>
+
+      <div class="kpi-card">
+        <div class="kpi-label">
+          <span>Weekly Cap Reserve</span>
+          <span>📅</span>
+        </div>
+        <div class="kpi-value color-high" id="kpiWeeklyAverage">--%</div>
+        <div class="kpi-sub">Long-term Compute Margin</div>
+      </div>
+
+      <div class="kpi-card">
+        <div class="kpi-label">
+          <span>Active Gateway Target</span>
+          <span>⚡</span>
+        </div>
+        <div class="kpi-value" style="font-size: 1.05rem; line-height: 1.4; word-break: break-all;" id="kpiActiveEmail">--</div>
+        <div class="kpi-sub" style="color: var(--text-muted);">Serving Anthropic & OpenAI</div>
+      </div>
+    </div>
+
+    <!-- Accounts Section (Google Stitch Component) -->
+    <section>
+      <div class="section-head">
+        <div class="section-head-title">
+          <h2>Google Accounts & Live Quota Meters</h2>
+          <span class="section-head-badge" id="accountsCountBadge">6 Accounts</span>
+        </div>
+        <button class="btn btn-sm" onclick="fetchPoolStatus()">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="23 4 23 10 17 10"></polyline>
+            <polyline points="1 20 1 14 7 14"></polyline>
+            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+          </svg>
+          <span>Refresh</span>
+        </button>
+      </div>
+
+      <div class="account-grid" id="accountsContainer">
+        <!-- Rendered via JavaScript -->
+      </div>
+    </section>
+
+    <!-- Universal Dual-Protocol Connect Guide -->
+    <section>
+      <div class="section-head">
+        <div class="section-head-title">
+          <h2>Universal Dual-Protocol Connect Guide</h2>
+          <span class="section-head-badge">Zero Config</span>
+        </div>
+      </div>
+
+      <div class="tabs-wrapper">
+        <div class="tabs-bar">
+          <button class="tab-item active" onclick="switchGuideTab('claude')">Claude Code / FCC (Anthropic)</button>
+          <button class="tab-item" onclick="switchGuideTab('hermes')">Hermes Agent (OpenAI)</button>
+          <button class="tab-item" onclick="switchGuideTab('cursor')">Cursor & Continue (OpenAI)</button>
+          <button class="tab-item" onclick="switchGuideTab('python')">Python OpenAI SDK</button>
+          <button class="tab-item" onclick="switchGuideTab('curl')">cURL</button>
+        </div>
+
+        <!-- Claude Tab -->
+        <div id="pane-claude" class="tab-pane active">
+          <p style="font-size: 0.8125rem; color: var(--text-muted); margin-bottom: 0.85rem;">
+            Routes Claude Code through the local Anthropic Messages API with full streaming reasoning and nested tool schemas.
+          </p>
+          <div class="code-display">
+            <button class="code-copy-btn" onclick="copyCode('snippet-claude')">Copy</button>
+            <pre id="snippet-claude">export ANTHROPIC_BASE_URL="http://127.0.0.1:52130"
+export ANTHROPIC_API_KEY="antigravity-local"
+
+# Or run your Free Claude Code shortcut:
+fcc</pre>
+          </div>
+        </div>
+
+        <!-- Hermes Tab -->
+        <div id="pane-hermes" class="tab-pane">
+          <p style="font-size: 0.8125rem; color: var(--text-muted); margin-bottom: 0.85rem;">
+            Hermes Agent is configured to use the local Antigravity Bridge as a custom provider:
+          </p>
+          <div class="code-display">
+            <button class="code-copy-btn" onclick="copyCode('snippet-hermes')">Copy</button>
+            <pre id="snippet-hermes"># Run Hermes with Antigravity provider and Gemini 3.8 Flash:
+hermes --provider antigravity -m gemini-3.8-flash -z "Check workspace files"
+
+# Or start interactive TUI:
+hermes --provider antigravity -m gemini-3.8-flash --tui</pre>
+          </div>
+        </div>
+
+        <!-- Cursor Tab -->
+        <div id="pane-cursor" class="tab-pane">
+          <p style="font-size: 0.8125rem; color: var(--text-muted); margin-bottom: 0.85rem;">
+            Configure in Cursor IDE settings under "OpenAI API Key" / "Override OpenAI Base URL".
+          </p>
+          <div class="code-display">
+            <button class="code-copy-btn" onclick="copyCode('snippet-cursor')">Copy</button>
+            <pre id="snippet-cursor">Base URL: http://127.0.0.1:52130/v1
+API Key: antigravity-local
+Model: gemini-3.8-flash (or claude-3-5-sonnet-20241022)</pre>
+          </div>
+        </div>
+
+        <!-- Python Tab -->
+        <div id="pane-python" class="tab-pane">
+          <p style="font-size: 0.8125rem; color: var(--text-muted); margin-bottom: 0.85rem;">
+            Standard OpenAI Python client automatically routed with high reasoning effort:
+          </p>
+          <div class="code-display">
+            <button class="code-copy-btn" onclick="copyCode('snippet-python')">Copy</button>
+            <pre id="snippet-python">from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://127.0.0.1:52130/v1",
+    api_key="antigravity-local"
+)
+
+response = client.chat.completions.create(
+    model="gemini-3.8-flash",
+    messages=[{"role": "user", "content": "Hello!"}],
+    extra_body={"reasoning_effort": "high"}
+)
+print(response.choices[0].message.content)</pre>
+          </div>
+        </div>
+
+        <!-- cURL Tab -->
+        <div id="pane-curl" class="tab-pane">
+          <p style="font-size: 0.8125rem; color: var(--text-muted); margin-bottom: 0.85rem;">
+            Execute chat completion directly in terminal:
+          </p>
+          <div class="code-display">
+            <button class="code-copy-btn" onclick="copyCode('snippet-curl')">Copy</button>
+            <pre id="snippet-curl">curl -X POST http://127.0.0.1:52130/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer antigravity-local" \
+  -d '{"model":"gemini-3.8-flash","messages":[{"role":"user","content":"Ping"}]}'</pre>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Real-Time Pool Activity Feed -->
+    <section>
+      <div class="section-head">
+        <div class="section-head-title">
+          <h2>Pool Activity Stream</h2>
+          <span class="section-head-badge">Live Events</span>
+        </div>
+      </div>
+
+      <div class="tabs-wrapper" style="padding: 1rem;">
+        <div class="feed-container" id="feedList">
+          <div class="feed-row">
+            <span class="feed-time">--:--:--</span>
+            <span class="feed-tag tag-info">INFO</span>
+            <span style="color: var(--text-muted);">Gateway initialized. Multi-account pool operational.</span>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    let poolCache = null;
+
+    // Theme Management
+    function initTheme() {
+      const savedTheme = localStorage.getItem("antigravity-theme") || "zinc";
+      document.documentElement.setAttribute("data-theme", savedTheme);
+      const select = document.getElementById("themeSelect");
+      if (select) select.value = savedTheme;
+    }
+
+    function changeTheme(themeName) {
+      document.documentElement.setAttribute("data-theme", themeName);
+      localStorage.setItem("antigravity-theme", themeName);
+    }
+
+    initTheme();
+
+    async function fetchPoolStatus() {
+      try {
+        const res = await fetch("/api/pool");
+        if (!res.ok) return;
+        poolCache = await res.json();
+        renderStitchDashboard(poolCache);
+      } catch (err) {
+        console.error("Failed to fetch pool status:", err);
+      }
+    }
+
+    function formatTimeRemaining(isoDate) {
+      if (!isoDate) return "Full Quota";
+      const target = new Date(isoDate).getTime();
+      const diff = target - Date.now();
+      if (diff <= 0) return "Ready to reset";
+      const h = Math.floor(diff / 3600000);
+      const m = Math.floor((diff % 3600000) / 60000);
+      return "Resets in " + (h > 0 ? h + "h " : "") + m + "m";
+    }
+
+    function formatResetDate(isoDate) {
+      if (!isoDate) return "Full Quota";
+      const d = new Date(isoDate);
+      return "Resets " + d.toLocaleDateString([], { month: "short", day: "numeric" }) + " " + d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    }
+
+    function getMeterColors(pct) {
+      if (pct === null || pct === undefined) return { text: "color-med", fill: "fill-med" };
+      if (pct === 0) return { text: "color-rose", fill: "fill-rose" };
+      if (pct < 25) return { text: "color-amber", fill: "fill-amber" };
+      if (pct < 50) return { text: "color-med", fill: "fill-med" };
+      return { text: "color-high", fill: "fill-high" };
+    }
+
+    function renderStitchDashboard(data) {
+      document.getElementById("kpiTotalAccounts").textContent = data.totalAccounts;
+      document.getElementById("kpiPoolMultiplier").textContent = data.totalAccounts + "x Combined Pool";
+      document.getElementById("kpiActiveEmail").textContent = data.activeAccount?.email || "None";
+      document.getElementById("accountsCountBadge").textContent = data.totalAccounts + " Accounts";
+
+      // Calculate Averages
+      let sum5h = 0, num5h = 0;
+      let sumWk = 0, numWk = 0;
+      data.accounts.forEach(function(a) {
+        if (a.liveQuota?.fiveHour?.remainingPercent !== undefined) {
+          sum5h += a.liveQuota.fiveHour.remainingPercent;
+          num5h++;
+        }
+        if (a.liveQuota?.weekly?.remainingPercent !== undefined) {
+          sumWk += a.liveQuota.weekly.remainingPercent;
+          numWk++;
+        }
+      });
+      const avg5h = num5h > 0 ? Math.round(sum5h / num5h) : 100;
+      const avgWk = numWk > 0 ? Math.round(sumWk / numWk) : 100;
+      document.getElementById("kpi5hAverage").textContent = avg5h + "%";
+      document.getElementById("kpiWeeklyAverage").textContent = avgWk + "%";
+
+      // Toggle state
+      const led = document.getElementById("failoverLed");
+      const text = document.getElementById("failoverStatusText");
+      if (data.autoFailoverEnabled) {
+        led.classList.remove("off");
+        text.textContent = "Auto-Failover: ON";
+      } else {
+        led.classList.add("off");
+        text.textContent = "Auto-Failover: OFF";
+      }
+
+      // Render Cards
+      const container = document.getElementById("accountsContainer");
+      container.innerHTML = "";
+
+      data.accounts.forEach(function(acc) {
+        const card = document.createElement("div");
+        card.className = "account-card";
+        if (acc.isActive) card.classList.add("active-account");
+        if (acc.status === "cooling_down") card.classList.add("cooling-account");
+
+        const initial = (acc.email || "?").charAt(0).toUpperCase();
+
+        let chipHtml = "";
+        if (acc.isActive) {
+          chipHtml = '<span class="status-chip chip-active">● Active</span>';
+        } else if (acc.status === "cooling_down") {
+          chipHtml = '<span class="status-chip chip-cooling">⏳ Cooling</span>';
+        } else {
+          chipHtml = '<span class="status-chip chip-ready">Ready</span>';
+        }
+
+        const fiveHour = acc.liveQuota?.fiveHour;
+        const weekly = acc.liveQuota?.weekly;
+        const tierName = acc.liveQuota?.subscriptionTier ? acc.liveQuota.subscriptionTier.replace("-tier", "") : "Pro";
+
+        const pct5h = fiveHour?.remainingPercent !== undefined ? fiveHour.remainingPercent : 100;
+        const pctWk = weekly?.remainingPercent !== undefined ? weekly.remainingPercent : 100;
+
+        const col5h = getMeterColors(pct5h);
+        const colWk = getMeterColors(pctWk);
+
+        const reset5h = fiveHour?.resetAt ? formatTimeRemaining(fiveHour.resetAt) : "100% Available";
+        const resetWk = weekly?.resetAt ? formatResetDate(weekly.resetAt) : "100% Available";
+
+        const metersHtml = '<div class="quota-meters-box">' +
+          '<div class="meter-item">' +
+            '<div class="meter-top">' +
+              '<span class="meter-name">5-Hour Rolling Limit</span>' +
+              '<span class="meter-pct ' + col5h.text + '">' + pct5h + '%</span>' +
+            '</div>' +
+            '<div class="meter-track">' +
+              '<div class="meter-fill ' + col5h.fill + '" style="width: ' + pct5h + '%;"></div>' +
+            '</div>' +
+            '<div class="meter-bottom">' +
+              '<span>5h Window</span>' +
+              '<span>' + reset5h + '</span>' +
+            '</div>' +
+          '</div>' +
+          '<div class="meter-item">' +
+            '<div class="meter-top">' +
+              '<span class="meter-name">Weekly Cycle Cap</span>' +
+              '<span class="meter-pct ' + colWk.text + '">' + pctWk + '%</span>' +
+            '</div>' +
+            '<div class="meter-track">' +
+              '<div class="meter-fill ' + colWk.fill + '" style="width: ' + pctWk + '%;"></div>' +
+            '</div>' +
+            '<div class="meter-bottom">' +
+              '<span>Weekly Cap</span>' +
+              '<span>' + resetWk + '</span>' +
+            '</div>' +
+          '</div>' +
+        '</div>';
+
+        let alertBox = "";
+        if (acc.cooldown) {
+          alertBox = '<div class="cooldown-alert">' +
+            '<span>Rate limited (HTTP 429)</span>' +
+            '<span class="cooldown-clock" data-reset="' + acc.cooldown.resetsAt + '">' + (acc.cooldown.resetMessage || "Cooldown") + '</span>' +
+          '</div>';
+        }
+
+        card.innerHTML = '<div class="card-top">' +
+          '<div class="card-identity">' +
+            '<div class="avatar">' + initial + '</div>' +
+            '<div class="acc-meta">' +
+              '<div class="acc-email" title="' + acc.email + '">' + acc.email + '</div>' +
+              '<div class="acc-badges">' +
+                '<span class="tier-chip">' + tierName + '</span>' +
+              '</div>' +
+            '</div>' +
+          '</div>' +
+          chipHtml +
+        '</div>' +
+        metersHtml +
+        alertBox +
+        '<div class="card-footer">' +
+          (acc.isActive ? 
+            '<button class="btn btn-sm btn-action" disabled style="opacity: 0.6; cursor: default;">● Currently Active</button>' : 
+            '<button class="btn btn-sm btn-primary btn-action" onclick="switchAccount(\'' + acc.email + '\')">Set Active</button>'
+          ) +
+          (acc.status === "cooling_down" ? 
+            '<button class="btn btn-sm" onclick="clearCooldown(\'' + acc.email + '\')">Clear Cooldown</button>' : ''
+          ) +
+          '<button class="btn btn-sm btn-icon-danger" onclick="deleteAccount(\'' + acc.email + '\')" title="Remove account from pool">✕</button>' +
+        '</div>';
+        container.appendChild(card);
+      });
+
+      // Render Feed
+      const feedList = document.getElementById("feedList");
+      if (data.recentEvents && data.recentEvents.length > 0) {
+        feedList.innerHTML = data.recentEvents.map(function(evt) {
+          const time = new Date(evt.timestamp).toLocaleTimeString();
+          let tagClass = "tag-info";
+          if (evt.type === "failover") tagClass = "tag-failover";
+          if (evt.type === "switch") tagClass = "tag-switch";
+
+          return '<div class="feed-row">' +
+            '<span class="feed-time">' + time + '</span>' +
+            '<span class="feed-tag ' + tagClass + '">' + evt.type.toUpperCase() + '</span>' +
+            '<span>' + evt.message + '</span>' +
+          '</div>';
+        }).join("");
+      }
+    }
+
+    async function switchAccount(email) {
+      try {
+        const res = await fetch("/api/pool/switch", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: email })
+        });
+        if (res.ok) fetchPoolStatus();
+      } catch (err) {
+        alert("Failed to switch: " + err.message);
+      }
+    }
+
+    async function clearCooldown(email) {
+      try {
+        const res = await fetch("/api/pool/clear-cooldown", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: email })
+        });
+        if (res.ok) fetchPoolStatus();
+      } catch (err) {
+        alert("Failed: " + err.message);
+      }
+    }
+
+    async function deleteAccount(email) {
+      if (!confirm("Are you sure you want to remove " + email + " from the pool?")) return;
+      try {
+        const res = await fetch("/api/pool/delete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: email })
+        });
+        if (res.ok) fetchPoolStatus();
+      } catch (err) {
+        alert("Failed to remove: " + err.message);
+      }
+    }
+
+    document.getElementById("toggleFailoverBtn").addEventListener("click", async function() {
+      try {
+        const res = await fetch("/api/pool/toggle", { method: "POST" });
+        if (res.ok) fetchPoolStatus();
+      } catch (err) {
+        console.error(err);
+      }
+    });
+
+    function switchGuideTab(tabKey) {
+      document.querySelectorAll(".tab-item").forEach(function(b) { b.classList.remove("active"); });
+      document.querySelectorAll(".tab-pane").forEach(function(p) { p.classList.remove("active"); });
+      event.target.classList.add("active");
+      document.getElementById("pane-" + tabKey).classList.add("active");
+    }
+
+    function copyCode(id) {
+      const text = document.getElementById(id).textContent;
+      navigator.clipboard.writeText(text).then(function() {
+        alert("Copied to clipboard!");
+      });
+    }
+
+    // Smooth real-time countdown updates
+    setInterval(function() {
+      document.querySelectorAll(".cooldown-clock[data-reset]").forEach(function(el) {
+        const target = new Date(el.getAttribute("data-reset")).getTime();
+        const diff = target - Date.now();
+        if (diff <= 0) {
+          el.textContent = "Ready to reset";
+        } else {
+          const h = Math.floor(diff / 3600000);
+          const m = Math.floor((diff % 3600000) / 60000);
+          const s = Math.floor((diff % 60000) / 1000);
+          el.textContent = "Resets in " + (h > 0 ? h + "h " : "") + m + "m " + s + "s";
+        }
+      });
+    }, 1000);
+
+    fetchPoolStatus();
+    setInterval(fetchPoolStatus, 5000);
+  </script>
+</body>
+</html>
