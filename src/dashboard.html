@@ -964,7 +964,7 @@
       </div>
       <div class="endpoint-pill" id="headerEndpointBadge" onclick="copyHeaderEndpoint()" title="Click to copy endpoint URL">
         <span style="display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--emerald); box-shadow: 0 0 6px var(--emerald);"></span>
-        <span id="headerEndpointText">https://bridge.example.com</span>
+        <span id="headerEndpointText">http://127.0.0.1:52130</span>
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="opacity: 0.6; margin-left: 2px;">
           <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
           <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
@@ -1080,7 +1080,7 @@
         <div class="url-switcher">
           <span style="font-size: 0.75rem; color: var(--text-faint); font-weight: 500;">Endpoint:</span>
           <div class="url-pill-group">
-            <button class="url-pill-btn active" id="btnUrlVps" onclick="selectGuideUrl('vps')">🌐 VPS HTTPS</button>
+            <button class="url-pill-btn active" id="btnUrlVps" onclick="selectGuideUrl('vps')">🌐 This host</button>
             <button class="url-pill-btn" id="btnUrlLocal" onclick="selectGuideUrl('local')">💻 Localhost</button>
           </div>
         </div>
@@ -1102,7 +1102,7 @@
           </p>
           <div class="code-display">
             <button class="code-copy-btn" onclick="copyCode('snippet-claude', this)">Copy</button>
-            <pre id="snippet-claude">export ANTHROPIC_BASE_URL="https://bridge.example.com"
+            <pre id="snippet-claude">export ANTHROPIC_BASE_URL="http://127.0.0.1:52130"
 export ANTHROPIC_API_KEY="antigravity-local"
 
 # Or run your Free Claude Code shortcut:
@@ -1120,14 +1120,14 @@ fcc</pre>
             <pre id="snippet-hermes"># Add to ~/.hermes/config.yaml:
 providers:
   antigravity:
-    base_url: "https://bridge.example.com/v1"
+    base_url: "http://127.0.0.1:52130/v1"
     api_key: "antigravity-local"
 
 # Run Hermes with Antigravity provider:
-hermes --provider antigravity -m gemini-3.8-flash -z "Check workspace files"
+hermes --provider antigravity -m gemini-3.6-flash-high -z "Check workspace files"
 
 # Or start interactive TUI:
-hermes --provider antigravity -m gemini-3.8-flash --tui</pre>
+hermes --provider antigravity -m gemini-3.6-flash-high --tui</pre>
           </div>
         </div>
 
@@ -1138,9 +1138,9 @@ hermes --provider antigravity -m gemini-3.8-flash --tui</pre>
           </p>
           <div class="code-display">
             <button class="code-copy-btn" onclick="copyCode('snippet-cursor', this)">Copy</button>
-            <pre id="snippet-cursor">Base URL: https://bridge.example.com/v1
+            <pre id="snippet-cursor">Base URL: http://127.0.0.1:52130/v1
 API Key: antigravity-local
-Model: gemini-3.8-flash (or claude-3-5-sonnet-20241022)</pre>
+Model: gemini-3.6-flash-high (or claude-sonnet-4-6)</pre>
           </div>
         </div>
 
@@ -1154,12 +1154,12 @@ Model: gemini-3.8-flash (or claude-3-5-sonnet-20241022)</pre>
             <pre id="snippet-python">from openai import OpenAI
 
 client = OpenAI(
-    base_url="https://bridge.example.com/v1",
+    base_url="http://127.0.0.1:52130/v1",
     api_key="antigravity-local"
 )
 
 response = client.chat.completions.create(
-    model="gemini-3.8-flash",
+    model="gemini-3.6-flash-high",
     messages=[{"role": "user", "content": "Hello!"}],
     extra_body={"reasoning_effort": "high"}
 )
@@ -1174,10 +1174,10 @@ print(response.choices[0].message.content)</pre>
           </p>
           <div class="code-display">
             <button class="code-copy-btn" onclick="copyCode('snippet-curl', this)">Copy</button>
-            <pre id="snippet-curl">curl -X POST https://bridge.example.com/v1/chat/completions \
+            <pre id="snippet-curl">curl -X POST http://127.0.0.1:52130/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer antigravity-local" \
-  -d '{"model":"gemini-3.8-flash","messages":[{"role":"user","content":"Ping"}]}'</pre>
+  -d '{"model":"gemini-3.6-flash-high","messages":[{"role":"user","content":"Ping"}]}'</pre>
           </div>
         </div>
       </div>
@@ -1511,8 +1511,13 @@ print(response.choices[0].message.content)</pre>
       document.getElementById("pane-" + tabKey).classList.add("active");
     }
 
-    const VPS_BASE_URL = "https://bridge.example.com";
-    const LOCAL_BASE_URL = "http://127.0.0.1:52130";
+    // Derived, not hardcoded: whatever address you reached this dashboard on is
+    // the address your clients should use. A pinned URL only ever described one
+    // deployment and silently misled every other one.
+    const REMOTE_BASE_URL = window.location.origin;
+    // Same reasoning for the loopback form: take the port from this page rather
+    // than assuming the default, or the snippet is wrong on any other port.
+    const LOCAL_BASE_URL = "http://127.0.0.1:" + (window.location.port || "52130");
     let currentGuideMode = (window.location.hostname === "127.0.0.1" || window.location.hostname === "localhost") ? "local" : "vps";
 
     function selectGuideUrl(mode) {
@@ -1527,12 +1532,18 @@ print(response.choices[0].message.content)</pre>
     }
 
     function renderGuideSnippets() {
-      const baseUrl = currentGuideMode === "vps" ? VPS_BASE_URL : LOCAL_BASE_URL;
+      const baseUrl = currentGuideMode === "vps" ? REMOTE_BASE_URL : LOCAL_BASE_URL;
+      // Loopback is trusted, so any value works locally. Remote callers must
+      // send the real BRIDGE_API_KEY; show the stored one if this browser has
+      // it, otherwise a placeholder rather than a value that will be rejected.
+      const apiKey = currentGuideMode === "local"
+        ? "antigravity-local"
+        : (storedApiKey() || "<your BRIDGE_API_KEY>");
 
       const elClaude = document.getElementById("snippet-claude");
       if (elClaude) {
         elClaude.textContent = 'export ANTHROPIC_BASE_URL="' + baseUrl + '"\n' +
-          'export ANTHROPIC_API_KEY="antigravity-local"\n\n' +
+          'export ANTHROPIC_API_KEY="' + apiKey + '"\n\n' +
           '# Or run your Free Claude Code shortcut:\n' +
           'fcc';
       }
@@ -1543,18 +1554,18 @@ print(response.choices[0].message.content)</pre>
           'providers:\n' +
           '  antigravity:\n' +
           '    base_url: "' + baseUrl + '/v1"\n' +
-          '    api_key: "antigravity-local"\n\n' +
+          '    api_key: "' + apiKey + '"\n\n' +
           '# Run Hermes with Antigravity provider:\n' +
-          'hermes --provider antigravity -m gemini-3.8-flash -z "Check workspace files"\n\n' +
+          'hermes --provider antigravity -m gemini-3.6-flash-high -z "Check workspace files"\n\n' +
           '# Or start interactive TUI:\n' +
-          'hermes --provider antigravity -m gemini-3.8-flash --tui';
+          'hermes --provider antigravity -m gemini-3.6-flash-high --tui';
       }
 
       const elCursor = document.getElementById("snippet-cursor");
       if (elCursor) {
         elCursor.textContent = 'Base URL: ' + baseUrl + '/v1\n' +
-          'API Key: antigravity-local\n' +
-          'Model: gemini-3.8-flash (or claude-3-5-sonnet-20241022)';
+          'API Key: ' + apiKey + '\n' +
+          'Model: gemini-3.6-flash-high (or claude-sonnet-4-6)';
       }
 
       const elPython = document.getElementById("snippet-python");
@@ -1562,10 +1573,10 @@ print(response.choices[0].message.content)</pre>
         elPython.textContent = 'from openai import OpenAI\n\n' +
           'client = OpenAI(\n' +
           '    base_url="' + baseUrl + '/v1",\n' +
-          '    api_key="antigravity-local"\n' +
+          '    api_key="' + apiKey + '"\n' +
           ')\n\n' +
           'response = client.chat.completions.create(\n' +
-          '    model="gemini-3.8-flash",\n' +
+          '    model="gemini-3.6-flash-high",\n' +
           '    messages=[{"role": "user", "content": "Hello!"}],\n' +
           '    extra_body={"reasoning_effort": "high"}\n' +
           ')\n' +
@@ -1576,8 +1587,8 @@ print(response.choices[0].message.content)</pre>
       if (elCurl) {
         elCurl.textContent = 'curl -X POST ' + baseUrl + '/v1/chat/completions \\\n' +
           '  -H "Content-Type: application/json" \\\n' +
-          '  -H "Authorization: Bearer antigravity-local" \\\n' +
-          '  -d \'{"model":"gemini-3.8-flash","messages":[{"role":"user","content":"Ping"}]}\'';
+          '  -H "Authorization: Bearer ' + apiKey + '" \\\n' +
+          '  -d \'{"model":"gemini-3.6-flash-high","messages":[{"role":"user","content":"Ping"}]}\'';
       }
     }
 
