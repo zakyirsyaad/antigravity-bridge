@@ -237,6 +237,16 @@ async function main() {
         console.log(`   - Anthropic endpoint: http://127.0.0.1:${port}/v1/messages`);
         console.log(`   - OpenAI endpoint:    http://127.0.0.1:${port}/v1/chat/completions`);
         console.log(`   - Health check:       http://127.0.0.1:${port}/health`);
+        // Fail-closed is correct but silent until the first remote request is
+        // refused. Say so at boot, when it is still cheap to fix.
+        const host = process.env.BRIDGE_HOST || "0.0.0.0";
+        const isLoopbackOnly = host === "127.0.0.1" || host === "localhost" || host === "::1";
+        if (!isLoopbackOnly && !process.env.BRIDGE_API_KEY) {
+          console.warn(`\n! Listening on ${host} with BRIDGE_API_KEY unset.`);
+          console.warn(`  Requests from anywhere but this machine will be REFUSED (401).`);
+          console.warn(`  Set BRIDGE_API_KEY to allow them, or BRIDGE_HOST=127.0.0.1 to bind locally only.`);
+        }
+
         console.log(`\nReady to accept requests from ZCode. Press Ctrl+C to stop.`);
       } catch (err: any) {
         console.error(`✗ Failed to start server: ${err.message}`);

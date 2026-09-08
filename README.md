@@ -138,6 +138,26 @@ be, but prefer the real ids above.
 
 ---
 
+## ⬆️ Upgrading from 1.x
+
+**2.0 is breaking.** Three things can stop working — see [CHANGELOG.md](CHANGELOG.md) for the full
+list and the reasoning.
+
+1. **Set `BRIDGE_API_KEY`** if the bridge is reachable from anywhere but this machine, including
+   behind a reverse proxy. Without it, remote requests are refused rather than served. Point your
+   clients' `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` at that value instead of `antigravity-local`.
+2. **Update model ids.** Old ones still resolve and the bridge warns once per id, but several used
+   to point somewhere other than their name suggested. `npm run bridge:models` shows what Google
+   actually serves.
+3. **Re-sync your clone.** `main` was rewritten to strip a hardcoded deployment address, so a plain
+   `git pull` will conflict:
+
+   ```bash
+   git fetch origin && git reset --hard origin/main
+   ```
+
+---
+
 ## 🚀 Quick Start
 
 ### 1. Prerequisites

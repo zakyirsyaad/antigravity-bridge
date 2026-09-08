@@ -91,6 +91,9 @@ export class Transformer {
    * which in several cases is not what it used to resolve to. `gemini-3-pro`
    * in particular resolved to `gemini-3-pro-low`, which Google does not offer.
    */
+  /** Retired ids already warned about, so a busy agent loop logs each once. */
+  private static warnedRetiredIds = new Set<string>();
+
   public static resolveModel(requestedModel: string): string {
     const raw = (requestedModel || "").toLowerCase().trim();
     const clean = raw.replace(/^google\//, "").replace(/^antigravity-/, "");
@@ -110,7 +113,19 @@ export class Transformer {
       "gemini-3.7-flash-high": "gemini-3.7-flash-tiered",
       "gemini-2.5-flash": "gemini-3.1-flash-lite",
     };
-    if (retired[clean]) return retired[clean];
+    if (retired[clean]) {
+      // With no GitHub watchers on this project, the software itself is the
+      // only thing that will tell an existing user their model changed under
+      // them. Silent aliasing would hide that completely.
+      if (!this.warnedRetiredIds.has(clean)) {
+        this.warnedRetiredIds.add(clean);
+        console.warn(
+          `[Deprecated model] "${clean}" is a retired id and now resolves to "${retired[clean]}". ` +
+            `It previously resolved elsewhere — see the model table in README.md. Update your client config.`
+        );
+      }
+      return retired[clean];
+    }
 
     if (clean.includes("claude") && clean.includes("sonnet")) return "claude-sonnet-4-6";
     if (clean.includes("claude")) return "claude-opus-4-6-thinking";
