@@ -104,9 +104,10 @@ export async function checkModelDrift(): Promise<ModelDrift> {
   const exposed = new Set(SUPPORTED_MODELS.map((m) => m.id));
   const unexposed: UpstreamModel[] = [];
   for (const [id, m] of Object.entries<any>(models)) {
-    // Skip Google's internal entries: they carry no display name and are not
-    // addressable as chat models.
-    if (!m.displayName || id.startsWith("chat_") || id.startsWith("tab_")) continue;
+    // Skip Google's internal entries. Match on the id prefix only: a missing
+    // displayName does not mean internal — the tiered flash models have none,
+    // and they are exactly the ones Antigravity's own picker exposes.
+    if (id.startsWith("chat_") || id.startsWith("tab_")) continue;
     if (exposed.has(id) || !m.supportsThinking) continue;
     unexposed.push({
       id,

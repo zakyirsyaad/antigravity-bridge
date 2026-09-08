@@ -207,6 +207,42 @@ export const SUPPORTED_MODELS: ModelDef[] = [
     minThinkingBudget: 32,
   },
 
+  // Tiered flash models. These carry no displayName upstream because they are
+  // not a fixed tier: Antigravity's own model picker maps its "flash" option to
+  // gemini-3.8-flash-tiered and lets the user slide reasoning from low to high,
+  // which is why the budget is dynamic. The tier is a per-request parameter, so
+  // reasoning_effort / thinking.budget_tokens is how you choose it here.
+  {
+    id: "gemini-3.8-flash-tiered",
+    name: "Gemini 3.8 Flash (Tiered)",
+    family: "gemini",
+    contextLimit: 1048576,
+    outputLimit: 65536,
+    supportsThinking: true,
+    thinkingBudget: -1,
+    minThinkingBudget: 32,
+  },
+  {
+    id: "gemini-3.7-flash-tiered",
+    name: "Gemini 3.7 Flash (Tiered)",
+    family: "gemini",
+    contextLimit: 1048576,
+    outputLimit: 65536,
+    supportsThinking: true,
+    thinkingBudget: -1,
+    minThinkingBudget: 32,
+  },
+  {
+    id: "gemini-3.6-flash-tiered",
+    name: "Gemini 3.6 Flash (Tiered)",
+    family: "gemini",
+    contextLimit: 1048576,
+    outputLimit: 65536,
+    supportsThinking: true,
+    thinkingBudget: -1,
+    minThinkingBudget: 32,
+  },
+
   // Gemini 3 Flash
   {
     id: "gemini-3-flash",

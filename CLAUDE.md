@@ -147,6 +147,11 @@ Reasoning config is per model, not global:
 - `thinkingBudget` is Google's declared default. `-1` means the model sizes its own reasoning, and
   the bridge forwards `-1` rather than pinning a number — an explicit budget switches dynamic
   thinking off.
+- **Tiered ids carry no upstream `displayName`, and that does not make them internal.** Google's
+  `tieredModelIds` maps Antigravity's own picker: `flash` -> `gemini-3.8-flash-tiered`. Their tier
+  is a per-request parameter, which is why they are dynamic. Filter Google's catalogue on the
+  `chat_` / `tab_` id prefixes only — filtering on a missing display name hides exactly the models
+  the product surfaces.
 - `minThinkingBudget` is the floor; below it the bridge disables thinking rather than sending a
   value the model would reject.
 - `Transformer.applyThinkingConfig()` fits the budget inside the caller's `max_tokens`, holding back

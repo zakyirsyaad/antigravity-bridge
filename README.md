@@ -86,6 +86,9 @@ figure below comes from Google's `fetchAvailableModels`; re-check it any time wi
 | `gemini-3.1-pro-high` | 10,001 | 1M | 65K | Hardest reasoning — 10× the budget of the Low tier |
 | `gemini-3.1-pro-low` | 1,001 | 1M | 65K | Pro-class answers when reasoning depth is not the bottleneck |
 | `gemini-2.5-pro` | 1,024 | 1M | 65K | Robust general development |
+| `gemini-3.8-flash-tiered` | dynamic | 1M | 65K | **Newest flash — pick low/medium/high per request** |
+| `gemini-3.7-flash-tiered` | dynamic | 1M | 65K | Same, one generation back |
+| `gemini-3.6-flash-tiered` | dynamic | 1M | 65K | Same, two generations back |
 | `gemini-3.6-flash-high` | dynamic | 1M | 65K | **Google's own default agent model** |
 | `gemini-3.6-flash-medium` | 4,000 | 1M | 65K | Fast multi-step work |
 | `gemini-3.6-flash-low` | 1,000 | 1M | 65K | High-speed tool loops |
@@ -99,13 +102,20 @@ figure below comes from Google's `fetchAvailableModels`; re-check it any time wi
 **"dynamic"** means the model sizes its own reasoning. The bridge forwards that rather than pinning
 a number, since an explicit budget would switch it off.
 
+**Tiered vs. fixed tiers.** Antigravity's own model picker maps its "flash" option to
+`gemini-3.8-flash-tiered` and lets you slide reasoning from low to high — the tier is a *request
+parameter*, not part of the model name. Use `reasoning_effort` (or `thinking.budget_tokens`) to
+choose it. The `-high` / `-medium` / `-low` ids are the opposite arrangement: the tier is fixed by
+the name. Both are available; the tiered ids give you one model whose effort you vary per call.
+
 ### Controlling reasoning
 
 Each model carries its own default budget, so the same request reasons differently per model.
 
 - **Anthropic API**: `thinking: { budget_tokens: N }`, or `thinking: { type: "disabled" }`.
 - **OpenAI API**: `reasoning_effort` scales that model's default — `low` is a quarter of it,
-  `medium` is it, `high` is four times it. `reasoning_tokens: N` sets an exact figure.
+  `medium` is it, `high` is four times it. On a tiered model it selects the tier instead:
+  `low` = 1,000, `medium` = 4,000, `high` = dynamic. `reasoning_tokens: N` sets an exact figure.
 
 Thinking tokens count against `max_tokens`, so the bridge fits the budget inside whatever cap you
 send and holds back 8,192 tokens for the visible answer. Tune that with

@@ -20,6 +20,8 @@ import { Transformer } from "../src/transformer";
 const PRO_HIGH = "gemini-3.1-pro-high";
 /** Declared budget -1: the model sizes its own reasoning. */
 const DYNAMIC = "gemini-3.6-flash-high";
+/** Tier chosen per request rather than baked into the id. */
+const TIERED = "gemini-3.8-flash-tiered";
 /** No thinking support at all. */
 const PLAIN = "gemini-3.1-flash-lite";
 const MESSAGES = [{ role: "user", content: "hi" }];
@@ -93,6 +95,16 @@ function runTests() {
   expect("high", openai(PRO_HIGH, { max_tokens: 64000, reasoning_effort: "high" }).thinkingConfig?.thinking_budget, 40004);
   expect("high stays dynamic on a dynamic model", openai(DYNAMIC, { max_tokens: 64000, reasoning_effort: "high" }).thinkingConfig?.thinking_budget, -1);
   expect("none", openai(PRO_HIGH, { max_tokens: 64000, reasoning_effort: "none" }).thinkingConfig?.thinking_budget, 0);
+
+  console.log("\n[7b/8] A tiered model picks its tier from reasoning_effort ...");
+  // The whole point of a tiered id: Antigravity's own picker maps "flash" to
+  // gemini-3.8-flash-tiered and slides reasoning low..high per request, so
+  // effort has to produce a real budget here rather than staying dynamic.
+  expect("low", openai(TIERED, { max_tokens: 64000, reasoning_effort: "low" }).thinkingConfig?.thinking_budget, 1000);
+  expect("medium", openai(TIERED, { max_tokens: 64000, reasoning_effort: "medium" }).thinkingConfig?.thinking_budget, 4000);
+  expect("high stays dynamic", openai(TIERED, { max_tokens: 64000, reasoning_effort: "high" }).thinkingConfig?.thinking_budget, -1);
+  expect("default is dynamic", anthropic(TIERED, { max_tokens: 64000 }).thinkingConfig?.thinking_budget, -1);
+  expect("explicit budget wins", anthropic(TIERED, { max_tokens: 64000, thinking: { budget_tokens: 12000 } }).thinkingConfig?.thinking_budget, 12000);
 
   console.log("\n[8/8] The answer reserve is configurable, and clamped at half ...");
   process.env.BRIDGE_ANSWER_RESERVE_TOKENS = "4096";

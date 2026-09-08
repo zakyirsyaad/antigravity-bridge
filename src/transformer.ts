@@ -104,10 +104,10 @@ export class Transformer {
       "gemini-3-pro": "gemini-3.1-pro-high",
       // These five all collapsed onto gemini-3-flash. Point each at the newest
       // flash tier that matches the effort its name advertised.
-      "gemini-3.8-flash": "gemini-3.6-flash-high",
-      "gemini-3.8-flash-high": "gemini-3.6-flash-high",
-      "gemini-3.7-flash": "gemini-3.6-flash-medium",
-      "gemini-3.7-flash-high": "gemini-3.6-flash-high",
+      "gemini-3.8-flash": "gemini-3.8-flash-tiered",
+      "gemini-3.8-flash-high": "gemini-3.8-flash-tiered",
+      "gemini-3.7-flash": "gemini-3.7-flash-tiered",
+      "gemini-3.7-flash-high": "gemini-3.7-flash-tiered",
       "gemini-2.5-flash": "gemini-3.1-flash-lite",
     };
     if (retired[clean]) return retired[clean];
@@ -413,15 +413,21 @@ export class Transformer {
       // Scale the model's own default rather than substituting fixed numbers,
       // so "high" means high *for this model*. A dynamic model (-1) keeps
       // choosing for itself unless the caller names a token count.
-      const scaled = (factor: number) => (declared < 0 ? -1 : Math.max(1, Math.round(declared * factor)));
+      // A dynamic model (-1) is exactly the case where effort has to mean
+      // something: its tier is chosen per request, not baked into the id. Mirror
+      // the budgets Google uses for the equivalent fixed tiers, and let "high"
+      // stay dynamic so the model can reason as far as it wants.
+      const DYNAMIC_TIERS: Record<string, number> = { low: 1000, medium: 4000, high: -1 };
+      const scaled = (factor: number, tier: keyof typeof DYNAMIC_TIERS) =>
+        declared < 0 ? DYNAMIC_TIERS[tier] : Math.max(1, Math.round(declared * factor));
       if (typeof reasoningTokens === "number" && reasoningTokens > 0) {
         budget = reasoningTokens;
       } else if (effort === "low" || effort === "minimal") {
-        budget = scaled(0.25);
+        budget = scaled(0.25, "low");
       } else if (effort === "medium") {
-        budget = scaled(1);
+        budget = scaled(1, "medium");
       } else if (effort === "high" || effort === "xhigh" || effort === "max") {
-        budget = scaled(4);
+        budget = scaled(4, "high");
       } else if (effort === "none" || effort === "off" || effort === "disabled") {
         budget = 0;
       }
