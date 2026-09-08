@@ -294,7 +294,8 @@ export class BridgeServer {
         }
       });
 
-      this.server.listen(this.port, "127.0.0.1", () => {
+      const host = process.env.BRIDGE_HOST || "0.0.0.0";
+      this.server.listen(this.port, host, () => {
         resolve(this.port);
       });
     });
