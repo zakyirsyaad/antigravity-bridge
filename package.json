@@ -31,6 +31,7 @@
     "test:usage": "tsx test/openai-usage.test.ts",
     "test:storage": "tsx test/accounts-storage.test.ts",
     "test:auth": "tsx test/auth.test.ts",
+    "test:models": "tsx test/model-resolution.test.ts",
     "build": "tsc"
   },
   "keywords": [
