@@ -24,6 +24,7 @@
     "test:stream": "tsx test/streaming-sse.test.ts",
     "test:security": "tsx test/api-pool-security.test.ts",
     "test:refresh": "tsx test/token-refresh-race.test.ts",
+    "test:launchagent": "tsx test/launchagent-resolve.test.ts",
     "build": "tsc"
   },
   "keywords": [

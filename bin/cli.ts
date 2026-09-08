@@ -1,5 +1,3 @@
-import fs from "node:fs";
-import path from "node:path";
 import { BridgeServer } from "../src/server";
 import { OAuthManager } from "../src/oauth";
 import { syncZCodeConfig } from "../src/zcode-sync";
@@ -99,9 +97,17 @@ async function main() {
       try {
         const switched = oauth.switchAccount(target);
         console.log(`\n✓ Successfully switched active account to: ${switched.email || "Google Account"}`);
-        const projectDir = path.resolve(__dirname, "..", "..", "..");
-        LaunchAgentService.install(projectDir);
-        console.log(`✓ Background service reloaded and active.`);
+
+        // Reload the daemon so it picks up the new active account. Report what
+        // actually happened: silently assuming success here is how a failed
+        // reload used to look identical to a working one.
+        const result = LaunchAgentService.install(LaunchAgentService.resolveProjectDir(__dirname));
+        if (result.success) {
+          console.log(`✓ Background service reloaded and active.`);
+        } else {
+          console.warn(`! Account switched, but the background service was NOT reloaded: ${result.message}`);
+          console.warn(`  Restart it yourself so the new account takes effect.`);
+        }
       } catch (err: any) {
         console.error(`✗ Failed to switch account: ${err.message}`);
         process.exit(1);
@@ -124,9 +130,7 @@ async function main() {
     }
 
     case "service:install": {
-      const isStandalone = fs.existsSync(path.join(__dirname, "..", "package.json"));
-      const projectDir = isStandalone ? path.resolve(__dirname, "..") : path.resolve(__dirname, "..", "..", "..");
-      const result = LaunchAgentService.install(projectDir);
+      const result = LaunchAgentService.install(LaunchAgentService.resolveProjectDir(__dirname));
       if (result.success) {
         console.log(`✓ ${result.message}`);
       } else {
