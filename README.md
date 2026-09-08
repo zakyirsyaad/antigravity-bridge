@@ -356,7 +356,17 @@ tail -f ~/.zcode/logs/antigravity-bridge.log
 
 ## 🔒 Security & Privacy
 
-- **Local-Only Gateway**: The server binds to `127.0.0.1` by default. No external ports are exposed unless configured.
+- **Bind address**: the server listens on `0.0.0.0` by default, so it is reachable from your network. Set `BRIDGE_HOST=127.0.0.1` to restrict it to this machine.
+- **Authentication**: requests over loopback are trusted, so a local install needs no configuration. Anything else must present a shared secret:
+
+  ```bash
+  export BRIDGE_API_KEY="$(openssl rand -hex 32)"   # on the machine running the bridge
+  npm run bridge:start
+  ```
+
+  Remote clients send it as `Authorization: Bearer <key>` or `x-api-key: <key>` — the same headers they already use for an API key, so point `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` at it instead of `antigravity-local`. The web dashboard prompts for the key once and remembers it in that browser.
+
+  **If you expose this bridge beyond your own machine, set `BRIDGE_API_KEY`.** Without it, remote requests are refused rather than served — the endpoints hand out pooled Google quota and can delete accounts from the pool, so an unauthenticated public deployment is not a supported configuration. Set `BRIDGE_TRUST_LOCAL=0` to require the key on loopback too.
 - **Local Credential Storage**: All OAuth access tokens and refresh tokens are stored locally in `~/.zcode/antigravity-accounts.json` with user-level read permissions.
 - **No Third-Party Intermediaries**: Requests flow directly between your machine and Google's official CloudCode servers. No telemetry, prompts, or code are sent to any external server.
 

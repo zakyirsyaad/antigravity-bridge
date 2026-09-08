@@ -1222,9 +1222,56 @@ print(response.choices[0].message.content)</pre>
 
     initTheme();
 
+    // The bridge refuses non-local requests unless they carry BRIDGE_API_KEY,
+    // so a dashboard served from a remote host has to present one. The key is
+    // per-browser, stays in this origin's localStorage, and is never sent
+    // anywhere but back to the bridge that served this page.
+    const API_KEY_STORAGE = "antigravity.apiKey";
+    let apiKeyPromptOpen = false;
+
+    function storedApiKey() {
+      try { return localStorage.getItem(API_KEY_STORAGE) || ""; } catch (e) { return ""; }
+    }
+
+    function rememberApiKey(key) {
+      try { localStorage.setItem(API_KEY_STORAGE, key); } catch (e) { /* private browsing */ }
+    }
+
+    function withApiKey(headers, key) {
+      const merged = Object.assign({}, headers || {});
+      if (key) merged["x-api-key"] = key;
+      return merged;
+    }
+
+    /** fetch() for the management API: carries the key, retries once on 401. */
+    async function apiFetch(path, options) {
+      const opts = Object.assign({}, options);
+      opts.headers = withApiKey(options && options.headers, storedApiKey());
+
+      const res = await fetch(path, opts);
+      if (res.status !== 401 || apiKeyPromptOpen) return res;
+
+      const detail = await res.clone().json().catch(function () { return null; });
+      const reason = detail && detail.error && detail.error.message ? detail.error.message + "\n\n" : "";
+
+      apiKeyPromptOpen = true;
+      let entered;
+      try {
+        entered = window.prompt(reason + "Enter the bridge API key (BRIDGE_API_KEY):", storedApiKey());
+      } finally {
+        apiKeyPromptOpen = false;
+      }
+      if (entered === null) return res;
+
+      rememberApiKey(entered.trim());
+      const retry = Object.assign({}, options);
+      retry.headers = withApiKey(options && options.headers, entered.trim());
+      return await fetch(path, retry);
+    }
+
     async function fetchPoolStatus() {
       try {
-        const res = await fetch("/api/pool");
+        const res = await apiFetch("/api/pool");
         if (!res.ok) return;
         poolCache = await res.json();
         renderStitchDashboard(poolCache);
@@ -1410,7 +1457,7 @@ print(response.choices[0].message.content)</pre>
 
     async function switchAccount(email) {
       try {
-        const res = await fetch("/api/pool/switch", {
+        const res = await apiFetch("/api/pool/switch", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ email: email })
@@ -1423,7 +1470,7 @@ print(response.choices[0].message.content)</pre>
 
     async function clearCooldown(email) {
       try {
-        const res = await fetch("/api/pool/clear-cooldown", {
+        const res = await apiFetch("/api/pool/clear-cooldown", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ email: email })
@@ -1437,7 +1484,7 @@ print(response.choices[0].message.content)</pre>
     async function deleteAccount(email) {
       if (!confirm("Are you sure you want to remove " + email + " from the pool?")) return;
       try {
-        const res = await fetch("/api/pool/delete", {
+        const res = await apiFetch("/api/pool/delete", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ email: email })
@@ -1450,7 +1497,7 @@ print(response.choices[0].message.content)</pre>
 
     document.getElementById("toggleFailoverBtn").addEventListener("click", async function() {
       try {
-        const res = await fetch("/api/pool/toggle", { method: "POST" });
+        const res = await apiFetch("/api/pool/toggle", { method: "POST" });
         if (res.ok) fetchPoolStatus();
       } catch (err) {
         console.error(err);

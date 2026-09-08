@@ -38,6 +38,59 @@ export class BridgeServer {
   }
 
   /**
+   * Requests arriving over loopback are trusted by default: the dashboard, the
+   * CLI and any local agent reach the bridge that way, and anything already
+   * running as this user can read ~/.zcode/antigravity-accounts.json directly
+   * anyway. Set BRIDGE_TRUST_LOCAL=0 to require a key even locally.
+   */
+  private isTrustedLocalRequest(req: http.IncomingMessage): boolean {
+    if (process.env.BRIDGE_TRUST_LOCAL === "0") return false;
+    const address = req.socket.remoteAddress || "";
+    return address === "127.0.0.1" || address === "::1" || address === "::ffff:127.0.0.1";
+  }
+
+  /** The key a caller presented, via either header clients already send. */
+  private presentedApiKey(req: http.IncomingMessage): string | null {
+    const authorization = req.headers.authorization;
+    if (typeof authorization === "string" && authorization.toLowerCase().startsWith("bearer ")) {
+      const value = authorization.slice(7).trim();
+      if (value) return value;
+    }
+    const apiKey = req.headers["x-api-key"];
+    if (typeof apiKey === "string" && apiKey.trim()) return apiKey.trim();
+    return null;
+  }
+
+  /** Compare via fixed-length digests so the check does not leak the key. */
+  private static keysMatch(presented: string, expected: string): boolean {
+    const a = crypto.createHash("sha256").update(presented).digest();
+    const b = crypto.createHash("sha256").update(expected).digest();
+    return crypto.timingSafeEqual(a, b);
+  }
+
+  /**
+   * Returns null when the request may proceed, or the reason it may not.
+   *
+   * Fail-closed on purpose: a bridge reachable from a non-local address holds
+   * pooled Google quota and can delete accounts, so an unset key refuses remote
+   * callers rather than serving them. A localhost-only install sees no change.
+   */
+  private authorize(req: http.IncomingMessage): string | null {
+    if (this.isTrustedLocalRequest(req)) return null;
+
+    const expected = process.env.BRIDGE_API_KEY;
+    if (!expected) {
+      return "This bridge is reachable from a non-local address but BRIDGE_API_KEY is not set, so remote requests are refused. Set BRIDGE_API_KEY on the server and send it as 'Authorization: Bearer <key>' or 'x-api-key: <key>'.";
+    }
+
+    const presented = this.presentedApiKey(req);
+    if (!presented || !BridgeServer.keysMatch(presented, expected)) {
+      return "Missing or invalid API key. Send it as 'Authorization: Bearer <key>' or 'x-api-key: <key>'.";
+    }
+    return null;
+  }
+
+  /**
    * The management API reads and mutates stored Google credentials, so it is
    * held to a stricter policy than the inference endpoints, which stay open for
    * browser-based clients.
@@ -88,6 +141,23 @@ export class BridgeServer {
           res.writeHead(204);
           res.end();
           return;
+        }
+
+        // The dashboard shell carries no secrets and has to load before it can
+        // present a key, so the HTML itself stays open. Its JSON variant does
+        // not: that one reports the signed-in account.
+        const acceptHeader = String(req.headers.accept || "");
+        const wantsJson = acceptHeader.includes("application/json") && !acceptHeader.includes("text/html");
+        const isDashboardShell =
+          (pathname === "" || pathname === "/dashboard") && req.method === "GET" && !wantsJson;
+
+        if (!isDashboardShell) {
+          const denial = this.authorize(req);
+          if (denial) {
+            res.writeHead(401, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: { message: denial, type: "unauthorized" } }));
+            return;
+          }
         }
 
         if (isManagement && this.isCrossOriginRequest(req)) {

@@ -140,14 +140,20 @@ of erroring.
 
 - **Bind address**: `server.ts` listens on `process.env.BRIDGE_HOST || "0.0.0.0"`, i.e. it is
   reachable on the LAN by default. The README's security section still claims `127.0.0.1`.
-- **No authentication**: every endpoint, including `/api/pool/delete` and `/oauth/exchange`, is
-  unauthenticated — `Authorization` / `x-api-key` are accepted and ignored. What guards the
-  management API (`/api/*`, `/oauth/*`) is an origin check, not a credential: requests with no
-  `Origin` pass, a browser `Origin` must match the request's `Host`, and those paths get no
-  wildcard CORS header. So a foreign web page is blocked, but anything on the LAN that can reach
-  the port still has full access, given the bind address above. `getPoolStatus()` returns
-  `PublicAccountSummary`, deliberately without OAuth tokens; keep it that way, and put new
-  credential-touching routes under `/api/` so they inherit the guard.
+- **This bridge is deployed publicly.** `src/dashboard.html` hardcodes
+  `VPS_BASE_URL = "https://bridge.example.com"` and defaults its setup guide to
+  that host whenever the page is not loaded from localhost. Assume any endpoint you add is
+  internet-reachable, not LAN-at-worst.
+- **Two independent gates, and they cover different attackers.** `authorize()` requires a shared
+  secret (`BRIDGE_API_KEY`) from non-loopback callers and fails closed when the key is unset —
+  that is what stops `curl`. `isCrossOriginRequest()` additionally blocks foreign web pages from
+  driving `/api/*` and `/oauth/*`, which the key alone would not, since a browser attaches
+  credentials the user already has. Loopback is trusted by both unless `BRIDGE_TRUST_LOCAL=0`.
+  Only the dashboard shell (`/`, `/dashboard`, HTML variant) is exempt, so it can load and prompt
+  for a key; its JSON variant is not, because that one reports the signed-in account.
+- `getPoolStatus()` returns `PublicAccountSummary`, deliberately without OAuth tokens. Keep it
+  that way — the type is the guard — and put new credential-touching routes under `/api/` so they
+  inherit the origin check.
 - **`syncZCodeConfig()` runs on every `start` and `login`** and writes a fresh timestamped
   `.backup.<iso>` copy of `~/.zcode/v2/config.json` each time — that directory accumulates files.
 - **Client credentials in `constants.ts`** are the public Antigravity desktop app's, assembled from
