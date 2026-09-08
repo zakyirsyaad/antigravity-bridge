@@ -12,6 +12,7 @@
     "dev": "tsx watch bin/cli.ts start",
     "bridge:start": "tsx bin/cli.ts start",
     "bridge:sync": "tsx bin/cli.ts sync",
+    "bridge:models": "tsx bin/cli.ts models",
     "bridge:login": "tsx bin/cli.ts login",
     "bridge:status": "tsx bin/cli.ts status",
     "bridge:usage": "tsx bin/cli.ts usage",

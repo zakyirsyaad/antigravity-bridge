@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { SUPPORTED_MODELS, SKIP_THOUGHT_SIGNATURE } from "./constants";
+import { SUPPORTED_MODELS, SKIP_THOUGHT_SIGNATURE, findModel, ModelDef } from "./constants";
 import { AntigravityPayload } from "./antigravity-client";
 import { cleanToolDeclarations } from "./schema-cleaner";
 
@@ -32,26 +32,50 @@ export class Transformer {
    * discards an explicit cap and burns far more of the pooled quota than the
    * caller asked for. Shrink the budget instead.
    */
-  private static applyThinkingConfig(generationConfig: any, requestedBudget: number): void {
-    if (requestedBudget <= 0) {
+  private static applyThinkingConfig(
+    generationConfig: any,
+    requestedBudget: number,
+    model?: ModelDef
+  ): void {
+    if (requestedBudget === 0) {
       generationConfig.thinkingConfig = { include_thoughts: false, thinking_budget: 0 };
       return;
     }
 
-    // No explicit cap from the caller — size the window around the budget.
+    // No explicit cap from the caller — size the window around the budget. This
+    // has to happen before the dynamic branch below, or a dynamic model would
+    // be left with no maxOutputTokens at all.
     if (!generationConfig.maxOutputTokens) {
-      generationConfig.maxOutputTokens = Math.max(this.DEFAULT_MAX_OUTPUT_TOKENS, requestedBudget + 8192);
-      generationConfig.thinkingConfig = { include_thoughts: true, thinking_budget: requestedBudget };
+      generationConfig.maxOutputTokens = Math.max(
+        this.DEFAULT_MAX_OUTPUT_TOKENS,
+        (requestedBudget > 0 ? requestedBudget : 0) + 8192
+      );
+    }
+
+    // Reserve room for the visible answer, clamped to half the window so a
+    // small cap still leaves something to answer with.
+    const maxOutputTokens = generationConfig.maxOutputTokens;
+    const reserve = Math.min(this.answerReserveTokens(), Math.floor(maxOutputTokens / 2));
+    const room = maxOutputTokens - reserve;
+
+    // Below the model's own floor there is no useful reasoning to buy, and some
+    // models reject the value outright.
+    const floor = model?.minThinkingBudget ?? this.MIN_THINKING_BUDGET;
+    if (room < floor) {
+      generationConfig.thinkingConfig = { include_thoughts: false, thinking_budget: 0 };
       return;
     }
 
-    // Honour the cap, giving reasoning everything the answer does not need.
-    // The reserve is capped at half the window so a small cap still leaves
-    // something to answer with.
-    const maxOutputTokens = generationConfig.maxOutputTokens;
-    const reserve = Math.min(this.answerReserveTokens(), Math.floor(maxOutputTokens / 2));
-    const budget = Math.min(requestedBudget, maxOutputTokens - reserve);
-    if (budget < this.MIN_THINKING_BUDGET) {
+    // -1 asks the model to size its own reasoning. Forward it untouched: pinning
+    // a number would switch dynamic thinking off, which is the opposite of what
+    // a caller asking for more reasoning wants.
+    if (requestedBudget < 0) {
+      generationConfig.thinkingConfig = { include_thoughts: true, thinking_budget: -1 };
+      return;
+    }
+
+    const budget = Math.min(requestedBudget, room);
+    if (budget < floor) {
       generationConfig.thinkingConfig = { include_thoughts: false, thinking_budget: 0 };
       return;
     }
@@ -59,43 +83,42 @@ export class Transformer {
   }
 
   /**
-   * Resolve target model name in Antigravity API
+   * Map whatever a client asked for onto a model Google actually serves.
+   *
+   * An exact id is passed straight through — bridge ids are Google ids. The
+   * aliases below only exist so configs written against the previous table keep
+   * working; each retired id is pointed at the model it was *claiming* to be,
+   * which in several cases is not what it used to resolve to. `gemini-3-pro`
+   * in particular resolved to `gemini-3-pro-low`, which Google does not offer.
    */
   public static resolveModel(requestedModel: string): string {
     const raw = (requestedModel || "").toLowerCase().trim();
     const clean = raw.replace(/^google\//, "").replace(/^antigravity-/, "");
 
-    const found = SUPPORTED_MODELS.find(
-      (m) => m.id === clean || m.name.toLowerCase() === raw || m.targetModel === clean
-    );
+    const exact = SUPPORTED_MODELS.find((m) => m.id === clean || m.name.toLowerCase() === raw);
+    if (exact) return exact.id;
 
-    if (found && found.targetModel) {
-      return found.targetModel;
-    }
-    if (found) {
-      return found.id;
-    }
+    const retired: Record<string, string> = {
+      // Was pinned to the Low tier despite the plain name; High is the better default.
+      "gemini-3.1-pro": "gemini-3.1-pro-high",
+      "gemini-3-pro": "gemini-3.1-pro-high",
+      // These five all collapsed onto gemini-3-flash. Point each at the newest
+      // flash tier that matches the effort its name advertised.
+      "gemini-3.8-flash": "gemini-3.6-flash-high",
+      "gemini-3.8-flash-high": "gemini-3.6-flash-high",
+      "gemini-3.7-flash": "gemini-3.6-flash-medium",
+      "gemini-3.7-flash-high": "gemini-3.6-flash-high",
+      "gemini-2.5-flash": "gemini-3.1-flash-lite",
+    };
+    if (retired[clean]) return retired[clean];
 
-    if (clean.includes("claude") && clean.includes("thinking") && !clean.includes("opus")) {
-      return "claude-opus-4-6-thinking";
-    }
-    if (clean.includes("claude") && clean.includes("sonnet")) {
-      return "claude-sonnet-4-6";
-    }
-    if (clean.includes("claude")) {
-      return "claude-opus-4-6-thinking";
-    }
-    if (clean.includes("3.1-pro")) {
-      return "gemini-3.1-pro-low";
-    }
-    if (clean.includes("3-pro")) {
-      return "gemini-3-pro-low";
-    }
-    if (clean.includes("3.8-flash") || clean.includes("3.7-flash") || clean.includes("3-flash")) {
-      return "gemini-3-flash";
-    }
+    if (clean.includes("claude") && clean.includes("sonnet")) return "claude-sonnet-4-6";
+    if (clean.includes("claude")) return "claude-opus-4-6-thinking";
+    if (clean.includes("pro")) return "gemini-3.1-pro-high";
+    if (clean.includes("lite")) return "gemini-3.1-flash-lite";
+    if (clean.includes("flash") || clean.includes("gemini")) return "gemini-3.6-flash-high";
 
-    return clean || "gemini-3-flash";
+    return clean || "gemini-3.6-flash-high";
   }
 
   /**
@@ -222,11 +245,14 @@ export class Transformer {
     }
 
     // Thinking configuration
-    const isClaude = targetModel.includes("claude");
-    const isThinking = targetModel.includes("thinking") || targetModel.includes("gemini-3");
+    const model = findModel(targetModel);
+    const isClaude = model?.family === "claude";
 
-    if (isThinking) {
-      let budget = 32768;
+    if (model?.supportsThinking) {
+      // Default to Google's own declared budget for this model rather than one
+      // global number: the models differ by an order of magnitude, and several
+      // size their reasoning dynamically.
+      let budget = model.thinkingBudget ?? -1;
       if (body.thinking) {
         if (body.thinking.type === "disabled") {
           budget = 0;
@@ -234,7 +260,7 @@ export class Transformer {
           budget = body.thinking.budget_tokens;
         }
       }
-      this.applyThinkingConfig(generationConfig, budget);
+      this.applyThinkingConfig(generationConfig, budget, model);
     }
 
     // Tools conversion
@@ -375,27 +401,32 @@ export class Transformer {
       generationConfig.topP = body.top_p;
     }
 
-    const isClaude = targetModel.includes("claude");
-    const isThinking = targetModel.includes("thinking") || targetModel.includes("gemini-3");
+    const model = findModel(targetModel);
+    const isClaude = model?.family === "claude";
 
-    if (isThinking) {
-      let budget = 32768;
+    if (model?.supportsThinking) {
+      const declared = model.thinkingBudget ?? -1;
+      let budget = declared;
       const effort = String(body.reasoning_effort || body.extra_body?.reasoning_effort || "").toLowerCase();
       const reasoningTokens = body.reasoning_tokens || body.extra_body?.reasoning_tokens;
 
+      // Scale the model's own default rather than substituting fixed numbers,
+      // so "high" means high *for this model*. A dynamic model (-1) keeps
+      // choosing for itself unless the caller names a token count.
+      const scaled = (factor: number) => (declared < 0 ? -1 : Math.max(1, Math.round(declared * factor)));
       if (typeof reasoningTokens === "number" && reasoningTokens > 0) {
         budget = reasoningTokens;
       } else if (effort === "low" || effort === "minimal") {
-        budget = 4096;
+        budget = scaled(0.25);
       } else if (effort === "medium") {
-        budget = 16384;
+        budget = scaled(1);
       } else if (effort === "high" || effort === "xhigh" || effort === "max") {
-        budget = 32768;
+        budget = scaled(4);
       } else if (effort === "none" || effort === "off" || effort === "disabled") {
         budget = 0;
       }
 
-      this.applyThinkingConfig(generationConfig, budget);
+      this.applyThinkingConfig(generationConfig, budget, model);
     }
 
     let tools: any[] | undefined = undefined;

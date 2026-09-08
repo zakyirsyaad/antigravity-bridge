@@ -13,7 +13,7 @@ npm test                         # tsx test/bridge.test.ts — live end-to-end s
 ```
 
 CLI subcommands all route through `bin/cli.ts <command>`: `start`, `login`, `status`,
-`usage`, `accounts`, `switch <index|email>`, `sync`, `service:install`, `service:uninstall`.
+`usage`, `accounts`, `switch <index|email>`, `sync`, `models`, `service:install`, `service:uninstall`.
 
 ### Testing
 
@@ -128,13 +128,39 @@ Because these are files, two bridge processes (e.g. a manual `npm run dev` along
 LaunchAgent) will fight over the active account and quota state. `~/.gemini/jetski-standalone-oauth-token`
 is read as a fallback single-account source when no accounts file exists.
 
-### Adding a model
+### Models
 
-Append to `SUPPORTED_MODELS` in `src/constants.ts` — that single array drives `/v1/models`, the
-health payload, `Transformer.resolveModel()`, and the generated ZCode provider config. `id` is the
-name clients send; `targetModel` (when present) is what Google actually receives. `resolveModel()`
-additionally has substring fallbacks so unknown Claude/Gemini names degrade to a close match instead
-of erroring.
+`SUPPORTED_MODELS` in `src/constants.ts` is the single source: it drives `/v1/models`, the health
+payload, `Transformer.resolveModel()`, the thinking configuration, and the generated ZCode provider
+config. **Model ids are Google's own ids, sent verbatim** — there is no `targetModel` indirection
+any more. Do not reintroduce one: the previous table mapped five separate flash ids onto a single
+`gemini-3-flash`, and pointed `gemini-3-pro` at a model Google had withdrawn, so what you configured
+told you nothing about what ran.
+
+Every field is Google's metadata from `v1internal:fetchAvailableModels`. **Run `npm run bridge:models`
+before editing the table** — it reports ids that no longer exist, metadata that drifted, and
+thinking-capable models Google offers that the bridge does not expose. It needs a logged-in account
+but costs no inference quota.
+
+Reasoning config is per model, not global:
+
+- `thinkingBudget` is Google's declared default. `-1` means the model sizes its own reasoning, and
+  the bridge forwards `-1` rather than pinning a number — an explicit budget switches dynamic
+  thinking off.
+- `minThinkingBudget` is the floor; below it the bridge disables thinking rather than sending a
+  value the model would reject.
+- `Transformer.applyThinkingConfig()` fits the budget inside the caller's `max_tokens`, holding back
+  `BRIDGE_ANSWER_RESERVE_TOKENS` (default 8192, clamped to half the window) for the visible answer.
+  Thinking tokens are billed as output and count against that cap.
+- On the OpenAI path `reasoning_effort` scales the model's own default (0.25× / 1× / 4×) instead of
+  substituting fixed numbers, so "high" means high *for that model*.
+
+Retired ids are kept as explicit aliases in `resolveModel()` so existing client configs keep working;
+each points at the model its name claimed, which is often not what it used to resolve to.
+
+`thoughtsTokenCount` from Google is recorded via `UsageTracker`, so `bridge:usage` shows reasoning
+actually consumed. That is the number to tune budgets against — a declared budget says nothing about
+whether it gets used.
 
 ## Gotchas
 

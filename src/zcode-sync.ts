@@ -55,7 +55,7 @@ export function syncZCodeConfig(): { success: boolean; configPath: string; error
         modelEntry.reasoning = {
           enabled: true,
           variants: model.family === "claude" ? ["low", "high", "max"] : ["low", "high"],
-          defaultVariant: model.family === "claude" ? "high" : (model.thinkingLevel || "low"),
+          defaultVariant: "high",
         };
       }
 

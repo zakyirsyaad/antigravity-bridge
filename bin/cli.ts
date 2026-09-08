@@ -2,6 +2,7 @@ import { BridgeServer } from "../src/server";
 import { OAuthManager } from "../src/oauth";
 import { syncZCodeConfig } from "../src/zcode-sync";
 import { LaunchAgentService } from "../src/launchagent";
+import { checkModelDrift } from "../src/model-sync";
 import { UsageTracker } from "../src/usage-tracker";
 import { BRIDGE_DEFAULT_PORT, SUPPORTED_MODELS } from "../src/constants";
 
@@ -110,6 +111,44 @@ async function main() {
         }
       } catch (err: any) {
         console.error(`✗ Failed to switch account: ${err.message}`);
+        process.exit(1);
+      }
+      break;
+    }
+
+    case "models": {
+      try {
+        console.log("\nComparing the model table against what Google serves...\n");
+        const drift = await checkModelDrift();
+
+        console.log(`Exposed by this bridge : ${SUPPORTED_MODELS.length}`);
+        console.log(`Offered by Google      : ${drift.totalUpstream}`);
+        console.log(`Google's default agent : ${drift.defaultAgentModelId || "-"}\n`);
+
+        if (drift.missing.length) {
+          console.log("✗ BROKEN — exposed here but no longer served. Requests to these fail:");
+          drift.missing.forEach((m) => console.log(`    ${m.id}  (${m.name})`));
+          console.log("");
+        }
+        if (drift.changed.length) {
+          console.log("! Metadata drifted from Google's:");
+          drift.changed.forEach((c) => console.log(`    ${c.id}  ${c.field}: ours=${c.ours} theirs=${c.theirs}`));
+          console.log("");
+        }
+        if (drift.unexposed.length) {
+          console.log("+ Thinking-capable models Google offers that this bridge does not expose:");
+          drift.unexposed.forEach((m) =>
+            console.log(`    ${m.id.padEnd(30)} budget=${String(m.thinkingBudget).padEnd(7)} ${m.displayName}`)
+          );
+          console.log("");
+        }
+        if (!drift.missing.length && !drift.changed.length && !drift.unexposed.length) {
+          console.log("✓ The model table matches Google exactly.\n");
+        } else {
+          console.log("Edit SUPPORTED_MODELS in src/constants.ts to reconcile.\n");
+        }
+      } catch (err: any) {
+        console.error(`✗ Could not check models: ${err.message}`);
         process.exit(1);
       }
       break;

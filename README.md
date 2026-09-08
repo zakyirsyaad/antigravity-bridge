@@ -73,21 +73,58 @@ flowchart TD
 
 ---
 
-## 🧠 Supported Models Matrix
+## 🧠 Supported Models
 
-The bridge translates standard model identifiers to Google Antigravity backend engines:
+Model ids are **Google's own ids, sent verbatim** — what you configure is exactly what runs. Every
+figure below comes from Google's `fetchAvailableModels`; re-check it any time with
+`npm run bridge:models`, which reports anything that has drifted.
 
-| Bridge Model ID | Antigravity Engine | Thinking / Reasoning Support | Best Suited For |
-| :--- | :--- | :--- | :--- |
-| `claude-opus-4-6-thinking` | Google CloudCode Claude Opus 4.6 | ✅ Yes (up to 32,000 budget tokens) | Complex architectural refactors, deep math, reasoning |
-| `claude-sonnet-4-6` | Google CloudCode Claude Sonnet 4.6 | ❌ Standard | High-speed agentic coding, bash tools, daily pair-programming |
-| `gemini-3.1-pro` | Gemini 3.1 Pro (1M Context) | ✅ Yes | Deep codebase analysis, large context repo exploration |
-| `gemini-3-pro` | Gemini 3 Pro | ✅ Yes | General coding and multi-turn planning |
-| `gemini-3.8-flash` | Gemini 3.8 Flash | ✅ Yes (Low / Med / High effort) | High-speed agent tool loops (Hermes, Cursor) |
-| `gemini-3.8-flash-high` | Gemini 3.8 Flash (High Reasoning) | ✅ Yes (Forced high effort) | Fast multi-step problem solving with explanation |
-| `gemini-3.7-flash` | Gemini 3.7 Flash | ✅ Yes | Fast code generation & formatting |
-| `gemini-2.5-pro` | Gemini 2.5 Pro | ❌ Standard | Robust general development |
-| `gemini-2.5-flash` | Gemini 2.5 Flash | ❌ Standard | Ultra-low latency responses |
+| Model ID | Thinking budget | Context | Output | Best suited for |
+| :--- | :--- | :--- | :--- | :--- |
+| `claude-opus-4-6-thinking` | 1,024 | 250K | 64K | Complex refactors, deep reasoning |
+| `claude-sonnet-4-6` | 1,024 | 250K | 64K | High-speed agentic coding, daily pair-programming |
+| `gemini-3.1-pro-high` | 10,001 | 1M | 65K | Hardest reasoning — 10× the budget of the Low tier |
+| `gemini-3.1-pro-low` | 1,001 | 1M | 65K | Pro-class answers when reasoning depth is not the bottleneck |
+| `gemini-2.5-pro` | 1,024 | 1M | 65K | Robust general development |
+| `gemini-3.6-flash-high` | dynamic | 1M | 65K | **Google's own default agent model** |
+| `gemini-3.6-flash-medium` | 4,000 | 1M | 65K | Fast multi-step work |
+| `gemini-3.6-flash-low` | 1,000 | 1M | 65K | High-speed tool loops |
+| `gemini-3-flash-agent` | dynamic | 1M | 65K | Gemini 3.5 Flash, high tier |
+| `gemini-3.5-flash-low` | 4,000 | 1M | 65K | Gemini 3.5 Flash, medium tier |
+| `gemini-3.5-flash-extra-low` | 1,000 | 1M | 65K | Gemini 3.5 Flash, low tier |
+| `gemini-3-flash` | dynamic | 1M | 65K | General fast generation |
+| `gemini-3.1-flash-lite` | — | 1M | 65K | Ultra-low latency, no reasoning |
+| `gpt-oss-120b-medium` | 8,192 | 131K | 32K | GPT-OSS 120B via Antigravity |
+
+**"dynamic"** means the model sizes its own reasoning. The bridge forwards that rather than pinning
+a number, since an explicit budget would switch it off.
+
+### Controlling reasoning
+
+Each model carries its own default budget, so the same request reasons differently per model.
+
+- **Anthropic API**: `thinking: { budget_tokens: N }`, or `thinking: { type: "disabled" }`.
+- **OpenAI API**: `reasoning_effort` scales that model's default — `low` is a quarter of it,
+  `medium` is it, `high` is four times it. `reasoning_tokens: N` sets an exact figure.
+
+Thinking tokens count against `max_tokens`, so the bridge fits the budget inside whatever cap you
+send and holds back 8,192 tokens for the visible answer. Tune that with
+`BRIDGE_ANSWER_RESERVE_TOKENS` — lower it for more reasoning, raise it if long answers get
+truncated. `npm run bridge:usage` reports the reasoning tokens actually consumed.
+
+### Renamed ids
+
+The previous table advertised models it did not deliver: `gemini-3-pro` pointed at a model Google
+no longer serves, `gemini-3.1-pro` was pinned to the Low tier, and five separate flash ids all
+resolved to the same `gemini-3-flash`. Those ids still resolve, now to the model they claimed to
+be, but prefer the real ids above.
+
+| Old id | Now resolves to |
+| :--- | :--- |
+| `gemini-3.1-pro`, `gemini-3-pro` | `gemini-3.1-pro-high` |
+| `gemini-3.6-flash-high`, `gemini-3.6-flash-high-high`, `gemini-3.7-flash-high` | `gemini-3.6-flash-high` |
+| `gemini-3.7-flash` | `gemini-3.6-flash-medium` |
+| `gemini-2.5-flash` | `gemini-3.1-flash-lite` |
 
 ---
 
@@ -178,13 +215,13 @@ providers:
     api_key: "antigravity-local"
 ```
 
-Run Hermes with Gemini 3.8 Flash:
+Run Hermes with Gemini 3.6 Flash (High):
 ```bash
 # One-shot command execution
-hermes --provider antigravity -m gemini-3.8-flash -z "Check workspace files and run unit tests"
+hermes --provider antigravity -m gemini-3.6-flash-high -z "Check workspace files and run unit tests"
 
 # Interactive TUI mode
-hermes --provider antigravity -m gemini-3.8-flash --tui
+hermes --provider antigravity -m gemini-3.6-flash-high --tui
 ```
 
 ---
@@ -194,16 +231,16 @@ hermes --provider antigravity -m gemini-3.8-flash --tui
 In **Cursor** (`Settings > Models > OpenAI`):
 1. **OpenAI API Key**: `antigravity-local`
 2. **Override OpenAI Base URL**: `http://127.0.0.1:52130/v1`
-3. Add model names: `gemini-3.8-flash`, `claude-opus-4-6-thinking`, `gemini-3.1-pro`
+3. Add model names: `gemini-3.6-flash-high`, `claude-opus-4-6-thinking`, `gemini-3.1-pro-high`
 
 In **Continue.dev** (`~/.continue/config.json`):
 ```json
 {
   "models": [
     {
-      "title": "Gemini 3.8 Flash (Antigravity)",
+      "title": "Gemini 3.6 Flash High (Antigravity)",
       "provider": "openai",
-      "model": "gemini-3.8-flash",
+      "model": "gemini-3.6-flash-high",
       "apiBase": "http://127.0.0.1:52130/v1",
       "apiKey": "antigravity-local"
     }
@@ -226,7 +263,7 @@ client = OpenAI(
 )
 
 response = client.chat.completions.create(
-    model="gemini-3.8-flash",
+    model="gemini-3.6-flash-high",
     messages=[
         {"role": "system", "content": "You are an expert autonomous assistant."},
         {"role": "user", "content": "What is the capital of Indonesia?"}
@@ -247,7 +284,7 @@ curl -s -X POST http://127.0.0.1:52130/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer antigravity-local" \
   -d '{
-    "model": "gemini-3.8-flash",
+    "model": "gemini-3.6-flash-high",
     "messages": [{"role": "user", "content": "Hello!"}]
   }'
 ```
@@ -259,7 +296,7 @@ curl -s -X POST http://127.0.0.1:52130/v1/messages \
   -H "x-api-key: antigravity-local" \
   -H "anthropic-version: 2023-06-01" \
   -d '{
-    "model": "claude-3-5-sonnet-20241022",
+    "model": "claude-sonnet-4-6",
     "max_tokens": 100,
     "messages": [{"role": "user", "content": "Hello from Anthropic protocol!"}]
   }'
@@ -319,7 +356,8 @@ npm run bridge:accounts          # List all saved Google accounts and active sta
 npm run bridge:switch <id/email> # Switch the active account by index or email address
 npm run bridge:login             # Launch interactive browser login for a new account
 npm run bridge:status            # Check token validity and connection status
-npm run bridge:usage             # View total request count and input/output token usage
+npm run bridge:usage             # View request count, token usage, and reasoning tokens consumed
+npm run bridge:models            # Check the model table against what Google actually serves
 
 # macOS Background Service (LaunchAgent)
 npm run bridge:service:install   # Install & start background launchd daemon (auto-start on boot)
