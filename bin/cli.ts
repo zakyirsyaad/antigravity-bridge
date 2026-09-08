@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { BridgeServer } from "../src/server";
 import { OAuthManager } from "../src/oauth";
@@ -123,7 +124,8 @@ async function main() {
     }
 
     case "service:install": {
-      const projectDir = path.resolve(__dirname, "..", "..", "..");
+      const isStandalone = fs.existsSync(path.join(__dirname, "..", "package.json"));
+      const projectDir = isStandalone ? path.resolve(__dirname, "..") : path.resolve(__dirname, "..", "..", "..");
       const result = LaunchAgentService.install(projectDir);
       if (result.success) {
         console.log(`✓ ${result.message}`);
