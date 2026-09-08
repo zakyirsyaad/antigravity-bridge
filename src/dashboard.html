@@ -878,6 +878,71 @@
     .tag-failover { background: rgba(245, 158, 11, 0.15); color: var(--amber); }
     .tag-switch { background: rgba(255, 255, 255, 0.12); color: #ffffff; border: 1px solid rgba(255, 255, 255, 0.2); }
     .tag-info { background: rgba(161, 161, 170, 0.1); color: var(--text-muted); }
+
+    /* Endpoint Pill & URL Switcher */
+    .endpoint-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.45rem;
+      background: var(--surface-input);
+      border: 1px solid var(--border-subtle);
+      padding: 0.2rem 0.65rem;
+      border-radius: 9999px;
+      font-size: 0.725rem;
+      font-family: 'JetBrains Mono', monospace;
+      color: var(--text-muted);
+      cursor: pointer;
+      transition: all 0.2s ease;
+      user-select: none;
+    }
+    .endpoint-pill:hover {
+      border-color: var(--border-hover);
+      color: #ffffff;
+      background: var(--surface-elevated);
+      transform: translateY(-1px);
+    }
+    .endpoint-pill:active {
+      transform: translateY(0);
+    }
+    @media (max-width: 900px) {
+      #headerEndpointBadge {
+        display: none;
+      }
+    }
+
+    .url-switcher {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+    }
+    .url-pill-group {
+      display: flex;
+      background: var(--surface-input);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-sm);
+      padding: 2px;
+      gap: 2px;
+    }
+    .url-pill-btn {
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      font-family: inherit;
+      font-size: 0.725rem;
+      font-weight: 600;
+      padding: 0.25rem 0.65rem;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+    .url-pill-btn:hover {
+      color: var(--text-main);
+    }
+    .url-pill-btn.active {
+      background: var(--surface-highlight);
+      color: #ffffff;
+      box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+    }
   </style>
 </head>
 <body>
@@ -896,6 +961,14 @@
           <span class="status-dot-pulse"></span>
           <span>Google CloudCode Pool & Universal Gateway</span>
         </div>
+      </div>
+      <div class="endpoint-pill" id="headerEndpointBadge" onclick="copyHeaderEndpoint()" title="Click to copy endpoint URL">
+        <span style="display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--emerald); box-shadow: 0 0 6px var(--emerald);"></span>
+        <span id="headerEndpointText">https://bridge.example.com</span>
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="opacity: 0.6; margin-left: 2px;">
+          <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+        </svg>
       </div>
     </div>
 
@@ -1004,6 +1077,13 @@
           <h2>Universal Dual-Protocol Connect Guide</h2>
           <span class="section-head-badge">Zero Config</span>
         </div>
+        <div class="url-switcher">
+          <span style="font-size: 0.75rem; color: var(--text-faint); font-weight: 500;">Endpoint:</span>
+          <div class="url-pill-group">
+            <button class="url-pill-btn active" id="btnUrlVps" onclick="selectGuideUrl('vps')">🌐 VPS HTTPS</button>
+            <button class="url-pill-btn" id="btnUrlLocal" onclick="selectGuideUrl('local')">💻 Localhost</button>
+          </div>
+        </div>
       </div>
 
       <div class="tabs-wrapper">
@@ -1018,11 +1098,11 @@
         <!-- Claude Tab -->
         <div id="pane-claude" class="tab-pane active">
           <p style="font-size: 0.8125rem; color: var(--text-muted); margin-bottom: 0.85rem;">
-            Routes Claude Code through the local Anthropic Messages API with full streaming reasoning and nested tool schemas.
+            Routes Claude Code through the Antigravity Messages API with full streaming reasoning and nested tool schemas.
           </p>
           <div class="code-display">
-            <button class="code-copy-btn" onclick="copyCode('snippet-claude')">Copy</button>
-            <pre id="snippet-claude">export ANTHROPIC_BASE_URL="http://127.0.0.1:52130"
+            <button class="code-copy-btn" onclick="copyCode('snippet-claude', this)">Copy</button>
+            <pre id="snippet-claude">export ANTHROPIC_BASE_URL="https://bridge.example.com"
 export ANTHROPIC_API_KEY="antigravity-local"
 
 # Or run your Free Claude Code shortcut:
@@ -1033,11 +1113,17 @@ fcc</pre>
         <!-- Hermes Tab -->
         <div id="pane-hermes" class="tab-pane">
           <p style="font-size: 0.8125rem; color: var(--text-muted); margin-bottom: 0.85rem;">
-            Hermes Agent is configured to use the local Antigravity Bridge as a custom provider:
+            Hermes Agent is configured to use the Antigravity Bridge as an OpenAI custom provider:
           </p>
           <div class="code-display">
-            <button class="code-copy-btn" onclick="copyCode('snippet-hermes')">Copy</button>
-            <pre id="snippet-hermes"># Run Hermes with Antigravity provider and Gemini 3.8 Flash:
+            <button class="code-copy-btn" onclick="copyCode('snippet-hermes', this)">Copy</button>
+            <pre id="snippet-hermes"># Add to ~/.hermes/config.yaml:
+providers:
+  antigravity:
+    base_url: "https://bridge.example.com/v1"
+    api_key: "antigravity-local"
+
+# Run Hermes with Antigravity provider:
 hermes --provider antigravity -m gemini-3.8-flash -z "Check workspace files"
 
 # Or start interactive TUI:
@@ -1051,8 +1137,8 @@ hermes --provider antigravity -m gemini-3.8-flash --tui</pre>
             Configure in Cursor IDE settings under "OpenAI API Key" / "Override OpenAI Base URL".
           </p>
           <div class="code-display">
-            <button class="code-copy-btn" onclick="copyCode('snippet-cursor')">Copy</button>
-            <pre id="snippet-cursor">Base URL: http://127.0.0.1:52130/v1
+            <button class="code-copy-btn" onclick="copyCode('snippet-cursor', this)">Copy</button>
+            <pre id="snippet-cursor">Base URL: https://bridge.example.com/v1
 API Key: antigravity-local
 Model: gemini-3.8-flash (or claude-3-5-sonnet-20241022)</pre>
           </div>
@@ -1064,11 +1150,11 @@ Model: gemini-3.8-flash (or claude-3-5-sonnet-20241022)</pre>
             Standard OpenAI Python client automatically routed with high reasoning effort:
           </p>
           <div class="code-display">
-            <button class="code-copy-btn" onclick="copyCode('snippet-python')">Copy</button>
+            <button class="code-copy-btn" onclick="copyCode('snippet-python', this)">Copy</button>
             <pre id="snippet-python">from openai import OpenAI
 
 client = OpenAI(
-    base_url="http://127.0.0.1:52130/v1",
+    base_url="https://bridge.example.com/v1",
     api_key="antigravity-local"
 )
 
@@ -1087,8 +1173,8 @@ print(response.choices[0].message.content)</pre>
             Execute chat completion directly in terminal:
           </p>
           <div class="code-display">
-            <button class="code-copy-btn" onclick="copyCode('snippet-curl')">Copy</button>
-            <pre id="snippet-curl">curl -X POST http://127.0.0.1:52130/v1/chat/completions \
+            <button class="code-copy-btn" onclick="copyCode('snippet-curl', this)">Copy</button>
+            <pre id="snippet-curl">curl -X POST https://bridge.example.com/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer antigravity-local" \
   -d '{"model":"gemini-3.8-flash","messages":[{"role":"user","content":"Ping"}]}'</pre>
@@ -1378,10 +1464,107 @@ print(response.choices[0].message.content)</pre>
       document.getElementById("pane-" + tabKey).classList.add("active");
     }
 
-    function copyCode(id) {
-      const text = document.getElementById(id).textContent;
+    const VPS_BASE_URL = "https://bridge.example.com";
+    const LOCAL_BASE_URL = "http://127.0.0.1:52130";
+    let currentGuideMode = (window.location.hostname === "127.0.0.1" || window.location.hostname === "localhost") ? "local" : "vps";
+
+    function selectGuideUrl(mode) {
+      currentGuideMode = mode;
+      const vpsBtn = document.getElementById("btnUrlVps");
+      const localBtn = document.getElementById("btnUrlLocal");
+      if (vpsBtn && localBtn) {
+        vpsBtn.classList.toggle("active", mode === "vps");
+        localBtn.classList.toggle("active", mode === "local");
+      }
+      renderGuideSnippets();
+    }
+
+    function renderGuideSnippets() {
+      const baseUrl = currentGuideMode === "vps" ? VPS_BASE_URL : LOCAL_BASE_URL;
+
+      const elClaude = document.getElementById("snippet-claude");
+      if (elClaude) {
+        elClaude.textContent = 'export ANTHROPIC_BASE_URL="' + baseUrl + '"\n' +
+          'export ANTHROPIC_API_KEY="antigravity-local"\n\n' +
+          '# Or run your Free Claude Code shortcut:\n' +
+          'fcc';
+      }
+
+      const elHermes = document.getElementById("snippet-hermes");
+      if (elHermes) {
+        elHermes.textContent = '# Add to ~/.hermes/config.yaml:\n' +
+          'providers:\n' +
+          '  antigravity:\n' +
+          '    base_url: "' + baseUrl + '/v1"\n' +
+          '    api_key: "antigravity-local"\n\n' +
+          '# Run Hermes with Antigravity provider:\n' +
+          'hermes --provider antigravity -m gemini-3.8-flash -z "Check workspace files"\n\n' +
+          '# Or start interactive TUI:\n' +
+          'hermes --provider antigravity -m gemini-3.8-flash --tui';
+      }
+
+      const elCursor = document.getElementById("snippet-cursor");
+      if (elCursor) {
+        elCursor.textContent = 'Base URL: ' + baseUrl + '/v1\n' +
+          'API Key: antigravity-local\n' +
+          'Model: gemini-3.8-flash (or claude-3-5-sonnet-20241022)';
+      }
+
+      const elPython = document.getElementById("snippet-python");
+      if (elPython) {
+        elPython.textContent = 'from openai import OpenAI\n\n' +
+          'client = OpenAI(\n' +
+          '    base_url="' + baseUrl + '/v1",\n' +
+          '    api_key="antigravity-local"\n' +
+          ')\n\n' +
+          'response = client.chat.completions.create(\n' +
+          '    model="gemini-3.8-flash",\n' +
+          '    messages=[{"role": "user", "content": "Hello!"}],\n' +
+          '    extra_body={"reasoning_effort": "high"}\n' +
+          ')\n' +
+          'print(response.choices[0].message.content)';
+      }
+
+      const elCurl = document.getElementById("snippet-curl");
+      if (elCurl) {
+        elCurl.textContent = 'curl -X POST ' + baseUrl + '/v1/chat/completions \\\n' +
+          '  -H "Content-Type: application/json" \\\n' +
+          '  -H "Authorization: Bearer antigravity-local" \\\n' +
+          '  -d \'{"model":"gemini-3.8-flash","messages":[{"role":"user","content":"Ping"}]}\'';
+      }
+    }
+
+    function copyHeaderEndpoint() {
+      const textEl = document.getElementById("headerEndpointText");
+      if (!textEl) return;
+      const url = textEl.textContent.trim();
+      navigator.clipboard.writeText(url).then(function() {
+        const orig = textEl.textContent;
+        textEl.textContent = "Copied to clipboard!";
+        setTimeout(function() {
+          textEl.textContent = orig;
+        }, 1500);
+      });
+    }
+
+    function copyCode(id, btnEl) {
+      const el = document.getElementById(id);
+      if (!el) return;
+      const text = el.textContent;
       navigator.clipboard.writeText(text).then(function() {
-        alert("Copied to clipboard!");
+        if (btnEl) {
+          const orig = btnEl.textContent;
+          btnEl.textContent = "Copied!";
+          btnEl.style.background = "var(--emerald)";
+          btnEl.style.color = "#ffffff";
+          setTimeout(function() {
+            btnEl.textContent = orig;
+            btnEl.style.background = "";
+            btnEl.style.color = "";
+          }, 1500);
+        } else {
+          alert("Copied to clipboard!");
+        }
       });
     }
 
@@ -1401,6 +1584,7 @@ print(response.choices[0].message.content)</pre>
       });
     }, 1000);
 
+    selectGuideUrl(currentGuideMode);
     fetchPoolStatus();
     setInterval(fetchPoolStatus, 5000);
   </script>
