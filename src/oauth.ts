@@ -99,6 +99,26 @@ export class OAuthManager {
   }
 
   /**
+   * Read the accounts file, always returning a well-formed shape.
+   *
+   * A truncated write, or the `{ provider: {} }`-shaped file this codebase
+   * writes elsewhere, parses fine as JSON but has no `accounts` array — and
+   * callers that dereferenced it directly threw a TypeError outside their
+   * try/catch, or silently failed to persist.
+   */
+  private readStorage(): AccountsStorage {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(ACCOUNTS_STORAGE_PATH, "utf-8"));
+      return {
+        accounts: Array.isArray(parsed?.accounts) ? parsed.accounts : [],
+        activeAccountIndex: typeof parsed?.activeAccountIndex === "number" ? parsed.activeAccountIndex : 0,
+      };
+    } catch {
+      return { accounts: [], activeAccountIndex: 0 };
+    }
+  }
+
+  /**
    * Load token from Jetski or Accounts storage
    */
   public loadSavedAccount(): AccountToken | null {
@@ -162,14 +182,9 @@ export class OAuthManager {
         fs.mkdirSync(dirname, { recursive: true });
       }
 
-      let storage: AccountsStorage = { accounts: [], activeAccountIndex: 0 };
-      if (fs.existsSync(ACCOUNTS_STORAGE_PATH)) {
-        try {
-          storage = JSON.parse(fs.readFileSync(ACCOUNTS_STORAGE_PATH, "utf-8"));
-        } catch {
-          storage = { accounts: [], activeAccountIndex: 0 };
-        }
-      }
+      const storage: AccountsStorage = fs.existsSync(ACCOUNTS_STORAGE_PATH)
+        ? this.readStorage()
+        : { accounts: [], activeAccountIndex: 0 };
 
       const existingIdx = storage.accounts.findIndex(
         (a) => (token.email && a.email === token.email) || a.refreshToken === token.refreshToken
@@ -267,13 +282,7 @@ export class OAuthManager {
   public deleteAccountByEmail(email: string): boolean {
     if (!fs.existsSync(ACCOUNTS_STORAGE_PATH)) return false;
 
-    let storage: AccountsStorage;
-    try {
-      storage = JSON.parse(fs.readFileSync(ACCOUNTS_STORAGE_PATH, "utf-8"));
-    } catch {
-      return false;
-    }
-
+    const storage = this.readStorage();
     const initialLen = storage.accounts.length;
     storage.accounts = storage.accounts.filter(
       (a) => a.email?.toLowerCase() !== email.toLowerCase()
@@ -607,7 +616,7 @@ export class OAuthManager {
 
   private updateStoredAccount(updated: AccountToken) {
     try {
-      const storage: AccountsStorage = JSON.parse(fs.readFileSync(ACCOUNTS_STORAGE_PATH, "utf-8"));
+      const storage = this.readStorage();
       const index = storage.accounts.findIndex((account) => account.refreshToken === updated.refreshToken);
       if (index >= 0) {
         storage.accounts[index] = updated;

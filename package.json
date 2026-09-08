@@ -27,6 +27,8 @@
     "test:launchagent": "tsx test/launchagent-resolve.test.ts",
     "test:budget": "tsx test/thinking-budget.test.ts",
     "test:schema": "tsx test/schema-cleaner.test.ts",
+    "test:usage": "tsx test/openai-usage.test.ts",
+    "test:storage": "tsx test/accounts-storage.test.ts",
     "build": "tsc"
   },
   "keywords": [

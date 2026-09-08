@@ -558,6 +558,10 @@ export class BridgeServer {
 
       try {
         const stream = await this.client.streamGenerateContent(payload);
+        // Estimated like the Anthropic streaming path: the SSE frames carry no
+        // usage metadata, so both protocols approximate rather than one of them
+        // silently reporting nothing.
+        let outputTokens = 0;
         // Position of the next tool call within this turn. OpenAI clients
         // accumulate tool_call deltas keyed by this index, so parallel calls
         // must each get their own — sharing one index merges them into a
@@ -588,6 +592,7 @@ export class BridgeServer {
                   ],
                 })}\n\n`
               );
+              outputTokens += Math.ceil(text.length / 4);
             } else if (text) {
               res.write(
                 `data: ${JSON.stringify({
@@ -604,6 +609,7 @@ export class BridgeServer {
                   ],
                 })}\n\n`
               );
+              outputTokens += Math.ceil(text.length / 4);
             } else if (part.functionCall) {
               const toolCallId = part.functionCall.id || `call_${crypto.randomBytes(8).toString("hex")}`;
               res.write(
@@ -655,6 +661,8 @@ export class BridgeServer {
         );
         res.write("data: [DONE]\n\n");
         res.end();
+
+        UsageTracker.getInstance().recordUsage(requestedModel, 0, outputTokens, 0);
       } catch (streamErr: any) {
         console.error("[OpenAI Stream Error]", streamErr);
         res.write(`data: ${JSON.stringify({ error: { message: streamErr.message } })}\n\n`);
@@ -664,6 +672,12 @@ export class BridgeServer {
     } else {
       const resp = await this.client.generateContent(payload);
       const formatted = Transformer.antigravityToOpenAI(resp, requestedModel);
+      UsageTracker.getInstance().recordUsage(
+        requestedModel,
+        formatted.usage?.prompt_tokens || 0,
+        formatted.usage?.completion_tokens || 0,
+        0
+      );
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify(formatted));
     }
