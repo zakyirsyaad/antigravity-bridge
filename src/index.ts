@@ -7,3 +7,4 @@ export * from "./zcode-sync";
 export * from "./launchagent";
 export * from "./schema-cleaner";
 export * from "./model-sync";
+export * from "./updater";

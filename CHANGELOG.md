@@ -1,5 +1,36 @@
 # Changelog
 
+## 2.1.0
+
+### Added: `npm run bridge:update`
+
+Updating was undocumented. Readers had to infer `git pull`, guess whether
+dependencies had changed, and work out for themselves which of three restart
+paths applied to their install — so in practice people ran old code without
+knowing it.
+
+One command now fast-forwards the checkout, installs dependencies, and reloads
+the LaunchAgent when one is installed, reporting the version it left and the
+version it reached.
+
+It refuses rather than guesses, because it runs on your checkout:
+
+- uncommitted changes are never discarded, and nothing is pulled while they exist;
+- a non-git install is told so, instead of being handed a cryptic git error;
+- only a fast-forward is accepted.
+
+`npm run bridge:status` now also mentions a newer release when one exists. The
+check is advisory: a 3-second timeout, silent on every failure, and never made
+by `start` — a daemon that waits on the network to boot is a daemon that fails
+to boot.
+
+`README.md` gained an Updating section covering the pm2 and foreground cases,
+including the `--update-env` trap that drops `BRIDGE_API_KEY`.
+
+### Added
+
+- `npm run test:updater` — refusals, command order, and the silent release check.
+
 ## 2.0.4
 
 ### Changed: the dashboard says which model family, not just "cooling"

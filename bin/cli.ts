@@ -1,10 +1,22 @@
+import fs from "node:fs";
+import path from "node:path";
 import { BridgeServer } from "../src/server";
 import { OAuthManager } from "../src/oauth";
 import { syncZCodeConfig } from "../src/zcode-sync";
 import { LaunchAgentService } from "../src/launchagent";
 import { checkModelDrift } from "../src/model-sync";
 import { UsageTracker } from "../src/usage-tracker";
-import { BRIDGE_DEFAULT_PORT, SUPPORTED_MODELS } from "../src/constants";
+import { performUpdate, checkForNewerRelease } from "../src/updater";
+import { BRIDGE_DEFAULT_PORT, LAUNCH_AGENT_PLIST_PATH, SUPPORTED_MODELS } from "../src/constants";
+
+/** The running code's own version, for the update check. */
+function installedVersion(projectDir: string): string {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(projectDir, "package.json"), "utf-8")).version || "unknown";
+  } catch {
+    return "unknown";
+  }
+}
 
 async function main() {
   const args = process.argv.slice(2);
@@ -116,6 +128,39 @@ async function main() {
       break;
     }
 
+    case "update": {
+      const projectDir = LaunchAgentService.resolveProjectDir(__dirname);
+      const serviceInstalled = fs.existsSync(LAUNCH_AGENT_PLIST_PATH);
+
+      console.log(`\nUpdating ${projectDir} ...\n`);
+      const result = performUpdate(projectDir, undefined, { serviceInstalled });
+
+      if (!result.ok) {
+        console.error(`✗ ${result.message}`);
+        process.exit(1);
+      }
+
+      console.log(`✓ ${result.message}`);
+
+      if (result.reloadService) {
+        // Say what actually happened: a swallowed launchctl failure looks
+        // identical to a working reload, and that is how the daemon died before.
+        const reload = LaunchAgentService.install(projectDir);
+        console.log(
+          reload.success
+            ? "✓ Background service reloaded, running the new code."
+            : `! The service was NOT reloaded: ${reload.message}\n  Restart it yourself so the update takes effect.`
+        );
+      } else {
+        console.log("  Restart the bridge for it to take effect:");
+        console.log("    pm2 restart antigravity-bridge   (no --update-env: it would drop BRIDGE_API_KEY)");
+        console.log("    or Ctrl+C and `npm run bridge:start`");
+      }
+
+      console.log("  What changed: https://github.com/zakyirsyaad/antigravity-bridge/blob/main/CHANGELOG.md\n");
+      break;
+    }
+
     case "models": {
       try {
         console.log("\nComparing the model table against what Google serves...\n");
@@ -204,7 +249,11 @@ async function main() {
         console.log(`  Total Requests  : ${usage.totalRequests.toLocaleString()}`);
         console.log(`  Total Tokens    : ${(usage.totalInputTokens + usage.totalOutputTokens).toLocaleString()}`);
         console.log(`\n💡 To switch Google account, run: npm run bridge:login`);
-        console.log(`💡 To see full usage details, run:  npm run bridge:usage\n`);
+        console.log(`💡 To see full usage details, run:  npm run bridge:usage`);
+
+        // Advisory only, and only here: `start` must never wait on the network.
+        const notice = await checkForNewerRelease(installedVersion(LaunchAgentService.resolveProjectDir(__dirname)));
+        console.log(notice ? `\n⬆ ${notice}\n` : "");
       } else {
         console.log(`! No account currently connected. Run \`npm run bridge:login\` to authenticate.`);
       }

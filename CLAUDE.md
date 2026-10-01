@@ -13,7 +13,14 @@ npm test                         # tsx test/bridge.test.ts — live end-to-end s
 ```
 
 CLI subcommands all route through `bin/cli.ts <command>`: `start`, `login`, `status`,
-`usage`, `accounts`, `switch <index|email>`, `sync`, `models`, `service:install`, `service:uninstall`.
+`usage`, `accounts`, `switch <index|email>`, `sync`, `models`, `update`, `service:install`,
+`service:uninstall`.
+
+`update` fast-forwards the checkout, runs `npm install`, and reloads the LaunchAgent when one is
+installed. It refuses on a dirty worktree, a non-git install, or a non-fast-forward: it runs on
+other people's checkouts, so its refusals are the feature. `status` additionally asks GitHub for the
+latest release — advisory, 3s timeout, silent on every failure. **`start` must never make that call**;
+a daemon that waits on the network to boot is a daemon that fails to boot.
 
 ### Testing
 
@@ -45,6 +52,7 @@ Everything else runs offline — no account, no network, no quota — by stubbin
 | `test:signature` | thinking history is dropped for Claude targets, kept for Gemini |
 | `test:capacity` | a 503 rotates the pool without recording a cooldown; 400 still does not rotate |
 | `test:quota` | a 429 cools the model family that earned it, not the whole account |
+| `test:updater` | `update` refuses dirty worktrees and non-git installs; the release check never throws |
 
 When stubbing, keep side effects off the real `~/.zcode` files and off `launchctl` — several suites
 assert that explicitly, and that is deliberate.
