@@ -44,6 +44,7 @@ Everything else runs offline — no account, no network, no quota — by stubbin
 | `test:models` | id resolution: exact, retired, approximated, and rejected |
 | `test:signature` | thinking history is dropped for Claude targets, kept for Gemini |
 | `test:capacity` | a 503 rotates the pool without recording a cooldown; 400 still does not rotate |
+| `test:quota` | a 429 cools the model family that earned it, not the whole account |
 
 When stubbing, keep side effects off the real `~/.zcode` files and off `launchctl` — several suites
 assert that explicitly, and that is deliberate.
@@ -105,6 +106,16 @@ failover permanently changes which account is active for every subsequent reques
 `QuotaTracker.getQuota()` deletes expired windows as a read side effect. If Google changes its 429
 message wording, `parseResetDuration()` silently returns null and cooldown tracking stops working —
 failover degrades to reactive-only.
+
+**Cooldowns are keyed by (account, family), and that distinction is load-bearing.** Antigravity
+meters Claude — served through Vertex — separately from Gemini, so an exhausted Claude weekly quota
+says nothing about Gemini. Recorded against the bare account it was catastrophic: one test request
+to `claude-sonnet-4-6` rang the failover loop through all six pooled accounts in three seconds and
+parked every one of them for up to 134 hours, leaving `selectNextAvailableAccount()` with nothing to
+return, while the dashboard's own meters — which come from the *other* quota system — still read
+~100%. Pass the model to `record429()`, `isAccountRateLimited()` and `selectNextAvailableAccount()`;
+omitting it is the account-wide behaviour, kept for windows written before 2.0.3 and for models that
+cannot be classified.
 
 ### Schema cleaning (`schema-cleaner.ts`)
 

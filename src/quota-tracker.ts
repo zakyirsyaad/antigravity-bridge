@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { USER_HOME } from "./constants";
+import { USER_HOME, findModel } from "./constants";
 
 const QUOTA_FILE = path.join(USER_HOME, ".zcode", "antigravity-quota.json");
 
@@ -10,12 +10,29 @@ export interface QuotaWindow {
   resetsAt: string;        // ISO timestamp when it resets
   percentRemaining: number; // 0 = exhausted
   resetMessage: string;    // e.g. "Resets in 3h55m50s"
+  family?: string;         // which model family earned it, when known
 }
 
+export interface QuotaBucket {
+  fiveHour?: QuotaWindow;
+  weekly?: QuotaWindow;
+}
+
+/**
+ * Cooldowns are per (account, family).
+ *
+ * Antigravity meters Claude — served through Vertex — and Gemini out of
+ * different buckets, so an exhausted Claude weekly quota says nothing about
+ * Gemini. Recording it against the bare account parked every pooled account for
+ * every model and left failover with nowhere to go, while Google's own meters
+ * still read ~100%.
+ *
+ * `fiveHour` / `weekly` at the top level are the pre-2.0.3 shape: no family was
+ * recorded, so they keep limiting everything.
+ */
 export interface QuotaState {
-  perAccount: Record<string, {
-    fiveHour?: QuotaWindow;
-    weekly?: QuotaWindow;
+  perAccount: Record<string, QuotaBucket & {
+    families?: Record<string, QuotaBucket>;
     lastUpdated: string;
   }>;
 }
@@ -87,7 +104,7 @@ export class QuotaTracker {
    * @param email  The Google account email
    * @param errorMessage  The error message string from the 429 response
    */
-  public record429(email: string, errorMessage: string) {
+  public record429(email: string, errorMessage: string, model?: string) {
     const resetsAtMs = parseResetDuration(errorMessage);
     if (!resetsAtMs) return; // can't parse, skip
 
@@ -112,10 +129,21 @@ export class QuotaTracker {
       resetMessage,
     };
 
+    const family = model ? findModel(model)?.family : undefined;
+    window.family = family;
+
+    // An unknown model keeps the old account-wide behaviour: better to cool an
+    // account we cannot classify than to keep hammering a limit.
+    let bucket: QuotaBucket = state.perAccount[email];
+    if (family) {
+      const families = (state.perAccount[email].families ||= {});
+      bucket = families[family] ||= {};
+    }
+
     if (windowType === "five_hour") {
-      state.perAccount[email].fiveHour = window;
+      bucket.fiveHour = window;
     } else {
-      state.perAccount[email].weekly = window;
+      bucket.weekly = window;
     }
     state.perAccount[email].lastUpdated = now;
 
@@ -133,8 +161,10 @@ export class QuotaTracker {
     for (const [acct, data] of Object.entries(state.perAccount)) {
       if (email && acct !== email) continue;
 
+      const buckets: QuotaBucket[] = [data, ...Object.values(data.families || {})];
+      for (const bucket of buckets)
       for (const key of ["fiveHour", "weekly"] as const) {
-        const w = data[key];
+        const w = bucket[key];
         if (!w) continue;
 
         const resetsMs = new Date(w.resetsAt).getTime();
@@ -142,7 +172,7 @@ export class QuotaTracker {
 
         if (now >= resetsMs) {
           // Window has reset → remove stale entry
-          delete data[key];
+          delete bucket[key];
           continue;
         }
 
@@ -165,29 +195,51 @@ export class QuotaTracker {
   /**
    * Check if an account is currently rate limited / cooling down.
    */
-  public isAccountRateLimited(email: string): boolean {
+  public isAccountRateLimited(email: string, model?: string): boolean {
     const acct = this.getQuotaForAccount(email);
     if (!acct) return false;
 
+    const family = model ? findModel(model)?.family : undefined;
+    const families = acct.families || {};
+
+    // The account-wide bucket still limits everything: it predates families, or
+    // the model could not be classified.
+    const buckets: QuotaBucket[] = [acct];
+    if (model) {
+      if (family && families[family]) buckets.push(families[family]);
+    } else {
+      // No model in hand — the dashboard asking whether anything is cooling.
+      buckets.push(...Object.values(families));
+    }
+
     const now = Date.now();
-    if (acct.fiveHour && new Date(acct.fiveHour.resetsAt).getTime() > now) {
-      return true;
-    }
-    if (acct.weekly && new Date(acct.weekly.resetsAt).getTime() > now) {
-      return true;
-    }
-    return false;
+    return buckets.some(
+      (bucket) =>
+        (bucket.fiveHour && new Date(bucket.fiveHour.resetsAt).getTime() > now) ||
+        (bucket.weekly && new Date(bucket.weekly.resetsAt).getTime() > now)
+    );
   }
 
   /**
    * Get cooldown remaining info for an account
    */
-  public getAccountCooldownRemaining(email: string): { remainingMs: number; resetMessage: string; resetsAt: string } | null {
+  public getAccountCooldownRemaining(
+    email: string,
+    model?: string
+  ): { remainingMs: number; resetMessage: string; resetsAt: string; family?: string } | null {
     const acct = this.getQuotaForAccount(email);
     if (!acct) return null;
 
+    const family = model ? findModel(model)?.family : undefined;
+    const families = acct.families || {};
+    const scoped: QuotaBucket[] = model
+      ? family && families[family]
+        ? [families[family]]
+        : []
+      : Object.values(families);
+
     const now = Date.now();
-    const windows = [acct.fiveHour, acct.weekly].filter(Boolean);
+    const windows = [acct.fiveHour, acct.weekly, ...scoped.flatMap((b) => [b.fiveHour, b.weekly])].filter(Boolean);
     let maxResetMs = 0;
     let maxWindow: QuotaWindow | null = null;
 
@@ -206,6 +258,7 @@ export class QuotaTracker {
       remainingMs: maxResetMs - now,
       resetMessage: maxWindow.resetMessage,
       resetsAt: maxWindow.resetsAt,
+      family: maxWindow.family,
     };
   }
 
@@ -217,6 +270,7 @@ export class QuotaTracker {
     if (state.perAccount[email]) {
       delete state.perAccount[email].fiveHour;
       delete state.perAccount[email].weekly;
+      delete state.perAccount[email].families;
       state.perAccount[email].lastUpdated = new Date().toISOString();
       this.save(state);
     }

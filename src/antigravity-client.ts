@@ -91,9 +91,9 @@ export class AntigravityClient {
       if (
         this.oauth.isAutoFailoverEnabled() &&
         account?.email &&
-        QuotaTracker.getInstance().isAccountRateLimited(account.email)
+        QuotaTracker.getInstance().isAccountRateLimited(account.email, payload.model)
       ) {
-        const nextAcc = this.oauth.selectNextAvailableAccount(account.email);
+        const nextAcc = this.oauth.selectNextAvailableAccount(account.email, payload.model);
         if (nextAcc) {
           console.log(`[AutoPool] Active account ${account.email} is cooling down. Switched to ${nextAcc.email}`);
           account = nextAcc;
@@ -140,7 +140,7 @@ export class AntigravityClient {
             if (res.status === 429) {
               hit429 = true;
               if (currentAccount?.email) {
-                QuotaTracker.getInstance().record429(currentAccount.email, message);
+                QuotaTracker.getInstance().record429(currentAccount.email, message, payload.model);
               }
             } else if (res.status === 503) {
               // "No capacity available for model X on the server" is per project,
@@ -176,7 +176,7 @@ export class AntigravityClient {
 
       // If rate limited or starved of capacity, auto-failover to next available account
       if ((hit429 || hitCapacity) && this.oauth.isAutoFailoverEnabled()) {
-        const nextAccount = this.oauth.selectNextAvailableAccount(currentAccount?.email);
+        const nextAccount = this.oauth.selectNextAvailableAccount(currentAccount?.email, payload.model);
         if (nextAccount) {
           console.log(
             `[AutoPool] Failover from ${currentAccount?.email} to ${nextAccount.email} due to ${
@@ -210,9 +210,9 @@ export class AntigravityClient {
       if (
         this.oauth.isAutoFailoverEnabled() &&
         account?.email &&
-        QuotaTracker.getInstance().isAccountRateLimited(account.email)
+        QuotaTracker.getInstance().isAccountRateLimited(account.email, payload.model)
       ) {
-        const nextAcc = this.oauth.selectNextAvailableAccount(account.email);
+        const nextAcc = this.oauth.selectNextAvailableAccount(account.email, payload.model);
         if (nextAcc) {
           console.log(`[AutoPool] Active account ${account.email} is cooling down. Switched to ${nextAcc.email}`);
           account = nextAcc;
@@ -260,7 +260,7 @@ export class AntigravityClient {
             if (res.status === 429) {
               hit429 = true;
               if (currentAccount?.email) {
-                QuotaTracker.getInstance().record429(currentAccount.email, message);
+                QuotaTracker.getInstance().record429(currentAccount.email, message, payload.model);
               }
             } else if (res.status === 503) {
               // "No capacity available for model X on the server" is per project,
@@ -298,7 +298,7 @@ export class AntigravityClient {
       }
 
       if ((hit429 || hitCapacity) && this.oauth.isAutoFailoverEnabled()) {
-        const nextAccount = this.oauth.selectNextAvailableAccount(currentAccount?.email);
+        const nextAccount = this.oauth.selectNextAvailableAccount(currentAccount?.email, payload.model);
         if (nextAccount) {
           console.log(
             `[AutoPool] Stream failover from ${currentAccount?.email} to ${nextAccount.email} due to ${
