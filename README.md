@@ -212,6 +212,37 @@ The server will start on **`http://127.0.0.1:52130`**:
 
 ---
 
+## 🔄 Updating
+
+```bash
+npm run bridge:update
+```
+
+That is the whole thing: it fast-forwards the checkout, installs dependencies, and — if the
+LaunchAgent is installed — reloads the daemon so the running process is the code you just pulled.
+It prints the version it left and the version it reached.
+
+It refuses rather than guesses:
+
+- **Uncommitted changes?** Nothing is pulled, and your work is never discarded. Commit or stash first.
+- **Not a git checkout?** It says so instead of emitting a cryptic git error.
+- **Diverged branch?** Only a fast-forward is accepted; the checkout is left untouched.
+
+If you run the bridge some other way, restart it yourself after updating:
+
+| How you run it | Restart |
+|---|---|
+| LaunchAgent (macOS) | handled by `bridge:update` |
+| pm2 | `pm2 restart antigravity-bridge` — **not** with `--update-env`, which drops `BRIDGE_API_KEY` |
+| Foreground | Ctrl+C, then `npm run bridge:start` |
+
+Your accounts, quota and usage live in `~/.zcode/`, outside the repository, so updating never
+touches them. `npm run bridge:status` also tells you when a newer release exists.
+
+Read [CHANGELOG.md](CHANGELOG.md) before a major version jump.
+
+---
+
 ## 🤖 Client Integration Guides
 
 ### 1. Claude Code & Free Claude Code (FCC)
