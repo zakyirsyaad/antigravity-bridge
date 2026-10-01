@@ -205,10 +205,11 @@ whether it gets used.
 
 - **Bind address**: `server.ts` listens on `process.env.BRIDGE_HOST || "0.0.0.0"`, i.e. it is
   reachable on the LAN by default. The README's security section still claims `127.0.0.1`.
-- **This bridge is deployed publicly.** `src/dashboard.html` hardcodes
-  `VPS_BASE_URL = "https://bridge.example.com"` and defaults its setup guide to
-  that host whenever the page is not loaded from localhost. Assume any endpoint you add is
-  internet-reachable, not LAN-at-worst.
+- **This bridge is deployed publicly.** `src/dashboard.html` takes its remote base URL from
+  `window.location.origin` and defaults the setup guide to that host whenever the page is not
+  loaded from localhost. Anything hardcoded there is a bug: the endpoint pill read
+  `http://127.0.0.1:52130` on a public page until 2.0.4, handing every visitor an address that
+  could not work. Assume any endpoint you add is internet-reachable, not LAN-at-worst.
 - **Two independent gates, and they cover different attackers.** `authorize()` requires a shared
   secret (`BRIDGE_API_KEY`) from non-loopback callers and fails closed when the key is unset —
   that is what stops `curl`. `isCrossOriginRequest()` additionally blocks foreign web pages from
