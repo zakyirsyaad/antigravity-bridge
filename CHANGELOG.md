@@ -1,5 +1,31 @@
 # Changelog
 
+## 2.0.3
+
+### Fixed: one model's exhausted quota parked the whole account
+
+A 429 was recorded against the account and nothing else. But Antigravity meters
+Claude — served through Vertex — separately from Gemini, so an exhausted Claude
+weekly quota said nothing about Gemini.
+
+One test request to `claude-sonnet-4-6` was enough to demonstrate the cost: it
+rang the failover loop through all six pooled accounts in three seconds and
+parked every one of them for up to 134 hours. `selectNextAvailableAccount()` had
+nothing left to return — failover was dead until the following week — while the
+dashboard's quota meters, which read Google's own numbers rather than our parsed
+429 text, still showed ~100% of the Gemini quota available. Two quota systems,
+one of them wrong, side by side on the same card.
+
+Cooldowns are now keyed by `(account, family)`. `record429()`,
+`isAccountRateLimited()` and `selectNextAvailableAccount()` take the model;
+without one they behave exactly as before, which is also how windows written by
+earlier versions keep working. The dashboard names the family that earned the
+cooldown.
+
+### Added
+
+- `npm run test:quota` — a Claude 429 leaves Gemini selectable; the display path still reports cooling; legacy windows still limit everything.
+
 ## 2.0.2
 
 Two production failure classes, found by reading the server's own error log.

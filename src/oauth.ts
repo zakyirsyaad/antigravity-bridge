@@ -346,7 +346,7 @@ export class OAuthManager {
    * Select the next available account that is not in cooldown.
    * Updates storage and returns the newly active account.
    */
-  public selectNextAvailableAccount(excludeEmail?: string): AccountToken | null {
+  public selectNextAvailableAccount(excludeEmail?: string, model?: string): AccountToken | null {
     if (!fs.existsSync(ACCOUNTS_STORAGE_PATH)) return null;
 
     let storage: AccountsStorage;
@@ -371,7 +371,7 @@ export class OAuthManager {
       if (!candidate || !candidate.refreshToken) continue;
       if (excludeEmail && candidate.email?.toLowerCase() === excludeEmail.toLowerCase()) continue;
 
-      const isLimited = candidate.email ? tracker.isAccountRateLimited(candidate.email) : false;
+      const isLimited = candidate.email ? tracker.isAccountRateLimited(candidate.email, model) : false;
       if (!isLimited) {
         storage.activeAccountIndex = candidateIdx;
         try {

@@ -1407,7 +1407,7 @@ print(response.choices[0].message.content)</pre>
         let alertBox = "";
         if (acc.cooldown) {
           alertBox = '<div class="cooldown-alert">' +
-            '<span>Rate limited (HTTP 429)</span>' +
+            '<span>Rate limited (HTTP 429)' + (acc.cooldown.family ? ' \u00b7 ' + acc.cooldown.family : '') + '</span>' +
             '<span class="cooldown-clock" data-reset="' + acc.cooldown.resetsAt + '">' + (acc.cooldown.resetMessage || "Cooldown") + '</span>' +
           '</div>';
         }
