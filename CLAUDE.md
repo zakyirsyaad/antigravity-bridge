@@ -42,6 +42,8 @@ Everything else runs offline — no account, no network, no quota — by stubbin
 | `test:storage` | malformed accounts file does not throw |
 | `test:auth` | non-loopback callers need a key; a proxy confers no exemption |
 | `test:models` | id resolution: exact, retired, approximated, and rejected |
+| `test:signature` | thinking history is dropped for Claude targets, kept for Gemini |
+| `test:capacity` | a 503 rotates the pool without recording a cooldown; 400 still does not rotate |
 
 When stubbing, keep side effects off the real `~/.zcode` files and off `launchctl` — several suites
 assert that explicitly, and that is deliberate.
@@ -81,6 +83,10 @@ Two nested loops per request: an outer loop bounded by pool size, an inner loop 
 - HTTP 400 throws immediately (client error — retrying another account won't help).
 - HTTP 429 calls `QuotaTracker.record429()` and, if auto-failover is on, rotates to the next
   non-cooling account and retries the whole request.
+- HTTP 503 (`No capacity available for model X on the server`) rotates too, but records **no**
+  cooldown — capacity is per project, not a quota signal, and parking a healthy account for hours
+  over a transient server condition is worse than the failure it replaces. `ANTIGRAVITY_ENDPOINTS`
+  holds a single endpoint, so without this a 503 reached the caller on the first try.
 - Before each attempt, a *proactive* check skips the active account if it's already cooling down.
 - Failover happens before the response is streamed, so a mid-stream 429 is not recovered.
 
@@ -114,6 +120,15 @@ Gemini 3 validates a `thoughtSignature` on thinking parts in multi-turn history.
 produce valid ones, so it emits the `SKIP_THOUGHT_SIGNATURE` sentinel
 (`"skip_thought_signature_validator"`). `Transformer.sanitizeThoughtSignaturesInContents()` also
 strips signatures from parallel function calls, which reject them.
+
+**The sentinel is a Gemini affordance, and Claude models are not Gemini.** Antigravity forwards the
+`claude-*` ids to Vertex's Anthropic API, which validates `signature` on a thinking block
+cryptographically. The bridge fabricates `antigravity_thought` on the way out, the client echoes it
+back, and the next turn died as `messages.1.content.0: Invalid signature in thinking block` — the
+largest 400 class in production. So `sanitizeThoughtSignaturesInContents()` takes `isClaude` and
+**drops prior-turn thinking entirely** for Claude targets, including the turn itself when thinking
+was all it held (Google rejects a turn with no parts). Losing reasoning history costs context;
+sending it cost the whole request.
 
 ### State: file-backed singletons
 

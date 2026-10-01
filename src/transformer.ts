@@ -336,7 +336,7 @@ export class Transformer {
     }
 
     const mergedContents = this.mergeConsecutiveContents(contents);
-    const sanitizedContents = this.sanitizeThoughtSignaturesInContents(mergedContents);
+    const sanitizedContents = this.sanitizeThoughtSignaturesInContents(mergedContents, isClaude);
 
     return {
       model: targetModel,
@@ -506,7 +506,7 @@ export class Transformer {
     }
 
     const mergedContents = this.mergeConsecutiveContents(contents);
-    const sanitizedContents = this.sanitizeThoughtSignaturesInContents(mergedContents);
+    const sanitizedContents = this.sanitizeThoughtSignaturesInContents(mergedContents, isClaude);
 
     return {
       model: targetModel,
@@ -539,11 +539,19 @@ export class Transformer {
   /**
    * Sanitizes thought signatures in model contents to avoid 400 validation error in Gemini 3 models.
    * Google Antigravity requires the first functionCall in each model turn to have a thought_signature.
+   *
+   * Claude models do not go to Gemini. Antigravity forwards them to Vertex's
+   * Anthropic API, which validates `signature` on a thinking block cryptographically
+   * rather than honouring the sentinel, and the bridge cannot mint a real one —
+   * it fabricates `antigravity_thought` on the way out, the client echoes it back,
+   * and the next turn died as `messages.1.content.0: Invalid signature in thinking
+   * block`. So prior-turn thinking is dropped for Claude targets. Losing reasoning
+   * history costs context; sending it cost the whole request.
    */
-  public static sanitizeThoughtSignaturesInContents(contents: any[]): any[] {
+  public static sanitizeThoughtSignaturesInContents(contents: any[], isClaude = false): any[] {
     if (!Array.isArray(contents)) return [];
 
-    return contents.map((content) => {
+    const sanitized = contents.map((content) => {
       if (!content || typeof content !== "object" || !Array.isArray(content.parts)) {
         return content;
       }
@@ -552,7 +560,9 @@ export class Transformer {
       }
 
       let foundFirstFunctionCall = false;
-      const sanitizedParts = content.parts.map((part: any) => {
+      const sanitizedParts = content.parts
+        .filter((part: any) => !(isClaude && part && (part.thought === true || part.type === "thinking")))
+        .map((part: any) => {
         if (part && typeof part === "object") {
           if (part.thought === true || part.type === "thinking") {
             return {
@@ -586,6 +596,12 @@ export class Transformer {
         parts: sanitizedParts,
       };
     });
+
+    // Dropping thinking can leave a model turn with no parts at all, which Google
+    // rejects outright. The turn goes with its only content.
+    return sanitized.filter(
+      (content: any) => !(content && Array.isArray(content.parts) && content.parts.length === 0)
+    );
   }
 
   /**
