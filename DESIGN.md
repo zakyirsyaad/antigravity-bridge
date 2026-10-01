@@ -101,7 +101,13 @@ Antigravity Bridge is a mission-critical AI inference gateway connecting local d
 - **Account Identity Card**:
   - Avatar with uppercase account initial on zinc base.
   - Truncated email with copy-on-hover.
-  - Real-time rolling quota progress tracks (5-Hour Rolling and Weekly Cycle Cap).
+  - **Family Availability Block** — the card's primary signal, above the meters: one row per model
+    family (Gemini, Claude, GPT-OSS), each a 7px status dot (`accent-emerald` ready,
+    `accent-amber` cooling) with a live countdown. Upstream meters Claude through Vertex separately
+    from Gemini, so an account is never simply "down" — it is down *for something*.
+  - Real-time rolling quota progress tracks (5-Hour Rolling and Weekly Cycle Cap), carrying the
+    `GOOGLE QUOTA · LIVE` group label: these are Google's numbers, not the bridge's, and the two
+    disagree by design.
   - High-contrast "Set Active" primary button, "Clear Cooldown" action, and subtle danger removal trigger.
 - **Auto-Failover Controller**:
   - Micro-pill toggle with animated status LED.
@@ -114,5 +120,8 @@ Antigravity Bridge is a mission-critical AI inference gateway connecting local d
 - **DO** maintain pure `#000000` as the canvas baseline for deep OLED black contrast.
 - **DO** use tabular numerals on all countdown timers and percentage displays.
 - **DO** keep button primary in crisp pure white `#ffffff` with dark `#000000` text for maximum contrast.
+- **DO** attribute every number to the system that produced it. The dashboard shows two quota
+  sources — Google's live meters and the bridge's own 429 bookkeeping — and an unlabelled 100%
+  sitting above a "rate limited" badge reads as a bug rather than as two different facts.
 - **DON'T** introduce noisy colored backgrounds; keep colored accents strictly reserved for operational status (active, cooldown, warning).
 - **DON'T** use opaque drop shadows that wash out dark OLED surfaces.

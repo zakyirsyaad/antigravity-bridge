@@ -631,6 +631,62 @@
     }
 
     /* Live Quota Meters Container */
+    /* Availability is per model family. Antigravity meters Claude — served
+       through Vertex — separately from Gemini, so one exhausted quota says
+       nothing about the other. This block is the card's primary signal; the
+       meters below it are Google's own numbers, labelled as such. */
+    .family-box {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+      margin-bottom: 0.85rem;
+    }
+    .family-row {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      font-size: 0.8125rem;
+    }
+    .family-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .family-dot.is-ready {
+      background: var(--emerald);
+      box-shadow: 0 0 6px var(--emerald-glow);
+    }
+    .family-dot.is-cooling {
+      background: var(--amber);
+      box-shadow: 0 0 6px var(--amber-glow);
+    }
+    .family-name {
+      min-width: 72px;
+      font-weight: 600;
+      color: var(--text-main);
+    }
+    .family-state {
+      color: var(--text-muted);
+      font-variant-numeric: tabular-nums;
+    }
+    .family-state.is-cooling {
+      color: var(--amber);
+    }
+    .group-label {
+      font-size: 0.6875rem;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--text-faint);
+      margin-bottom: 0.45rem;
+    }
+    .section-head-note {
+      font-size: 0.8125rem;
+      color: var(--text-muted);
+      font-variant-numeric: tabular-nums;
+    }
+
     .quota-meters-box {
       background: var(--surface-input);
       border: 1px solid var(--border-subtle);
@@ -964,7 +1020,7 @@
       </div>
       <div class="endpoint-pill" id="headerEndpointBadge" onclick="copyHeaderEndpoint()" title="Click to copy endpoint URL">
         <span style="display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--emerald); box-shadow: 0 0 6px var(--emerald);"></span>
-        <span id="headerEndpointText">http://127.0.0.1:52130</span>
+        <span id="headerEndpointText">https://your-bridge-host</span>
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="opacity: 0.6; margin-left: 2px;">
           <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
           <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
@@ -1022,20 +1078,20 @@
 
       <div class="kpi-card">
         <div class="kpi-label">
-          <span>Rolling 5-Hour Pool</span>
+          <span>Ready for Gemini</span>
           <span>⏱️</span>
         </div>
-        <div class="kpi-value color-high" id="kpi5hAverage">--%</div>
-        <div class="kpi-sub">Instant Request Availability</div>
+        <div class="kpi-value color-high" id="kpiGeminiReady">--</div>
+        <div class="kpi-sub">Accounts failover can still pick</div>
       </div>
 
       <div class="kpi-card">
         <div class="kpi-label">
-          <span>Weekly Cap Reserve</span>
+          <span>Ready for Claude</span>
           <span>📅</span>
         </div>
-        <div class="kpi-value color-high" id="kpiWeeklyAverage">--%</div>
-        <div class="kpi-sub">Long-term Compute Margin</div>
+        <div class="kpi-value color-high" id="kpiClaudeReady">--</div>
+        <div class="kpi-sub">Metered separately, via Vertex</div>
       </div>
 
       <div class="kpi-card">
@@ -1052,8 +1108,9 @@
     <section>
       <div class="section-head">
         <div class="section-head-title">
-          <h2>Google Accounts & Live Quota Meters</h2>
+          <h2>Accounts &amp; Availability</h2>
           <span class="section-head-badge" id="accountsCountBadge">6 Accounts</span>
+          <span class="section-head-note" id="googleQuotaNote"></span>
         </div>
         <button class="btn btn-sm" onclick="fetchPoolStatus()">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1102,8 +1159,8 @@
           </p>
           <div class="code-display">
             <button class="code-copy-btn" onclick="copyCode('snippet-claude', this)">Copy</button>
-            <pre id="snippet-claude">export ANTHROPIC_BASE_URL="http://127.0.0.1:52130"
-export ANTHROPIC_API_KEY="antigravity-local"
+            <pre id="snippet-claude">export ANTHROPIC_BASE_URL="https://your-bridge-host"
+export ANTHROPIC_API_KEY="<your BRIDGE_API_KEY>"
 
 # Or run your Free Claude Code shortcut:
 fcc</pre>
@@ -1120,8 +1177,8 @@ fcc</pre>
             <pre id="snippet-hermes"># Add to ~/.hermes/config.yaml:
 providers:
   antigravity:
-    base_url: "http://127.0.0.1:52130/v1"
-    api_key: "antigravity-local"
+    base_url: "https://your-bridge-host/v1"
+    api_key: "<your BRIDGE_API_KEY>"
 
 # Run Hermes with Antigravity provider:
 hermes --provider antigravity -m gemini-3.8-flash-tiered -z "Check workspace files"
@@ -1138,8 +1195,8 @@ hermes --provider antigravity -m gemini-3.8-flash-tiered --tui</pre>
           </p>
           <div class="code-display">
             <button class="code-copy-btn" onclick="copyCode('snippet-cursor', this)">Copy</button>
-            <pre id="snippet-cursor">Base URL: http://127.0.0.1:52130/v1
-API Key: antigravity-local
+            <pre id="snippet-cursor">Base URL: https://your-bridge-host/v1
+API Key: <your BRIDGE_API_KEY>
 Model: gemini-3.8-flash-tiered  (newest; reasoning_effort low|medium|high)
        gemini-3.6-flash-high   (default agent model per Google)
        claude-sonnet-4-6</pre>
@@ -1156,8 +1213,8 @@ Model: gemini-3.8-flash-tiered  (newest; reasoning_effort low|medium|high)
             <pre id="snippet-python">from openai import OpenAI
 
 client = OpenAI(
-    base_url="http://127.0.0.1:52130/v1",
-    api_key="antigravity-local"
+    base_url="https://your-bridge-host/v1",
+    api_key="<your BRIDGE_API_KEY>"
 )
 
 response = client.chat.completions.create(
@@ -1176,9 +1233,9 @@ print(response.choices[0].message.content)</pre>
           </p>
           <div class="code-display">
             <button class="code-copy-btn" onclick="copyCode('snippet-curl', this)">Copy</button>
-            <pre id="snippet-curl">curl -X POST http://127.0.0.1:52130/v1/chat/completions \
+            <pre id="snippet-curl">curl -X POST https://your-bridge-host/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer antigravity-local" \
+  -H "Authorization: Bearer <your BRIDGE_API_KEY>" \
   -d '{"model":"gemini-3.8-flash-tiered","messages":[{"role":"user","content":"Ping"}]}'</pre>
           </div>
         </div>
@@ -1306,6 +1363,27 @@ print(response.choices[0].message.content)</pre>
       return { text: "color-high", fill: "fill-high" };
     }
 
+    // The bridge serves three families, and upstream meters them separately.
+    const MODEL_FAMILIES = [
+      { key: "gemini", label: "Gemini" },
+      { key: "claude", label: "Claude" },
+      { key: "openai", label: "GPT-OSS" }
+    ];
+
+    /** The live cooldown window for one family, or null when it is selectable. */
+    function familyCooldown(acc, key) {
+      const q = acc.quota || {};
+      const now = Date.now();
+      const live = function(w) {
+        return w && new Date(w.resetsAt).getTime() > now ? w : null;
+      };
+      // Account-wide windows predate per-family tracking, or the model could not
+      // be classified. Either way they limit every family.
+      const accountWide = live(q.fiveHour) || live(q.weekly);
+      const bucket = (q.families || {})[key] || {};
+      return live(bucket.fiveHour) || live(bucket.weekly) || accountWide;
+    }
+
     function renderStitchDashboard(data) {
       document.getElementById("kpiTotalAccounts").textContent = data.totalAccounts;
       document.getElementById("kpiPoolMultiplier").textContent = data.totalAccounts + "x Combined Pool";
@@ -1327,8 +1405,24 @@ print(response.choices[0].message.content)</pre>
       });
       const avg5h = num5h > 0 ? Math.round(sum5h / num5h) : 100;
       const avgWk = numWk > 0 ? Math.round(sumWk / numWk) : 100;
-      document.getElementById("kpi5hAverage").textContent = avg5h + "%";
-      document.getElementById("kpiWeeklyAverage").textContent = avgWk + "%";
+
+      // Google's own numbers, kept but demoted and attributed: they describe the
+      // Gemini buckets only, which is why they can read 100% while an account is
+      // cooling for Claude.
+      const note = document.getElementById("googleQuotaNote");
+      if (note) {
+        note.textContent = "Google quota, pool average · 5h " + avg5h + "% · weekly " + avgWk + "%";
+      }
+
+      // What the operator actually asks: can anything still serve this family?
+      const total = data.totalAccounts || data.accounts.length;
+      ["gemini", "claude"].forEach(function(key) {
+        const ready = data.accounts.filter(function(a) { return !familyCooldown(a, key); }).length;
+        const el = document.getElementById(key === "gemini" ? "kpiGeminiReady" : "kpiClaudeReady");
+        if (!el) return;
+        el.textContent = ready + " / " + total;
+        el.className = "kpi-value " + getMeterColors(total > 0 ? Math.round((ready / total) * 100) : 0).text;
+      });
 
       // Toggle state
       const led = document.getElementById("failoverLed");
@@ -1349,18 +1443,47 @@ print(response.choices[0].message.content)</pre>
         const card = document.createElement("div");
         card.className = "account-card";
         if (acc.isActive) card.classList.add("active-account");
-        if (acc.status === "cooling_down") card.classList.add("cooling-account");
 
         const initial = (acc.email || "?").charAt(0).toUpperCase();
+
+        const families = MODEL_FAMILIES.map(function(f) {
+          return { label: f.label, window: familyCooldown(acc, f.key) };
+        });
+        const coolingCount = families.filter(function(f) { return f.window; }).length;
+
+        // Only a wholly unusable account gets the cooling treatment. One family
+        // down is a fact to state, not an alarm to raise.
+        if (coolingCount === families.length) card.classList.add("cooling-account");
 
         let chipHtml = "";
         if (acc.isActive) {
           chipHtml = '<span class="status-chip chip-active">● Active</span>';
-        } else if (acc.status === "cooling_down") {
+        } else if (coolingCount === families.length) {
           chipHtml = '<span class="status-chip chip-cooling">⏳ Cooling</span>';
+        } else if (coolingCount > 0) {
+          chipHtml = '<span class="status-chip chip-cooling">◐ ' + coolingCount + ' of ' + families.length + ' cooling</span>';
         } else {
           chipHtml = '<span class="status-chip chip-ready">Ready</span>';
         }
+
+        const familyHtml = '<div class="family-box">' +
+          families.map(function(f) {
+            const cooling = Boolean(f.window);
+            return '<div class="family-row">' +
+              '<span class="family-dot ' + (cooling ? "is-cooling" : "is-ready") + '"></span>' +
+              '<span class="family-name">' + f.label + '</span>' +
+              (cooling
+                ? '<span class="family-state is-cooling">Cooling · ' +
+                    // The ticker rewrites this node every second, so it owns the
+                    // duration alone and the word stays outside it.
+                    '<span class="cooldown-clock" data-reset="' + f.window.resetsAt + '">' +
+                      ((f.window.resetMessage || "").replace(/^Resets in /, "") || "cooling") +
+                    '</span>' +
+                  '</span>'
+                : '<span class="family-state">Ready</span>') +
+            '</div>';
+          }).join("") +
+        '</div>';
 
         const fiveHour = acc.liveQuota?.fiveHour;
         const weekly = acc.liveQuota?.weekly;
@@ -1375,7 +1498,8 @@ print(response.choices[0].message.content)</pre>
         const reset5h = fiveHour?.resetAt ? formatTimeRemaining(fiveHour.resetAt) : "100% Available";
         const resetWk = weekly?.resetAt ? formatResetDate(weekly.resetAt) : "100% Available";
 
-        const metersHtml = '<div class="quota-meters-box">' +
+        const metersHtml = '<div class="group-label">Google quota · live</div>' +
+          '<div class="quota-meters-box">' +
           '<div class="meter-item">' +
             '<div class="meter-top">' +
               '<span class="meter-name">5-Hour Rolling Limit</span>' +
@@ -1404,13 +1528,6 @@ print(response.choices[0].message.content)</pre>
           '</div>' +
         '</div>';
 
-        let alertBox = "";
-        if (acc.cooldown) {
-          alertBox = '<div class="cooldown-alert">' +
-            '<span>Rate limited (HTTP 429)' + (acc.cooldown.family ? ' \u00b7 ' + acc.cooldown.family : '') + '</span>' +
-            '<span class="cooldown-clock" data-reset="' + acc.cooldown.resetsAt + '">' + (acc.cooldown.resetMessage || "Cooldown") + '</span>' +
-          '</div>';
-        }
 
         card.innerHTML = '<div class="card-top">' +
           '<div class="card-identity">' +
@@ -1424,8 +1541,8 @@ print(response.choices[0].message.content)</pre>
           '</div>' +
           chipHtml +
         '</div>' +
+        familyHtml +
         metersHtml +
-        alertBox +
         '<div class="card-footer">' +
           (acc.isActive ? 
             '<button class="btn btn-sm btn-action" disabled style="opacity: 0.6; cursor: default;">● Currently Active</button>' : 
@@ -1441,7 +1558,9 @@ print(response.choices[0].message.content)</pre>
 
       // Render Feed
       const feedList = document.getElementById("feedList");
-      if (data.recentEvents && data.recentEvents.length > 0) {
+      if (!data.recentEvents || data.recentEvents.length === 0) {
+        feedList.innerHTML = '<div class="feed-row"><span class="family-state">No pool events yet.</span></div>';
+      } else if (data.recentEvents.length > 0) {
         feedList.innerHTML = data.recentEvents.map(function(evt) {
           const time = new Date(evt.timestamp).toLocaleTimeString();
           let tagClass = "tag-info";
@@ -1636,17 +1755,24 @@ print(response.choices[0].message.content)</pre>
         const target = new Date(el.getAttribute("data-reset")).getTime();
         const diff = target - Date.now();
         if (diff <= 0) {
-          el.textContent = "Ready to reset";
+          el.textContent = "ready to reset";
         } else {
           const h = Math.floor(diff / 3600000);
           const m = Math.floor((diff % 3600000) / 60000);
-          const s = Math.floor((diff % 60000) / 1000);
-          el.textContent = "Resets in " + (h > 0 ? h + "h " : "") + m + "m " + s + "s";
+          const sec = Math.floor((diff % 60000) / 1000);
+          // The label beside this node already says "Cooling", and seconds
+          // ticking on a window measured in days is noise, not information.
+          el.textContent = h > 0 ? h + "h " + m + "m" : (m > 0 ? m + "m " + sec + "s" : sec + "s");
         }
       });
     }, 1000);
 
     selectGuideUrl(currentGuideMode);
+    // The pill is a copy target, so it must name this page's own origin — it
+    // used to read 127.0.0.1 even when served from a remote host.
+    const headerEndpoint = document.getElementById("headerEndpointText");
+    if (headerEndpoint) headerEndpoint.textContent = window.location.origin;
+
     fetchPoolStatus();
     setInterval(fetchPoolStatus, 5000);
   </script>

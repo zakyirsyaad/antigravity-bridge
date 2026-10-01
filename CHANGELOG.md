@@ -1,5 +1,34 @@
 # Changelog
 
+## 2.0.4
+
+### Changed: the dashboard says which model family, not just "cooling"
+
+A card could read `COOLING · resets in 130h` directly below meters reporting
+100% quota remaining. Both were correct — the meters come from Google's live
+summary, the badge from the bridge's parsed 429 — but nothing on screen said so,
+and the card looked broken.
+
+- Each account card now leads with a row per model family (Gemini, Claude,
+  GPT-OSS): a status dot and, when cooling, a live countdown. An account is
+  never simply down — it is down *for something*.
+- The quota meters keep their place but gain a `GOOGLE QUOTA · LIVE` label, so
+  the reader knows whose numbers they are.
+- The separate red "Rate limited (HTTP 429)" banner is gone; it repeated what
+  the family rows now state precisely.
+- The status chip distinguishes `Ready`, `N of 3 cooling`, and `Cooling`. Only a
+  wholly unusable account gets the dimmed cooling treatment.
+- Two KPI tiles that averaged Google's percentages — and so read 100% while the
+  pool was unusable — were replaced by `Ready for Gemini` and `Ready for Claude`,
+  counted as accounts failover can actually pick. The averages moved to the
+  accounts section header, attributed to Google.
+- The header endpoint pill showed `http://127.0.0.1:52130` even when the page was
+  served from a remote host, so copying it produced an address that could not
+  work. It now names the page's own origin.
+- Setup snippets no longer flash a hardcoded localhost URL and the
+  `antigravity-local` key that 2.0.0 stopped accepting for remote callers.
+- Countdowns drop seconds past the first hour, and an empty event feed says so.
+
 ## 2.0.3
 
 ### Fixed: one model's exhausted quota parked the whole account
