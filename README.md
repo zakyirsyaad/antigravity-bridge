@@ -171,7 +171,7 @@ Clone this repository and install dependencies:
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-org/antigravity-bridge.git
+git clone https://github.com/zakyirsyaad/antigravity-bridge.git
 cd antigravity-bridge
 
 # Install dependencies
