@@ -1,5 +1,44 @@
 # Changelog
 
+## 2.0.2
+
+Two production failure classes, found by reading the server's own error log.
+
+### Fixed: Claude models died on the second turn
+
+Requests to `claude-opus-4-6-thinking` / `claude-sonnet-4-6` failed with
+`messages.1.content.0: Invalid signature in thinking block` as soon as the
+conversation had any history containing reasoning.
+
+Antigravity does not serve those ids from Gemini — it forwards them to Vertex's
+Anthropic API, which validates a thinking block's `signature` cryptographically.
+The bridge cannot mint one: it emits the `skip_thought_signature_validator`
+sentinel that Gemini 3 *requires*, fabricates `antigravity_thought` on the way
+out, and the client dutifully echoes that back on the next turn.
+
+Prior-turn thinking is now dropped for Claude targets instead of being sent with
+a fabricated signature, including the turn itself when thinking was all it held.
+Gemini behaviour is unchanged — there the sentinel is still mandatory. Reasoning
+history is lost for Claude multi-turn; the request now completes.
+
+### Fixed: a 503 ended the request instead of trying another account
+
+`No capacity available for model X on the server` was the single largest error
+class in production. Only 429 rotated the pool, and `ANTIGRAVITY_ENDPOINTS` holds
+one endpoint, so a 503 reached the caller on the first attempt with no second
+chance anywhere.
+
+Capacity is per project, so another account is a real retry. A 503 now fails over
+on both the streaming and non-streaming paths, and deliberately records **no**
+quota cooldown: parking a healthy account for hours over a transient server
+condition is worse than the failure it replaces. 400 still refuses to rotate — a
+malformed request is malformed everywhere.
+
+### Added
+
+- `npm run test:signature` — thinking history per model family.
+- `npm run test:capacity` — 503 rotates, 429 still records cooldown, 400 does not rotate.
+
 ## 2.0.0
 
 Breaking. Three things can stop working after this upgrade; each is listed with

@@ -112,6 +112,7 @@ export class AntigravityClient {
 
       let lastError: any = null;
       let hit429 = false;
+      let hitCapacity = false;
 
       for (const endpoint of ANTIGRAVITY_ENDPOINTS) {
         const url = `${endpoint}/v1internal:generateContent`;
@@ -141,6 +142,12 @@ export class AntigravityClient {
               if (currentAccount?.email) {
                 QuotaTracker.getInstance().record429(currentAccount.email, message);
               }
+            } else if (res.status === 503) {
+              // "No capacity available for model X on the server" is per project,
+              // so another account is a genuine second chance. Deliberately no
+              // record429(): parking a healthy account for hours over a transient
+              // server condition is worse than the failure it replaces.
+              hitCapacity = true;
             }
 
             lastError = new Error(`Antigravity ${endpoint} (${res.status}): ${message}`);
@@ -160,16 +167,21 @@ export class AntigravityClient {
           if (e.message?.includes("(429)")) {
             hit429 = true;
           }
+          if (e.message?.includes("(503)")) {
+            hitCapacity = true;
+          }
           continue;
         }
       }
 
-      // If rate limited, auto-failover to next available account
-      if (hit429 && this.oauth.isAutoFailoverEnabled()) {
+      // If rate limited or starved of capacity, auto-failover to next available account
+      if ((hit429 || hitCapacity) && this.oauth.isAutoFailoverEnabled()) {
         const nextAccount = this.oauth.selectNextAvailableAccount(currentAccount?.email);
         if (nextAccount) {
           console.log(
-            `[AutoPool] Failover from ${currentAccount?.email} to ${nextAccount.email} due to 429 rate limit.`
+            `[AutoPool] Failover from ${currentAccount?.email} to ${nextAccount.email} due to ${
+              hit429 ? "429 rate limit" : "503 no capacity"
+            }.`
           );
           continue;
         }
@@ -219,6 +231,7 @@ export class AntigravityClient {
 
       let lastError: any = null;
       let hit429 = false;
+      let hitCapacity = false;
 
       for (const endpoint of ANTIGRAVITY_ENDPOINTS) {
         const url = `${endpoint}/v1internal:streamGenerateContent?alt=sse`;
@@ -249,6 +262,12 @@ export class AntigravityClient {
               if (currentAccount?.email) {
                 QuotaTracker.getInstance().record429(currentAccount.email, message);
               }
+            } else if (res.status === 503) {
+              // "No capacity available for model X on the server" is per project,
+              // so another account is a genuine second chance. Deliberately no
+              // record429(): parking a healthy account for hours over a transient
+              // server condition is worse than the failure it replaces.
+              hitCapacity = true;
             }
 
             lastError = new Error(`Antigravity stream ${endpoint} (${res.status}): ${message}`);
@@ -271,15 +290,20 @@ export class AntigravityClient {
           if (e.message?.includes("(429)")) {
             hit429 = true;
           }
+          if (e.message?.includes("(503)")) {
+            hitCapacity = true;
+          }
           continue;
         }
       }
 
-      if (hit429 && this.oauth.isAutoFailoverEnabled()) {
+      if ((hit429 || hitCapacity) && this.oauth.isAutoFailoverEnabled()) {
         const nextAccount = this.oauth.selectNextAvailableAccount(currentAccount?.email);
         if (nextAccount) {
           console.log(
-            `[AutoPool] Stream failover from ${currentAccount?.email} to ${nextAccount.email} due to 429 rate limit.`
+            `[AutoPool] Stream failover from ${currentAccount?.email} to ${nextAccount.email} due to ${
+              hit429 ? "429 rate limit" : "503 no capacity"
+            }.`
           );
           continue;
         }
