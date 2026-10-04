@@ -54,7 +54,7 @@ Everything else runs offline — no account, no network, no quota — by stubbin
 | `test:launchagent` | project-root resolution; `install()` rejects a bad root |
 | `test:budget` | thinking budget fits inside the caller's `max_tokens` |
 | `test:schema` | schema keywords are dropped, not hoisted into `properties` |
-| `test:usage` | both protocols record usage |
+| `test:usage` | both protocols record usage; OpenAI responses include reasoning in `completion_tokens` without double counting it in the tracker |
 | `test:storage` | malformed accounts file does not throw |
 | `test:auth` | non-loopback callers need a key; a proxy confers no exemption |
 | `test:models` | id resolution: exact, retired, approximated, and rejected |
@@ -236,6 +236,17 @@ an id matching nothing throws `UnknownModelError`, which `server.ts` turns into 
 is deliberate — Claude Code sends Anthropic's own ids and refusing them would break the main use
 case — but a client that appends a reasoning suffix (`gemini-3.8-flash-tiered-high`) once silently
 got a different model generation, so the guess has to be audible.
+
+OpenAI responses — the non-streaming body and the `include_usage` stream chunk alike, both built by
+`Transformer.openaiUsage()` — report `completion_tokens` **including** reasoning, with
+`completion_tokens_details.reasoning_tokens` as the subset, because that is how OpenAI defines it.
+Google keeps them apart (`candidatesTokenCount` is the visible answer only), and reporting 300
+reasoning beside a completion of 22 would be a pair no client could subtract sensibly. Mind the
+consequence: `UsageTracker` stores visible output and reasoning in **separate columns**, so the
+non-streaming handler subtracts the reasoning back out before recording; feed it `completion_tokens`
+as-is and `bridge:usage` counts every thought twice (`test:usage` guards it). The Anthropic
+non-streaming `output_tokens` is still `candidatesTokenCount` alone, i.e. it excludes thinking
+although Anthropic's definition includes it — an inconsistency left alone, not a decision.
 
 `thoughtsTokenCount` from Google is recorded via `UsageTracker`, so `bridge:usage` shows reasoning
 actually consumed. That is the number to tune budgets against — a declared budget says nothing about

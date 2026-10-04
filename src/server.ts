@@ -791,8 +791,6 @@ export class BridgeServer {
         // silence. Left out — not zeroed — when upstream never reported a prompt
         // size, because a client takes 0 for an answer.
         if (body.stream_options?.include_usage === true && typeof streamUsage?.promptTokenCount === "number") {
-          const promptTokens = streamUsage.promptTokenCount;
-          const completionTokens = streamUsage.candidatesTokenCount || outputTokens;
           res.write(
             `data: ${JSON.stringify({
               id: cmplId,
@@ -800,11 +798,12 @@ export class BridgeServer {
               created,
               model: requestedModel,
               choices: [],
-              usage: {
-                prompt_tokens: promptTokens,
-                completion_tokens: completionTokens,
-                total_tokens: promptTokens + completionTokens,
-              },
+              // Same shape as the non-streaming response. The estimate only stands in
+              // when upstream gave no completion count of its own.
+              usage: Transformer.openaiUsage({
+                ...streamUsage,
+                candidatesTokenCount: streamUsage.candidatesTokenCount || outputTokens,
+              }),
             })}\n\n`
           );
         }
@@ -827,10 +826,13 @@ export class BridgeServer {
     } else {
       const resp = await this.client.generateContent(payload);
       const formatted = Transformer.antigravityToOpenAI(resp, requestedModel);
+      // The tracker keeps visible output and reasoning in separate columns, while
+      // the response's completion_tokens now includes the reasoning — so take it
+      // back out, or bridge:usage would count every thought twice.
       UsageTracker.getInstance().recordUsage(
         requestedModel,
         formatted.usage?.prompt_tokens || 0,
-        formatted.usage?.completion_tokens || 0,
+        (formatted.usage?.completion_tokens || 0) - (formatted.usage?.completion_tokens_details?.reasoning_tokens || 0),
         BridgeServer.thoughtsTokens(resp)
       );
       res.writeHead(200, { "Content-Type": "application/json" });

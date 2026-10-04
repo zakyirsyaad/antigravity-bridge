@@ -129,7 +129,10 @@ changes nothing — lower levels save, higher levels spend.
 Thinking tokens count against `max_tokens`, so the bridge fits the budget inside whatever cap you
 send and holds back 8,192 tokens for the visible answer. Tune that with
 `BRIDGE_ANSWER_RESERVE_TOKENS` — lower it for more reasoning, raise it if long answers get
-truncated. `npm run bridge:usage` reports the reasoning tokens actually consumed.
+truncated. `npm run bridge:usage` reports the reasoning tokens actually consumed. OpenAI responses
+count reasoning inside `completion_tokens` and itemise it in
+`completion_tokens_details.reasoning_tokens`, as OpenAI does; for a stream, ask for it with
+`stream_options: { include_usage: true }`.
 
 ### Renamed ids
 

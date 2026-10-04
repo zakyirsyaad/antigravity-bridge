@@ -193,23 +193,23 @@ async function runTests() {
   console.log(`✓ Server started on port ${TEST_PORT} (upstream stubbed)\n`);
 
   try {
-    console.log("[1/12] Anthropic SSE, turn ending in a tool call ...");
+    console.log("[1/13] Anthropic SSE, turn ending in a tool call ...");
     nextParts = WITH_TOOL;
     expect("stop_reason", anthropicStopReason(await collectSSE("/v1/messages", "gemini-3-flash")), "tool_use");
 
-    console.log("\n[2/12] Anthropic SSE, text-only turn ...");
+    console.log("\n[2/13] Anthropic SSE, text-only turn ...");
     nextParts = TEXT_ONLY;
     expect("stop_reason", anthropicStopReason(await collectSSE("/v1/messages", "gemini-3-flash")), "end_turn");
 
-    console.log("\n[3/12] OpenAI SSE, turn ending in a tool call ...");
+    console.log("\n[3/13] OpenAI SSE, turn ending in a tool call ...");
     nextParts = WITH_TOOL;
     expect("finish_reason", openaiFinishReason(await collectSSE("/v1/chat/completions", "gemini-3-flash")), "tool_calls");
 
-    console.log("\n[4/12] OpenAI SSE, text-only turn ...");
+    console.log("\n[4/13] OpenAI SSE, text-only turn ...");
     nextParts = TEXT_ONLY;
     expect("finish_reason", openaiFinishReason(await collectSSE("/v1/chat/completions", "gemini-3-flash")), "stop");
 
-    console.log("\n[5/12] OpenAI SSE, parallel tool calls keep distinct indices ...");
+    console.log("\n[5/13] OpenAI SSE, parallel tool calls keep distinct indices ...");
     nextParts = PARALLEL_TOOLS;
     const parallelSSE = await collectSSE("/v1/chat/completions", "gemini-3-flash");
     const deltas = openaiToolCallDeltas(parallelSSE);
@@ -225,26 +225,26 @@ async function runTests() {
     expect("call 0 location", parsedLocation(rebuilt.get(0)?.args), "Tokyo");
     expect("call 1 location", parsedLocation(rebuilt.get(1)?.args), "Paris");
 
-    console.log("\n[6/12] Anthropic SSE, parallel tool_use blocks keep distinct indices ...");
+    console.log("\n[6/13] Anthropic SSE, parallel tool_use blocks keep distinct indices ...");
     nextParts = PARALLEL_TOOLS;
     const anthropicParallel = anthropicToolUseIndices(await collectSSE("/v1/messages", "gemini-3-flash"));
     expect("tool_use blocks emitted", anthropicParallel.length, 2);
     expect("block indices are distinct", new Set(anthropicParallel).size, 2);
 
-    console.log("\n[7/12] Anthropic SSE reports the real prompt size ...");
+    console.log("\n[7/13] Anthropic SSE reports the real prompt size ...");
     nextParts = TEXT_ONLY;
     nextUsage = { promptTokenCount: 4242, candidatesTokenCount: 7 };
     const reported = anthropicDeltaUsage(await collectSSE("/v1/messages", "gemini-3-flash"));
     expect("input_tokens in message_delta", reported.input_tokens, 4242);
     expect("output_tokens still reported", typeof reported.output_tokens, "number");
 
-    console.log("\n[8/12] ... and does not invent a zero when upstream never said ...");
+    console.log("\n[8/13] ... and does not invent a zero when upstream never said ...");
     resetUsage();
     const unknown = anthropicDeltaUsage(await collectSSE("/v1/messages", "gemini-3-flash"));
     expect("input_tokens omitted, not 0", "input_tokens" in unknown, false);
     expect("output_tokens still reported", typeof unknown.output_tokens, "number");
 
-    console.log("\n[9/12] ... wherever upstream happens to put it ...");
+    console.log("\n[9/13] ... wherever upstream happens to put it ...");
     nextUsage = { promptTokenCount: 777 };
     usageInLastChunk = true;
     expect(
@@ -262,7 +262,7 @@ async function runTests() {
     );
     resetUsage();
 
-    console.log("\n[10/12] OpenAI SSE sends a usage chunk when asked, after the finish chunk ...");
+    console.log("\n[10/13] OpenAI SSE sends a usage chunk when asked, after the finish chunk ...");
     nextParts = TEXT_ONLY;
     nextUsage = { promptTokenCount: 4242, candidatesTokenCount: 7 };
     const asked = await collectSSE("/v1/chat/completions", "gemini-3-flash", { stream_options: { include_usage: true } });
@@ -272,12 +272,13 @@ async function runTests() {
     expect("completion_tokens", askedUsage[0]?.usage?.completion_tokens, 7);
     expect("total_tokens", askedUsage[0]?.usage?.total_tokens, 4249);
     expect("choices is an empty array", JSON.stringify(askedUsage[0]?.choices), "[]");
+    expect("no reasoning reported -> reasoning_tokens 0", askedUsage[0]?.usage?.completion_tokens_details?.reasoning_tokens, 0);
     const askedEvents = eachEvent(asked);
     expect("it is the last event before [DONE]", askedEvents[askedEvents.length - 1]?.usage?.prompt_tokens, 4242);
     expect("the finish chunk still precedes it", askedEvents[askedEvents.length - 2]?.choices?.[0]?.finish_reason, "stop");
     expect("stream still ends with [DONE]", asked.trim().endsWith("data: [DONE]"), true);
 
-    console.log("\n[11/12] ... and stays silent when not asked, even though upstream reported it ...");
+    console.log("\n[11/13] ... and stays silent when not asked, even though upstream reported it ...");
     expect(
       "no stream_options -> no usage chunk",
       openaiUsageChunks(await collectSSE("/v1/chat/completions", "gemini-3-flash")).length,
@@ -291,7 +292,7 @@ async function runTests() {
       0
     );
 
-    console.log("\n[12/12] ... and never invents a zero when upstream never said ...");
+    console.log("\n[12/13] ... and never invents a zero when upstream never said ...");
     resetUsage();
     const silent = await collectSSE("/v1/chat/completions", "gemini-3-flash", { stream_options: { include_usage: true } });
     expect("no usage chunk rather than a zeroed one", openaiUsageChunks(silent).length, 0);
@@ -304,6 +305,18 @@ async function runTests() {
     const withTool = await collectSSE("/v1/chat/completions", "gemini-3-flash", { stream_options: { include_usage: true } });
     expect("usage does not disturb tool_calls finish_reason", openaiFinishReason(withTool), "tool_calls");
     expect("usage is still delivered", openaiUsageChunks(withTool)[0]?.usage?.prompt_tokens, 99);
+    resetUsage();
+
+    console.log("\n[13/13] ... and itemises reasoning inside completion_tokens, as OpenAI defines it ...");
+    resetUsage();
+    nextParts = TEXT_ONLY;
+    nextUsage = { promptTokenCount: 4242, candidatesTokenCount: 7, thoughtsTokenCount: 300 };
+    const thought = openaiUsageChunks(
+      await collectSSE("/v1/chat/completions", "gemini-3-flash", { stream_options: { include_usage: true } })
+    )[0]?.usage;
+    expect("completion_tokens = visible 7 + reasoning 300", thought?.completion_tokens, 307);
+    expect("reasoning_tokens", thought?.completion_tokens_details?.reasoning_tokens, 300);
+    expect("total_tokens = prompt + completion", thought?.total_tokens, 4549);
     resetUsage();
 
     if (failures > 0) {
