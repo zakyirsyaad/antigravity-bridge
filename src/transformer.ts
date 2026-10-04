@@ -84,6 +84,22 @@ export class Transformer {
   }
 
   /**
+   * Anthropic's usage object from Google's usageMetadata.
+   *
+   * Anthropic defines `output_tokens` as INCLUDING thinking. Google's
+   * `candidatesTokenCount` is the visible answer only, so a request that spent
+   * 2,730 tokens thinking was reported as having produced 2. Summed here, the
+   * same arithmetic `openaiUsage()` does for `completion_tokens`; thinking is
+   * billed as output either way.
+   */
+  public static anthropicUsage(meta: any): { input_tokens: number; output_tokens: number } {
+    return {
+      input_tokens: meta?.promptTokenCount || 0,
+      output_tokens: (meta?.candidatesTokenCount || 0) + (meta?.thoughtsTokenCount || 0),
+    };
+  }
+
+  /**
    * OpenAI's usage object from Google's usageMetadata.
    *
    * OpenAI defines `completion_tokens` as INCLUDING reasoning, with
@@ -724,10 +740,7 @@ export class Transformer {
       model: originalModel,
       stop_reason: stopReason,
       stop_sequence: null,
-      usage: {
-        input_tokens: raw.usageMetadata?.promptTokenCount || 0,
-        output_tokens: raw.usageMetadata?.candidatesTokenCount || 0,
-      },
+      usage: Transformer.anthropicUsage(raw.usageMetadata),
     };
   }
 

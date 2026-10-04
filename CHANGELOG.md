@@ -1,5 +1,38 @@
 # Changelog
 
+## 2.2.1
+
+### Fixed: Anthropic `output_tokens` left out the thinking
+
+2.2.0 fixed this for OpenAI's `completion_tokens` and recorded the Anthropic side
+as a known inconsistency. This closes it. Anthropic defines `output_tokens` as
+*including* thinking; Google's `candidatesTokenCount` is the visible answer only,
+so a request that spent thousands of tokens reasoning was reported as having
+produced a handful.
+
+- **Non-streaming**: `output_tokens` is now `candidatesTokenCount +
+  thoughtsTokenCount`.
+- **Streaming**: it was an estimate from the length of the text actually emitted,
+  and what is emitted for thinking is a short summary, not the tokens spent. It now
+  takes Google's own figure, thinking included, and keeps the estimate only as the
+  fallback for when upstream reports nothing.
+
+This is a visible change: **`output_tokens` goes up on models that think**, which
+is also what they were billed as. For a turn that did not think nothing moves, apart
+from the streamed figure now being Google's count rather than a guess.
+
+Checked against ground truth rather than against itself. The local bridge serves
+only this check, so its tracker deltas are exact:
+
+```
+Claude Code (streaming)  output_tokens = 3576    tracker: 163 visible + 3413 thinking = 3576
+curl (non-streaming)     output_tokens = 1955    tracker:   1 visible + 1954 thinking = 1955
+```
+
+`bridge:usage` is unaffected: it stores visible output and thinking in separate
+columns, so the non-streaming handler subtracts the thinking back out before
+recording, exactly as the OpenAI one learned to in 2.2.0. `test:usage` guards it.
+
 ## 2.2.0
 
 ### Changed: OpenAI usage now counts reasoning, and itemises it
