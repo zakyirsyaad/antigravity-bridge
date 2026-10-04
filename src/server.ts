@@ -605,7 +605,17 @@ export class BridgeServer {
           `event: message_delta\ndata: ${JSON.stringify({
             type: "message_delta",
             delta: { stop_reason: sawToolUse ? "tool_use" : "end_turn", stop_sequence: null },
-            usage: { output_tokens: outputTokens },
+            usage: {
+              output_tokens: outputTokens,
+              // message_start had to go out before the first chunk arrived, when the
+              // prompt size was unknowable, so it said 0 and nothing ever corrected it:
+              // clients saw zero context in use, with no meter and no auto-compact.
+              // This is the first moment the figure exists. Omitted rather than zeroed
+              // when upstream never reported it — a client reads 0 as an answer.
+              ...(typeof streamUsage?.promptTokenCount === "number"
+                ? { input_tokens: streamUsage.promptTokenCount }
+                : {}),
+            },
           })}\n\n`
         );
 

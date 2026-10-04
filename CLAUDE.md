@@ -48,7 +48,7 @@ Everything else runs offline — no account, no network, no quota — by stubbin
 
 | Script | Guards |
 |---|---|
-| `test:stream` | SSE framing: turn terminators, parallel tool-call indices |
+| `test:stream` | SSE framing: turn terminators, parallel tool-call indices, prompt size in `message_delta` |
 | `test:security` | management API leaks no OAuth tokens; cross-origin rejected |
 | `test:refresh` | token refresh is bound to its own account, not the active one |
 | `test:launchagent` | project-root resolution; `install()` rejects a bad root |
@@ -93,6 +93,13 @@ Streaming is **not** handled by the transformer. `server.ts` hand-writes both SS
 (`handleAnthropicMessages` / `handleOpenAIChatCompletions`) directly from the Antigravity part
 stream. A change to non-streaming output shape usually needs a mirrored change in the streaming
 branch, and vice versa — they share no code.
+
+One consequence worth knowing: the Anthropic `message_start` is written before the first chunk
+arrives, so anything only upstream's `usageMetadata` can tell you — the prompt size — can only go out
+in `message_delta`. It used to say `input_tokens: 0` and nothing ever corrected it, so Claude Code and
+T3 saw zero context in use (no meter, no auto-compact). `message_delta` now carries
+`input_tokens`, omitted rather than zeroed when upstream never reported it. The OpenAI stream still
+emits no usage chunk at all.
 
 ### Failover model (`antigravity-client.ts`)
 
