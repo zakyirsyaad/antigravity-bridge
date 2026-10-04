@@ -79,7 +79,7 @@ async function runTests() {
   console.log(`✓ Server started on port ${TEST_PORT} (upstream + tracker stubbed)\n`);
 
   try {
-    console.log("[1/5] Non-streaming /v1/chat/completions records real token counts ...");
+    console.log("[1/7] Non-streaming /v1/chat/completions records real token counts ...");
     recorded = [];
     await post("/v1/chat/completions", { model: MODEL, messages: [{ role: "user", content: "x" }] });
     expect("recordUsage calls", recorded.length, 1);
@@ -87,19 +87,19 @@ async function runTests() {
     expect("input tokens", recorded[0]?.input, 11);
     expect("output tokens", recorded[0]?.output, 22);
 
-    console.log("\n[2/5] Streaming /v1/chat/completions records an estimate ...");
+    console.log("\n[2/7] Streaming /v1/chat/completions records an estimate ...");
     recorded = [];
     await post("/v1/chat/completions", { model: MODEL, stream: true, messages: [{ role: "user", content: "x" }] });
     expect("recordUsage calls", recorded.length, 1);
     expect("model", recorded[0]?.model, MODEL);
     expect("output tokens estimated above zero", (recorded[0]?.output ?? 0) > 0, true);
 
-    console.log("\n[3/5] Anthropic endpoint still records (no regression) ...");
+    console.log("\n[3/7] Anthropic endpoint still records (no regression) ...");
     recorded = [];
     await post("/v1/messages", { model: MODEL, messages: [{ role: "user", content: "x" }] });
     expect("recordUsage calls", recorded.length, 1);
 
-    console.log("\n[4/5] The response counts reasoning inside completion_tokens, and itemises it ...");
+    console.log("\n[4/7] The response counts reasoning inside completion_tokens, and itemises it ...");
     // OpenAI defines completion_tokens as INCLUDING reasoning, with reasoning_tokens
     // as the subset. Reporting 300 reasoning beside 22 completion would be an
     // impossible pair that no client could subtract sensibly.
@@ -111,7 +111,7 @@ async function runTests() {
     expect("reasoning_tokens itemised", reasoned.usage?.completion_tokens_details?.reasoning_tokens, 300);
     expect("total_tokens = prompt + completion", reasoned.usage?.total_tokens, 333);
 
-    console.log("\n[5/5] ... without double counting it in the tracker, or inventing it when there is none ...");
+    console.log("\n[5/7] ... without double counting it in the tracker, or inventing it when there is none ...");
     // recordUsage takes visible output and thoughts as separate columns. Feeding it
     // the new completion_tokens would count the reasoning twice in bridge:usage.
     expect("tracker output stays the visible 22", recorded[0]?.output, 22);
@@ -122,6 +122,24 @@ async function runTests() {
     expect("no reasoning: completion_tokens unchanged", plain.usage?.completion_tokens, 22);
     expect("no reasoning: reasoning_tokens is 0", plain.usage?.completion_tokens_details?.reasoning_tokens, 0);
     expect("no reasoning: total unchanged", plain.usage?.total_tokens, 33);
+
+    console.log("\n[6/7] The Anthropic response counts thinking inside output_tokens ...");
+    // Anthropic defines output_tokens as including thinking. Google's
+    // candidatesTokenCount is the visible answer only, so the two are summed — the
+    // same arithmetic the OpenAI path already does for completion_tokens.
+    upstreamThoughts = 300;
+    recorded = [];
+    const thought = await postJson("/v1/messages", { model: MODEL, max_tokens: 1024, messages: [{ role: "user", content: "x" }] });
+    expect("input_tokens", thought.usage?.input_tokens, 11);
+    expect("output_tokens = visible 22 + thinking 300", thought.usage?.output_tokens, 322);
+
+    console.log("\n[7/7] ... without double counting it in the tracker, or inflating a turn that did not think ...");
+    expect("tracker output stays the visible 22", recorded[0]?.output, 22);
+    expect("tracker thoughts column carries the 300", recorded[0]?.thoughts, 300);
+
+    upstreamThoughts = 0;
+    const idle = await postJson("/v1/messages", { model: MODEL, max_tokens: 1024, messages: [{ role: "user", content: "x" }] });
+    expect("no thinking: output_tokens unchanged", idle.usage?.output_tokens, 22);
 
     if (failures > 0) {
       throw new Error(`${failures} usage accounting check(s) failed`);

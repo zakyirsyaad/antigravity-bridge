@@ -132,7 +132,8 @@ send and holds back 8,192 tokens for the visible answer. Tune that with
 truncated. `npm run bridge:usage` reports the reasoning tokens actually consumed. OpenAI responses
 count reasoning inside `completion_tokens` and itemise it in
 `completion_tokens_details.reasoning_tokens`, as OpenAI does; for a stream, ask for it with
-`stream_options: { include_usage: true }`.
+`stream_options: { include_usage: true }`. Anthropic responses count it inside `output_tokens`, as
+Anthropic does, so the figure Claude Code shows is what the request really cost.
 
 ### Renamed ids
 

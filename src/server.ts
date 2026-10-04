@@ -606,7 +606,10 @@ export class BridgeServer {
             type: "message_delta",
             delta: { stop_reason: sawToolUse ? "tool_use" : "end_turn", stop_sequence: null },
             usage: {
-              output_tokens: outputTokens,
+              // Google's own figure when it reported one, thinking included — the
+              // text-length estimate only sees the short summary that is emitted, not
+              // the thousands of tokens spent. The estimate stays as the fallback.
+              output_tokens: (streamUsage?.candidatesTokenCount || outputTokens) + (streamUsage?.thoughtsTokenCount || 0),
               // message_start had to go out before the first chunk arrived, when the
               // prompt size was unknowable, so it said 0 and nothing ever corrected it:
               // clients saw zero context in use, with no meter and no auto-compact.
@@ -651,11 +654,15 @@ export class BridgeServer {
       // Non-streaming
       const resp = await this.client.generateContent(payload);
       const formatted = Transformer.antigravityToAnthropic(resp, requestedModel);
+      // The tracker keeps visible output and thinking in separate columns, while
+      // the response's output_tokens now includes the thinking — so take it back
+      // out, or bridge:usage would count every thought twice.
+      const thoughts = BridgeServer.thoughtsTokens(resp);
       UsageTracker.getInstance().recordUsage(
         requestedModel,
         formatted.usage?.input_tokens || 0,
-        formatted.usage?.output_tokens || 0,
-        BridgeServer.thoughtsTokens(resp)
+        (formatted.usage?.output_tokens || 0) - thoughts,
+        thoughts
       );
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify(formatted));

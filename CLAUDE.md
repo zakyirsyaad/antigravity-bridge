@@ -54,7 +54,7 @@ Everything else runs offline — no account, no network, no quota — by stubbin
 | `test:launchagent` | project-root resolution; `install()` rejects a bad root |
 | `test:budget` | thinking budget fits inside the caller's `max_tokens` |
 | `test:schema` | schema keywords are dropped, not hoisted into `properties` |
-| `test:usage` | both protocols record usage; OpenAI responses include reasoning in `completion_tokens` without double counting it in the tracker |
+| `test:usage` | both protocols record usage; both report reasoning inside their output figure without double counting it in the tracker |
 | `test:storage` | malformed accounts file does not throw |
 | `test:auth` | non-loopback callers need a key; a proxy confers no exemption |
 | `test:models` | id resolution: exact, retired, approximated, and rejected |
@@ -244,9 +244,15 @@ Google keeps them apart (`candidatesTokenCount` is the visible answer only), and
 reasoning beside a completion of 22 would be a pair no client could subtract sensibly. Mind the
 consequence: `UsageTracker` stores visible output and reasoning in **separate columns**, so the
 non-streaming handler subtracts the reasoning back out before recording; feed it `completion_tokens`
-as-is and `bridge:usage` counts every thought twice (`test:usage` guards it). The Anthropic
-non-streaming `output_tokens` is still `candidatesTokenCount` alone, i.e. it excludes thinking
-although Anthropic's definition includes it — an inconsistency left alone, not a decision.
+as-is and `bridge:usage` counts every thought twice (`test:usage` guards it).
+
+The Anthropic path does the same arithmetic, because Anthropic also defines `output_tokens` as
+including thinking: `Transformer.anthropicUsage()` for the non-streaming body, and the stream's
+`message_delta` takes Google's `candidatesTokenCount + thoughtsTokenCount` (the old text-length
+estimate only sees the short thinking *summary* that is emitted, not the thousands of tokens spent,
+and survives purely as the fallback when upstream reports nothing). The tracker double-count trap
+applies here too, and the non-streaming Anthropic handler subtracts the thinking back out as well.
+Both protocols now agree: whatever a client reads as output is visible answer plus reasoning.
 
 `thoughtsTokenCount` from Google is recorded via `UsageTracker`, so `bridge:usage` shows reasoning
 actually consumed. That is the number to tune budgets against — a declared budget says nothing about
