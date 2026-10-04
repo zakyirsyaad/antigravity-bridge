@@ -53,6 +53,7 @@ Everything else runs offline — no account, no network, no quota — by stubbin
 | `test:capacity` | a 503 rotates the pool without recording a cooldown; 400 still does not rotate |
 | `test:quota` | a 429 cools the model family that earned it, not the whole account |
 | `test:updater` | `update` refuses dirty worktrees and non-git installs; the release check never throws |
+| `test:effort` | Anthropic `output_config.effort` scales the budget; the default level changes nothing |
 
 When stubbing, keep side effects off the real `~/.zcode` files and off `launchctl` — several suites
 assert that explicitly, and that is deliberate.
@@ -193,8 +194,15 @@ Reasoning config is per model, not global:
 - `Transformer.applyThinkingConfig()` fits the budget inside the caller's `max_tokens`, holding back
   `BRIDGE_ANSWER_RESERVE_TOKENS` (default 8192, clamped to half the window) for the visible answer.
   Thinking tokens are billed as output and count against that cap.
-- On the OpenAI path `reasoning_effort` scales the model's own default (0.25× / 1× / 4×) instead of
-  substituting fixed numbers, so "high" means high *for that model*.
+- Effort scales the model's own default instead of substituting fixed numbers, so "high" means high
+  *for that model*. Both paths share `Transformer.budgetForEffort()` with one scale each, **anchored
+  on that protocol's default level at 1×**: OpenAI `reasoning_effort` is 0.25× / 1× / 4× for
+  low / medium / high; Anthropic `output_config.effort` is 0.25× / 0.5× / 1× / 2× / 4× for
+  low / medium / high / xhigh / max. Claude Code sends `high` on every request whether or not anyone
+  chose it, so mapping the *word* "high" to 4× would have silently quadrupled thinking spend for
+  every fixed-budget model on upgrade. Precedence on the Anthropic path: `thinking: disabled` >
+  `budget_tokens` > `output_config.effort` > the model's declared default. Dynamic (-1) models take
+  1000 / 4000 / dynamic by tier instead.
 
 Retired ids are kept as explicit aliases in `resolveModel()` so existing client configs keep working;
 each points at the model its name claimed, which is often not what it used to resolve to.

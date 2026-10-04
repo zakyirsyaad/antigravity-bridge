@@ -1,5 +1,41 @@
 # Changelog
 
+## 2.1.1
+
+### Fixed: reasoning effort was ignored on the Anthropic API
+
+Claude Code sends `output_config.effort` (`low` … `max`) on every request, beside a
+`thinking: { type: "adaptive" }` block that carries no token count. The bridge only
+read `thinking.budget_tokens`, so effort was dropped: `/effort low` saved nothing,
+and in clients like T3 Code the only reasoning knob was the model id. The OpenAI
+path already honoured `reasoning_effort`.
+
+`output_config.effort` now scales the model's declared budget, and a tiered model
+takes 1,000 / 4,000 / dynamic by level. An explicit `thinking.budget_tokens` or
+`thinking: disabled` still outranks it.
+
+**Doing nothing changes nothing.** Each protocol's *default* level maps to the
+model's own default budget: OpenAI's `medium`, Anthropic's `high`. That matters
+because Claude Code sends `high` on every request whether or not anyone chose it —
+mapping the word to the OpenAI path's 4× would have quadrupled thinking spend on
+every fixed-budget model for every user who merely upgraded. Lower levels save,
+higher levels spend.
+
+| Anthropic `effort` | low | medium | high | xhigh | max |
+|---|---|---|---|---|---|
+| Fixed-budget model | 0.25× | 0.5× | **1×** | 2× | 4× |
+| Tiered / dynamic model | 1,000 | 4,000 | dynamic | dynamic | dynamic |
+
+Verified through Claude Code itself, against a local bridge whose counters nothing
+else touches: `low` produced 719 reasoning tokens and `high` 2,628 on one prompt,
+and 1,734 against 5,239 on another.
+
+The OpenAI path now shares the same helper; its numbers are unchanged.
+
+### Added
+
+- `npm run test:effort` — the mapping, the precedence, and a guard that the OpenAI path did not move.
+
 ## 2.1.0
 
 ### Added: `npm run bridge:update`
