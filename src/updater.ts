@@ -55,6 +55,36 @@ export function compareSemver(a: string, b: string): number {
   return 0;
 }
 
+const LOCKFILE = "package-lock.json";
+const VERSION_LINE = /^[+-]\s*"version":\s*"[^"]*",?\s*$/;
+
+/**
+ * True when the lockfile's only change is its own "version" lines.
+ *
+ * `npm install` — which this command runs — rewrites those two lines to match
+ * package.json, so a lockfile that lags it (this repo's said 1.0.0 for the whole
+ * 2.x series) leaves the checkout dirty after every update, and the next update
+ * then refused on a tree nobody had touched. That rewrite is npm's, not the
+ * user's. Anything else in the file — a resolved URL, an integrity hash — is
+ * treated as theirs.
+ */
+function lockfileDiffIsVersionOnly(run: CommandRunner, cwd: string): boolean {
+  const diff = run("git", ["diff", "-U0", "--", LOCKFILE], cwd);
+  if (diff.status !== 0) return false;
+
+  const changed = diff.stdout
+    .split("\n")
+    .filter((line) => /^[+-]/.test(line) && !/^(\+\+\+|---)/.test(line));
+
+  return changed.length > 0 && changed.every((line) => VERSION_LINE.test(line));
+}
+
+/** Restores the lockfile when npm's version rewrite is the only thing wrong with it. */
+function restoreNpmLockfileRewrite(run: CommandRunner, cwd: string): boolean {
+  if (!lockfileDiffIsVersionOnly(run, cwd)) return false;
+  return run("git", ["checkout", "--", LOCKFILE], cwd).status === 0;
+}
+
 export interface UpdateOptions {
   /** When true the caller reloads the LaunchAgent after a successful update. */
   serviceInstalled?: boolean;
@@ -108,13 +138,22 @@ export function performUpdate(
 
   const dirty = run("git", ["status", "--porcelain"], projectDir);
   if (dirty.status === 0 && dirty.stdout.trim()) {
-    return {
-      ok: false,
-      reloadService: false,
-      message:
-        "Local changes are present, so nothing was pulled — commit or stash them first:\n" +
-        dirty.stdout.trim(),
-    };
+    // A checkout updated by an earlier release may carry exactly one kind of
+    // dirt we caused ourselves: npm's rewrite of the lockfile's version lines.
+    // Not trim()-ed as a whole: porcelain's first column is a space for an
+    // unstaged change, and trimming the output eats it from the first line.
+    const lines = dirty.stdout.split("\n").filter((line) => line.trim());
+    const onlyLockfile = lines.every((line) => line.slice(3).trim() === LOCKFILE);
+
+    if (!(onlyLockfile && restoreNpmLockfileRewrite(run, projectDir))) {
+      return {
+        ok: false,
+        reloadService: false,
+        message:
+          "Local changes are present, so nothing was pulled — commit or stash them first:\n" +
+          dirty.stdout.trim(),
+      };
+    }
   }
 
   const versionBefore = readVersion();
@@ -144,6 +183,10 @@ export function performUpdate(
         (install.stderr || install.stdout).trim(),
     };
   }
+
+  // npm may just have rewritten the lockfile's version lines; leave the tree as
+  // clean as we found it so the next update does not refuse.
+  restoreNpmLockfileRewrite(run, projectDir);
 
   const versionAfter = readVersion();
   const moved = compareSemver(versionAfter, versionBefore) !== 0;
