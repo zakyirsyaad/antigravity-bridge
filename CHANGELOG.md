@@ -1,5 +1,33 @@
 # Changelog
 
+## 2.1.3
+
+### Fixed: streamed responses reported `input_tokens: 0`
+
+The Anthropic stream's `message_start` has to be written before the first chunk
+arrives, when the prompt size is not yet known, so it said `0` — and nothing ever
+corrected it. Claude Code, T3 Code and anything else that reads usage from the
+stream saw zero context in use: no meter, and no auto-compact to fire before a
+long session overran the model's window.
+
+`message_delta`, the last event, now carries `input_tokens` from Google's
+`promptTokenCount`, the first moment the figure exists. It is omitted rather than
+zeroed when upstream never reported one, because a client reads `0` as an answer.
+Usage that Google puts on the final chunk, or inside a `response` wrapper, is read
+too.
+
+Checked with Claude Code itself: the same request that reported `input_tokens: 0`
+before reports 18,785 now, which agrees with an independent estimate (~20,000)
+taken from the request body it sends.
+
+**One visible consequence**: clients that were never told the context size will
+now compact when they approach their assumed window (200,000 tokens unless
+configured otherwise), where before they never did. That is the behaviour they
+were designed for; set `CLAUDE_CODE_MAX_CONTEXT_TOKENS` if your model's real
+window is larger.
+
+Not changed: the OpenAI stream still emits no usage chunk.
+
 ## 2.1.2
 
 ### Fixed: `bridge:update` refused to run a second time

@@ -12,7 +12,13 @@
  *    deltas keyed by index, so parallel calls collapsed into one entry with
  *    concatenated names and unparseable arguments.
  *
- * Streaming is the default for Claude Code, Hermes and Cursor, so both defects
+ * 3. The Anthropic stream reported `input_tokens: 0` forever. message_start has
+ *    to be written before the first chunk arrives, when the prompt size is not
+ *    yet known, and message_delta only ever carried output_tokens. Claude Code
+ *    and T3 therefore saw zero context in use: no meter, and no auto-compact
+ *    to fire before a long session overran the window.
+ *
+ * Streaming is the default for Claude Code, Hermes and Cursor, so these defects
  * hit every primary client while bridge.test.ts stayed green — it exercises
  * tool calling only without `stream: true`.
  *
@@ -39,11 +45,30 @@ const PARALLEL_TOOLS: Part[] = [
 
 /** Parts the stubbed upstream yields for the next request. */
 let nextParts: Part[] = [];
+/** usageMetadata the stub reports, and where it puts it. Null = upstream says nothing. */
+let nextUsage: Record<string, number> | null = null;
+let usageInLastChunk = false;
+let usageWrapped = false;
 
 (AntigravityClient.prototype as any).streamGenerateContent = async () =>
   (async function* () {
-    yield { candidates: [{ content: { parts: nextParts } }] };
+    const wrap = (chunk: any) => (usageWrapped ? { response: chunk } : chunk);
+    const usage = nextUsage ? { usageMetadata: nextUsage } : {};
+    yield wrap({ candidates: [{ content: { parts: nextParts } }], ...(usageInLastChunk ? {} : usage) });
+    // Google reports usage on the final chunk as often as on the first.
+    if (usageInLastChunk && nextUsage) yield wrap({ candidates: [{ content: { parts: [] } }], ...usage });
   })();
+
+function resetUsage() {
+  nextUsage = null;
+  usageInLastChunk = false;
+  usageWrapped = false;
+}
+
+/** The usage object the Anthropic stream's message_delta carried. */
+function anthropicDeltaUsage(sse: string): Record<string, unknown> {
+  return eachEvent(sse).find((e) => e.type === "message_delta")?.usage ?? {};
+}
 
 async function collectSSE(path: string, model: string): Promise<string> {
   const res = await fetch(`http://127.0.0.1:${TEST_PORT}${path}`, {
@@ -157,23 +182,23 @@ async function runTests() {
   console.log(`✓ Server started on port ${TEST_PORT} (upstream stubbed)\n`);
 
   try {
-    console.log("[1/6] Anthropic SSE, turn ending in a tool call ...");
+    console.log("[1/9] Anthropic SSE, turn ending in a tool call ...");
     nextParts = WITH_TOOL;
     expect("stop_reason", anthropicStopReason(await collectSSE("/v1/messages", "gemini-3-flash")), "tool_use");
 
-    console.log("\n[2/6] Anthropic SSE, text-only turn ...");
+    console.log("\n[2/9] Anthropic SSE, text-only turn ...");
     nextParts = TEXT_ONLY;
     expect("stop_reason", anthropicStopReason(await collectSSE("/v1/messages", "gemini-3-flash")), "end_turn");
 
-    console.log("\n[3/6] OpenAI SSE, turn ending in a tool call ...");
+    console.log("\n[3/9] OpenAI SSE, turn ending in a tool call ...");
     nextParts = WITH_TOOL;
     expect("finish_reason", openaiFinishReason(await collectSSE("/v1/chat/completions", "gemini-3-flash")), "tool_calls");
 
-    console.log("\n[4/6] OpenAI SSE, text-only turn ...");
+    console.log("\n[4/9] OpenAI SSE, text-only turn ...");
     nextParts = TEXT_ONLY;
     expect("finish_reason", openaiFinishReason(await collectSSE("/v1/chat/completions", "gemini-3-flash")), "stop");
 
-    console.log("\n[5/6] OpenAI SSE, parallel tool calls keep distinct indices ...");
+    console.log("\n[5/9] OpenAI SSE, parallel tool calls keep distinct indices ...");
     nextParts = PARALLEL_TOOLS;
     const parallelSSE = await collectSSE("/v1/chat/completions", "gemini-3-flash");
     const deltas = openaiToolCallDeltas(parallelSSE);
@@ -189,11 +214,42 @@ async function runTests() {
     expect("call 0 location", parsedLocation(rebuilt.get(0)?.args), "Tokyo");
     expect("call 1 location", parsedLocation(rebuilt.get(1)?.args), "Paris");
 
-    console.log("\n[6/6] Anthropic SSE, parallel tool_use blocks keep distinct indices ...");
+    console.log("\n[6/9] Anthropic SSE, parallel tool_use blocks keep distinct indices ...");
     nextParts = PARALLEL_TOOLS;
     const anthropicParallel = anthropicToolUseIndices(await collectSSE("/v1/messages", "gemini-3-flash"));
     expect("tool_use blocks emitted", anthropicParallel.length, 2);
     expect("block indices are distinct", new Set(anthropicParallel).size, 2);
+
+    console.log("\n[7/9] Anthropic SSE reports the real prompt size ...");
+    nextParts = TEXT_ONLY;
+    nextUsage = { promptTokenCount: 4242, candidatesTokenCount: 7 };
+    const reported = anthropicDeltaUsage(await collectSSE("/v1/messages", "gemini-3-flash"));
+    expect("input_tokens in message_delta", reported.input_tokens, 4242);
+    expect("output_tokens still reported", typeof reported.output_tokens, "number");
+
+    console.log("\n[8/9] ... and does not invent a zero when upstream never said ...");
+    resetUsage();
+    const unknown = anthropicDeltaUsage(await collectSSE("/v1/messages", "gemini-3-flash"));
+    expect("input_tokens omitted, not 0", "input_tokens" in unknown, false);
+    expect("output_tokens still reported", typeof unknown.output_tokens, "number");
+
+    console.log("\n[9/9] ... wherever upstream happens to put it ...");
+    nextUsage = { promptTokenCount: 777 };
+    usageInLastChunk = true;
+    expect(
+      "usage on the final chunk",
+      anthropicDeltaUsage(await collectSSE("/v1/messages", "gemini-3-flash")).input_tokens,
+      777
+    );
+    resetUsage();
+    nextUsage = { promptTokenCount: 555 };
+    usageWrapped = true;
+    expect(
+      "usage inside a response wrapper",
+      anthropicDeltaUsage(await collectSSE("/v1/messages", "gemini-3-flash")).input_tokens,
+      555
+    );
+    resetUsage();
 
     if (failures > 0) {
       throw new Error(`${failures} streaming SSE check(s) failed`);
