@@ -237,6 +237,17 @@ It refuses rather than guesses:
 - **Not a git checkout?** It says so instead of emitting a cryptic git error.
 - **Diverged branch?** Only a fast-forward is accepted; the checkout is left untouched.
 
+Stuck on `Local changes are present` with **only** `package-lock.json` listed? Releases 2.1.0 and
+2.1.1 had a bug that left that file modified after every update — npm rewrote its `version` lines —
+so the *next* update refused. The updater you are running cannot rescue itself, so once:
+
+```bash
+git checkout -- package-lock.json && npm run bridge:update
+```
+
+From 2.1.2 on it restores that file itself, but only when the version lines are the sole change.
+Edit anything else in the lockfile and it stays yours and is still refused.
+
 If you run the bridge some other way, restart it yourself after updating:
 
 | How you run it | Restart |

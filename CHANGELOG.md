@@ -1,5 +1,41 @@
 # Changelog
 
+## 2.1.2
+
+### Fixed: `bridge:update` refused to run a second time
+
+The update command shipped in 2.1.0 worked once, and then refused every time
+after with `Local changes are present` on a tree nobody had touched.
+
+The committed `package-lock.json` still said version `1.0.0` — it had never been
+touched through the whole 2.x series. The `npm install` that `update` runs
+rewrote those two `version` lines to match `package.json`, which dirtied the
+checkout, which the next update correctly refused to build on. It affected every
+user, not one server: the first update always passed, so the case I verified was
+exactly the one that could not fail.
+
+- The lockfile now tracks `package.json`, and `test:updater` asserts it, so a
+  version bump that forgets `npm install --package-lock-only` fails a test
+  instead of shipping.
+- `update` restores a lockfile whose **only** change is its own `version` lines —
+  before pulling, for checkouts an older release already dirtied, and after
+  installing. Any other edit to the file is the user's: it is left alone and still
+  refused.
+- Reading `git status` was also subtly wrong: trimming the whole output ate the
+  leading space of ` M package-lock.json`, so the filename never matched. Found
+  by the new suite, which is why it runs against real porcelain output too.
+
+**If you are already stuck on 2.1.0 or 2.1.1** the updater you are running cannot
+rescue itself. Once:
+
+```bash
+git checkout -- package-lock.json && npm run bridge:update
+```
+
+Verified against a real git repository with a real remote and a real `npm
+install` — including the second consecutive update, a checkout inherited dirty
+from the old updater, and a genuine user edit to the lockfile (kept, and refused).
+
 ## 2.1.1
 
 ### Fixed: reasoning effort was ignored on the Anthropic API

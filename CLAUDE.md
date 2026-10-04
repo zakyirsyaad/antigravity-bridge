@@ -22,6 +22,15 @@ other people's checkouts, so its refusals are the feature. `status` additionally
 latest release — advisory, 3s timeout, silent on every failure. **`start` must never make that call**;
 a daemon that waits on the network to boot is a daemon that fails to boot.
 
+**Bumping the version means syncing the lockfile**: run `npm install --package-lock-only` after
+editing `package.json`'s `version` (`test:updater` asserts the two agree). The committed lockfile said
+`1.0.0` through the entire 2.x series, so the `npm install` that `update` runs rewrote two `version`
+lines and left the checkout dirty — and the *next* update refused, forever, on a tree nobody had
+touched. `update` now restores a lockfile whose only change is those lines (before pulling, for
+checkouts an older release already dirtied, and after installing), and still refuses any other edit
+to it. Do not "fix" this by switching to `npm ci` or `--no-package-lock`: the first wipes `node_modules`
+under a running daemon, the second drops the lockfile's pinning.
+
 ### Testing
 
 All suites are hand-rolled sequential scripts, not a framework. They share a house style: a local
@@ -52,7 +61,7 @@ Everything else runs offline — no account, no network, no quota — by stubbin
 | `test:signature` | thinking history is dropped for Claude targets, kept for Gemini |
 | `test:capacity` | a 503 rotates the pool without recording a cooldown; 400 still does not rotate |
 | `test:quota` | a 429 cools the model family that earned it, not the whole account |
-| `test:updater` | `update` refuses dirty worktrees and non-git installs; the release check never throws |
+| `test:updater` | `update` refuses dirty worktrees and non-git installs, tolerates only npm's own lockfile version rewrite; the release check never throws; the lockfile tracks package.json |
 | `test:effort` | Anthropic `output_config.effort` scales the budget; the default level changes nothing |
 
 When stubbing, keep side effects off the real `~/.zcode` files and off `launchctl` — several suites
