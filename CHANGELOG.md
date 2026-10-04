@@ -1,5 +1,37 @@
 # Changelog
 
+## 2.1.4
+
+### Fixed: the OpenAI stream never reported usage
+
+`/v1/chat/completions` with `stream: true` sent no usage at all, so any client
+that meters from the stream — the OpenAI SDKs that ask for it with
+`stream_options: { include_usage: true }` — got silence. It is the same family of
+gap that 2.1.3 closed for the Anthropic stream, on the other protocol.
+
+The OpenAI contract is followed exactly: when `include_usage` is set, one extra
+chunk with `choices: []` and `usage: { prompt_tokens, completion_tokens,
+total_tokens }` is sent after the finish chunk and before `[DONE]`. Without the
+option nothing changes, as the spec requires. When upstream never reported a
+prompt size the chunk is left out rather than zeroed, because a client reads `0`
+as an answer.
+
+Checked with the OpenAI Python SDK 2.24.0 (the copy in Hermes's venv), which
+parsed the chunk and read `prompt_tokens=7, completion_tokens=2, total_tokens=9`.
+A request without the option returned no usage, as it should. Other SDK versions
+were not tried; the chunk follows the documented shape, but that is the extent of
+the claim.
+
+`completion_tokens` is Google's `candidatesTokenCount`, matching the non-streaming
+path; reasoning tokens are not folded in or broken out.
+
+### Documented
+
+`CLAUDE.md` now records an asymmetry that makes logs easy to misread: the
+Anthropic handler obtains the upstream stream before writing `200`, so an
+exhausted pool is a real error status, while the OpenAI handler writes `200`
+first and reports the same failure as an event inside it.
+
 ## 2.1.3
 
 ### Fixed: streamed responses reported `input_tokens: 0`

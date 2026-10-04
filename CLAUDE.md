@@ -48,7 +48,7 @@ Everything else runs offline — no account, no network, no quota — by stubbin
 
 | Script | Guards |
 |---|---|
-| `test:stream` | SSE framing: turn terminators, parallel tool-call indices, prompt size in `message_delta` |
+| `test:stream` | SSE framing: turn terminators, parallel tool-call indices, prompt size in `message_delta`, OpenAI `include_usage` chunk |
 | `test:security` | management API leaks no OAuth tokens; cross-origin rejected |
 | `test:refresh` | token refresh is bound to its own account, not the active one |
 | `test:launchagent` | project-root resolution; `install()` rejects a bad root |
@@ -98,8 +98,16 @@ One consequence worth knowing: the Anthropic `message_start` is written before t
 arrives, so anything only upstream's `usageMetadata` can tell you — the prompt size — can only go out
 in `message_delta`. It used to say `input_tokens: 0` and nothing ever corrected it, so Claude Code and
 T3 saw zero context in use (no meter, no auto-compact). `message_delta` now carries
-`input_tokens`, omitted rather than zeroed when upstream never reported it. The OpenAI stream still
-emits no usage chunk at all.
+`input_tokens`, omitted rather than zeroed when upstream never reported it. The OpenAI stream follows
+OpenAI's contract instead: one extra chunk (`choices: []` plus the totals) after the finish chunk and
+before `[DONE]`, sent **only** when the caller sets `stream_options.include_usage`, and left out
+rather than zeroed when upstream reported no prompt size.
+
+The two handlers also differ in *when* they commit: the Anthropic one obtains the upstream stream
+first and only then writes `200`, so an exhausted pool is a real error status; the OpenAI one writes
+`200` first, so the same failure arrives as an in-band `data: {"error": ...}` event inside a `200`.
+Read nginx status codes with that in mind — a `200` on `/v1/chat/completions` proves nothing about
+success, while on `/v1/messages` it does.
 
 ### Failover model (`antigravity-client.ts`)
 

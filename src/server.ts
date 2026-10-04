@@ -681,9 +681,8 @@ export class BridgeServer {
 
       try {
         const stream = await this.client.streamGenerateContent(payload);
-        // Estimated like the Anthropic streaming path: the SSE frames carry no
-        // usage metadata, so both protocols approximate rather than one of them
-        // silently reporting nothing.
+        // A rough estimate, kept only as the fallback for when upstream reports no
+        // completion count; the real figures arrive in `streamUsage` below.
         let outputTokens = 0;
         // Position of the next tool call within this turn. OpenAI clients
         // accumulate tool_call deltas keyed by this index, so parallel calls
@@ -785,6 +784,31 @@ export class BridgeServer {
             ],
           })}\n\n`
         );
+
+        // OpenAI's contract: only when the caller asks (stream_options.include_usage),
+        // one extra chunk with `choices: []` and the totals, after the finish chunk
+        // and before [DONE]. SDKs that want a meter ask for it and were getting
+        // silence. Left out — not zeroed — when upstream never reported a prompt
+        // size, because a client takes 0 for an answer.
+        if (body.stream_options?.include_usage === true && typeof streamUsage?.promptTokenCount === "number") {
+          const promptTokens = streamUsage.promptTokenCount;
+          const completionTokens = streamUsage.candidatesTokenCount || outputTokens;
+          res.write(
+            `data: ${JSON.stringify({
+              id: cmplId,
+              object: "chat.completion.chunk",
+              created,
+              model: requestedModel,
+              choices: [],
+              usage: {
+                prompt_tokens: promptTokens,
+                completion_tokens: completionTokens,
+                total_tokens: promptTokens + completionTokens,
+              },
+            })}\n\n`
+          );
+        }
+
         res.write("data: [DONE]\n\n");
         res.end();
 
