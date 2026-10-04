@@ -112,10 +112,19 @@ the name. Both are available; the tiered ids give you one model whose effort you
 
 Each model carries its own default budget, so the same request reasons differently per model.
 
-- **Anthropic API**: `thinking: { budget_tokens: N }`, or `thinking: { type: "disabled" }`.
-- **OpenAI API**: `reasoning_effort` scales that model's default — `low` is a quarter of it,
-  `medium` is it, `high` is four times it. On a tiered model it selects the tier instead:
-  `low` = 1,000, `medium` = 4,000, `high` = dynamic. `reasoning_tokens: N` sets an exact figure.
+- **Anthropic API**: `thinking: { budget_tokens: N }` sets an exact figure, or
+  `thinking: { type: "disabled" }` turns reasoning off. Otherwise `output_config.effort` — which
+  Claude Code sends on every request — scales that model's default: `low` is a quarter of it,
+  `medium` a half, `high` **is it**, `xhigh` double, `max` four times. In Claude Code that is
+  `/effort`, or `effortLevel` in its settings.
+- **OpenAI API**: `reasoning_effort` scales the same default — `low` is a quarter of it,
+  `medium` **is it**, `high` is four times it. `reasoning_tokens: N` sets an exact figure.
+- **Tiered models** (`gemini-3.8-flash-tiered` and friends) have no fixed default, so effort selects
+  the tier instead on either API: `low` = 1,000, `medium` = 4,000, `high` and above = dynamic.
+
+Each protocol's *default* level is the model's own default, deliberately: Claude Code sends
+`high` even when nobody chose it, and OpenAI clients default to `medium`. Doing nothing therefore
+changes nothing — lower levels save, higher levels spend.
 
 Thinking tokens count against `max_tokens`, so the bridge fits the budget inside whatever cap you
 send and holds back 8,192 tokens for the visible answer. Tune that with

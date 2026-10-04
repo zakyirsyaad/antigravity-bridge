@@ -35,6 +35,55 @@ export class Transformer {
   }
 
   /**
+   * What a dynamic model (declared budget -1) does at each tier. Its tier is
+   * chosen per request rather than baked into the id, so effort has to mean
+   * something here: mirror the budgets Google uses for the equivalent fixed
+   * tiers, and let the top stay dynamic so the model reasons as far as it wants.
+   */
+  private static readonly DYNAMIC_TIERS: Record<string, number> = { low: 1000, medium: 4000, high: -1 };
+
+  /**
+   * Effort scales multiply the model's own declared budget, so "high" means high
+   * *for that model*. Each is anchored on its protocol's DEFAULT level at 1x:
+   * OpenAI's default is "medium", Anthropic's is "high" — Claude Code sends it on
+   * every request whether or not anyone chose it. Anchoring on the word instead
+   * would have quadrupled thinking spend for every user who merely upgraded.
+   * Lower saves, higher spends, and doing nothing changes nothing.
+   */
+  private static readonly OPENAI_EFFORT: Record<string, { factor: number; tier: string }> = {
+    minimal: { factor: 0.25, tier: "low" },
+    low: { factor: 0.25, tier: "low" },
+    medium: { factor: 1, tier: "medium" },
+    high: { factor: 4, tier: "high" },
+    xhigh: { factor: 4, tier: "high" },
+    max: { factor: 4, tier: "high" },
+  };
+
+  private static readonly ANTHROPIC_EFFORT: Record<string, { factor: number; tier: string }> = {
+    low: { factor: 0.25, tier: "low" },
+    medium: { factor: 0.5, tier: "medium" },
+    high: { factor: 1, tier: "high" },
+    xhigh: { factor: 2, tier: "high" },
+    max: { factor: 4, tier: "high" },
+  };
+
+  /** The budget an effort level asks for, or undefined when the level means nothing here. */
+  private static budgetForEffort(
+    level: unknown,
+    scale: Record<string, { factor: number; tier: string }>,
+    model: ModelDef
+  ): number | undefined {
+    if (typeof level !== "string") return undefined;
+    const entry = scale[level.trim().toLowerCase()];
+    if (!entry) return undefined;
+
+    const declared = model.thinkingBudget ?? -1;
+    return declared < 0
+      ? this.DYNAMIC_TIERS[entry.tier]
+      : Math.max(1, Math.round(declared * entry.factor));
+  }
+
+  /**
    * Fit the thinking budget inside the caller's output cap.
    *
    * Thinking tokens are billed as output tokens and count against
@@ -311,6 +360,13 @@ export class Transformer {
       // global number: the models differ by an order of magnitude, and several
       // size their reasoning dynamically.
       let budget = model.thinkingBudget ?? -1;
+
+      // Claude Code sends effort on every request, beside an `adaptive` thinking
+      // block that carries no token count — so this is the only place its
+      // reasoning knob arrives. Anything explicit below still outranks it.
+      const fromEffort = this.budgetForEffort(body.output_config?.effort, this.ANTHROPIC_EFFORT, model);
+      if (fromEffort !== undefined) budget = fromEffort;
+
       if (body.thinking) {
         if (body.thinking.type === "disabled") {
           budget = 0;
@@ -469,25 +525,15 @@ export class Transformer {
       const reasoningTokens = body.reasoning_tokens || body.extra_body?.reasoning_tokens;
 
       // Scale the model's own default rather than substituting fixed numbers,
-      // so "high" means high *for this model*. A dynamic model (-1) keeps
-      // choosing for itself unless the caller names a token count.
-      // A dynamic model (-1) is exactly the case where effort has to mean
-      // something: its tier is chosen per request, not baked into the id. Mirror
-      // the budgets Google uses for the equivalent fixed tiers, and let "high"
-      // stay dynamic so the model can reason as far as it wants.
-      const DYNAMIC_TIERS: Record<string, number> = { low: 1000, medium: 4000, high: -1 };
-      const scaled = (factor: number, tier: keyof typeof DYNAMIC_TIERS) =>
-        declared < 0 ? DYNAMIC_TIERS[tier] : Math.max(1, Math.round(declared * factor));
+      // so "high" means high *for this model*; see OPENAI_EFFORT. A caller who
+      // names a token count outranks any level.
       if (typeof reasoningTokens === "number" && reasoningTokens > 0) {
         budget = reasoningTokens;
-      } else if (effort === "low" || effort === "minimal") {
-        budget = scaled(0.25, "low");
-      } else if (effort === "medium") {
-        budget = scaled(1, "medium");
-      } else if (effort === "high" || effort === "xhigh" || effort === "max") {
-        budget = scaled(4, "high");
       } else if (effort === "none" || effort === "off" || effort === "disabled") {
         budget = 0;
+      } else {
+        const fromEffort = this.budgetForEffort(effort, this.OPENAI_EFFORT, model);
+        if (fromEffort !== undefined) budget = fromEffort;
       }
 
       this.applyThinkingConfig(generationConfig, budget, model);
