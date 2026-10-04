@@ -18,6 +18,11 @@
  *    and T3 therefore saw zero context in use: no meter, and no auto-compact
  *    to fire before a long session overran the window.
  *
+ * 4. The OpenAI stream sent no usage at all. The contract is one extra chunk —
+ *    `choices: []` plus the totals — before [DONE], and only when the caller
+ *    asks with `stream_options.include_usage`. The SDKs ask by default when
+ *    they want a meter, and got silence.
+ *
  * Streaming is the default for Claude Code, Hermes and Cursor, so these defects
  * hit every primary client while bridge.test.ts stayed green — it exercises
  * tool calling only without `stream: true`.
@@ -65,12 +70,17 @@ function resetUsage() {
   usageWrapped = false;
 }
 
+/** Every OpenAI chunk that carries a `usage` object, in order. */
+function openaiUsageChunks(sse: string): any[] {
+  return eachEvent(sse).filter((ev) => ev.usage && typeof ev.usage === "object");
+}
+
 /** The usage object the Anthropic stream's message_delta carried. */
 function anthropicDeltaUsage(sse: string): Record<string, unknown> {
   return eachEvent(sse).find((e) => e.type === "message_delta")?.usage ?? {};
 }
 
-async function collectSSE(path: string, model: string): Promise<string> {
+async function collectSSE(path: string, model: string, extra: Record<string, unknown> = {}): Promise<string> {
   const res = await fetch(`http://127.0.0.1:${TEST_PORT}${path}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -78,6 +88,7 @@ async function collectSSE(path: string, model: string): Promise<string> {
       model,
       stream: true,
       messages: [{ role: "user", content: "x" }],
+      ...extra,
     }),
   });
   return await res.text();
@@ -182,23 +193,23 @@ async function runTests() {
   console.log(`✓ Server started on port ${TEST_PORT} (upstream stubbed)\n`);
 
   try {
-    console.log("[1/9] Anthropic SSE, turn ending in a tool call ...");
+    console.log("[1/12] Anthropic SSE, turn ending in a tool call ...");
     nextParts = WITH_TOOL;
     expect("stop_reason", anthropicStopReason(await collectSSE("/v1/messages", "gemini-3-flash")), "tool_use");
 
-    console.log("\n[2/9] Anthropic SSE, text-only turn ...");
+    console.log("\n[2/12] Anthropic SSE, text-only turn ...");
     nextParts = TEXT_ONLY;
     expect("stop_reason", anthropicStopReason(await collectSSE("/v1/messages", "gemini-3-flash")), "end_turn");
 
-    console.log("\n[3/9] OpenAI SSE, turn ending in a tool call ...");
+    console.log("\n[3/12] OpenAI SSE, turn ending in a tool call ...");
     nextParts = WITH_TOOL;
     expect("finish_reason", openaiFinishReason(await collectSSE("/v1/chat/completions", "gemini-3-flash")), "tool_calls");
 
-    console.log("\n[4/9] OpenAI SSE, text-only turn ...");
+    console.log("\n[4/12] OpenAI SSE, text-only turn ...");
     nextParts = TEXT_ONLY;
     expect("finish_reason", openaiFinishReason(await collectSSE("/v1/chat/completions", "gemini-3-flash")), "stop");
 
-    console.log("\n[5/9] OpenAI SSE, parallel tool calls keep distinct indices ...");
+    console.log("\n[5/12] OpenAI SSE, parallel tool calls keep distinct indices ...");
     nextParts = PARALLEL_TOOLS;
     const parallelSSE = await collectSSE("/v1/chat/completions", "gemini-3-flash");
     const deltas = openaiToolCallDeltas(parallelSSE);
@@ -214,26 +225,26 @@ async function runTests() {
     expect("call 0 location", parsedLocation(rebuilt.get(0)?.args), "Tokyo");
     expect("call 1 location", parsedLocation(rebuilt.get(1)?.args), "Paris");
 
-    console.log("\n[6/9] Anthropic SSE, parallel tool_use blocks keep distinct indices ...");
+    console.log("\n[6/12] Anthropic SSE, parallel tool_use blocks keep distinct indices ...");
     nextParts = PARALLEL_TOOLS;
     const anthropicParallel = anthropicToolUseIndices(await collectSSE("/v1/messages", "gemini-3-flash"));
     expect("tool_use blocks emitted", anthropicParallel.length, 2);
     expect("block indices are distinct", new Set(anthropicParallel).size, 2);
 
-    console.log("\n[7/9] Anthropic SSE reports the real prompt size ...");
+    console.log("\n[7/12] Anthropic SSE reports the real prompt size ...");
     nextParts = TEXT_ONLY;
     nextUsage = { promptTokenCount: 4242, candidatesTokenCount: 7 };
     const reported = anthropicDeltaUsage(await collectSSE("/v1/messages", "gemini-3-flash"));
     expect("input_tokens in message_delta", reported.input_tokens, 4242);
     expect("output_tokens still reported", typeof reported.output_tokens, "number");
 
-    console.log("\n[8/9] ... and does not invent a zero when upstream never said ...");
+    console.log("\n[8/12] ... and does not invent a zero when upstream never said ...");
     resetUsage();
     const unknown = anthropicDeltaUsage(await collectSSE("/v1/messages", "gemini-3-flash"));
     expect("input_tokens omitted, not 0", "input_tokens" in unknown, false);
     expect("output_tokens still reported", typeof unknown.output_tokens, "number");
 
-    console.log("\n[9/9] ... wherever upstream happens to put it ...");
+    console.log("\n[9/12] ... wherever upstream happens to put it ...");
     nextUsage = { promptTokenCount: 777 };
     usageInLastChunk = true;
     expect(
@@ -249,6 +260,50 @@ async function runTests() {
       anthropicDeltaUsage(await collectSSE("/v1/messages", "gemini-3-flash")).input_tokens,
       555
     );
+    resetUsage();
+
+    console.log("\n[10/12] OpenAI SSE sends a usage chunk when asked, after the finish chunk ...");
+    nextParts = TEXT_ONLY;
+    nextUsage = { promptTokenCount: 4242, candidatesTokenCount: 7 };
+    const asked = await collectSSE("/v1/chat/completions", "gemini-3-flash", { stream_options: { include_usage: true } });
+    const askedUsage = openaiUsageChunks(asked);
+    expect("exactly one usage chunk", askedUsage.length, 1);
+    expect("prompt_tokens", askedUsage[0]?.usage?.prompt_tokens, 4242);
+    expect("completion_tokens", askedUsage[0]?.usage?.completion_tokens, 7);
+    expect("total_tokens", askedUsage[0]?.usage?.total_tokens, 4249);
+    expect("choices is an empty array", JSON.stringify(askedUsage[0]?.choices), "[]");
+    const askedEvents = eachEvent(asked);
+    expect("it is the last event before [DONE]", askedEvents[askedEvents.length - 1]?.usage?.prompt_tokens, 4242);
+    expect("the finish chunk still precedes it", askedEvents[askedEvents.length - 2]?.choices?.[0]?.finish_reason, "stop");
+    expect("stream still ends with [DONE]", asked.trim().endsWith("data: [DONE]"), true);
+
+    console.log("\n[11/12] ... and stays silent when not asked, even though upstream reported it ...");
+    expect(
+      "no stream_options -> no usage chunk",
+      openaiUsageChunks(await collectSSE("/v1/chat/completions", "gemini-3-flash")).length,
+      0
+    );
+    expect(
+      "include_usage: false -> no usage chunk",
+      openaiUsageChunks(
+        await collectSSE("/v1/chat/completions", "gemini-3-flash", { stream_options: { include_usage: false } })
+      ).length,
+      0
+    );
+
+    console.log("\n[12/12] ... and never invents a zero when upstream never said ...");
+    resetUsage();
+    const silent = await collectSSE("/v1/chat/completions", "gemini-3-flash", { stream_options: { include_usage: true } });
+    expect("no usage chunk rather than a zeroed one", openaiUsageChunks(silent).length, 0);
+    expect("the turn still finishes", openaiFinishReason(silent), "stop");
+    expect("and still terminates", silent.trim().endsWith("data: [DONE]"), true);
+
+    resetUsage();
+    nextParts = WITH_TOOL;
+    nextUsage = { promptTokenCount: 99, candidatesTokenCount: 3 };
+    const withTool = await collectSSE("/v1/chat/completions", "gemini-3-flash", { stream_options: { include_usage: true } });
+    expect("usage does not disturb tool_calls finish_reason", openaiFinishReason(withTool), "tool_calls");
+    expect("usage is still delivered", openaiUsageChunks(withTool)[0]?.usage?.prompt_tokens, 99);
     resetUsage();
 
     if (failures > 0) {
