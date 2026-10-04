@@ -84,6 +84,33 @@ export class Transformer {
   }
 
   /**
+   * OpenAI's usage object from Google's usageMetadata.
+   *
+   * OpenAI defines `completion_tokens` as INCLUDING reasoning, with
+   * `completion_tokens_details.reasoning_tokens` as the subset of it. Google
+   * keeps them apart (`candidatesTokenCount` is the visible answer only), so the
+   * two are summed here; reporting 300 reasoning beside a completion of 22 would
+   * be a pair no client could subtract sensibly. It is also what thinking is
+   * billed as: output.
+   */
+  public static openaiUsage(meta: any): {
+    prompt_tokens: number;
+    completion_tokens: number;
+    total_tokens: number;
+    completion_tokens_details: { reasoning_tokens: number };
+  } {
+    const prompt = meta?.promptTokenCount || 0;
+    const reasoning = meta?.thoughtsTokenCount || 0;
+    const completion = (meta?.candidatesTokenCount || 0) + reasoning;
+    return {
+      prompt_tokens: prompt,
+      completion_tokens: completion,
+      total_tokens: prompt + completion,
+      completion_tokens_details: { reasoning_tokens: reasoning },
+    };
+  }
+
+  /**
    * Fit the thinking budget inside the caller's output cap.
    *
    * Thinking tokens are billed as output tokens and count against
@@ -762,11 +789,7 @@ export class Transformer {
           finish_reason: finishReason,
         },
       ],
-      usage: {
-        prompt_tokens: raw.usageMetadata?.promptTokenCount || 0,
-        completion_tokens: raw.usageMetadata?.candidatesTokenCount || 0,
-        total_tokens: (raw.usageMetadata?.promptTokenCount || 0) + (raw.usageMetadata?.candidatesTokenCount || 0),
-      },
+      usage: Transformer.openaiUsage(raw.usageMetadata),
     };
   }
 }

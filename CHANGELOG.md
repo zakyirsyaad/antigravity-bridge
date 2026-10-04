@@ -1,5 +1,43 @@
 # Changelog
 
+## 2.2.0
+
+### Changed: OpenAI usage now counts reasoning, and itemises it
+
+OpenAI responses gain `completion_tokens_details.reasoning_tokens`, in both the
+non-streaming body and the `include_usage` stream chunk.
+
+**`completion_tokens` goes up on reasoning models, and that is the point.**
+OpenAI defines it as *including* reasoning, with `reasoning_tokens` as the subset.
+Google keeps them apart — `candidatesTokenCount` is the visible answer only — so
+the bridge reported `completion_tokens: 2` for a request that spent 2,730 tokens
+thinking. Adding the detail without folding the reasoning in would have produced
+`reasoning_tokens: 2730` beside `completion_tokens: 2`, a pair nobody can
+subtract. Both figures now follow OpenAI's definition, and `total_tokens` is
+`prompt_tokens + completion_tokens`:
+
+```
+prompt=38  completion=2731  reasoning=2730  total=2769     (visible answer = 1)
+```
+
+Reasoning is billed as output, so this is also the number that matches the cost.
+A client that budgets on `completion_tokens` will see larger values than before
+for reasoning models; for a model that did not think, nothing moves
+(`reasoning_tokens: 0`).
+
+`bridge:usage` is unaffected: the tracker keeps visible output and reasoning in
+separate columns, and the non-streaming handler now subtracts the reasoning back
+out before recording, so it is not counted twice. `test:usage` guards this.
+
+Not changed: the Anthropic non-streaming `output_tokens` is still
+`candidatesTokenCount` alone, which excludes thinking although Anthropic's
+definition includes it. It is an inconsistency, not a decision, and is recorded
+in `CLAUDE.md`.
+
+Checked with the OpenAI Python SDK 2.24.0 on a prompt that makes the model think:
+non-streaming and streaming both returned `reasoning_tokens` inside
+`completion_tokens`, and `total_tokens == prompt_tokens + completion_tokens`.
+
 ## 2.1.4
 
 ### Fixed: the OpenAI stream never reported usage
