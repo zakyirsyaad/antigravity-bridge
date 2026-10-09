@@ -38,6 +38,23 @@ function appendDescriptionHint(schema: any, hint: string): any {
   return { ...schema, description: newDescription };
 }
 
+const isStringEnum = (values: unknown[]): boolean => values.every((v) => typeof v === "string");
+
+/** The JSON Schema type a list of values implies, for a schema that never said. */
+function inferEnumType(values: unknown[]): string {
+  if (values.every((v) => typeof v === "boolean")) return "boolean";
+  if (values.every((v) => typeof v === "number")) {
+    return values.every((v) => Number.isInteger(v)) ? "integer" : "number";
+  }
+  return "string";
+}
+
+/** The one `type` every option of a union declares, if they agree. */
+function sharedOptionType(options: any[]): string | undefined {
+  const types = new Set(options.map((o) => (o && typeof o.type === "string" ? o.type : undefined)));
+  return types.size === 1 ? [...types][0] : undefined;
+}
+
 function convertRefsToHints(schema: any): any {
   if (!schema || typeof schema !== "object") return schema;
   if (Array.isArray(schema)) return schema.map(convertRefsToHints);
@@ -145,14 +162,14 @@ function flattenAnyOfOneOf(schema: any): any {
     if (Array.isArray(result[unionKey]) && result[unionKey].length > 0) {
       const options = result[unionKey];
       // Check if enum pattern
-      const enumValues: string[] = [];
+      const enumValues: unknown[] = [];
       let isEnumPattern = true;
       for (const opt of options) {
         if (opt && typeof opt === "object") {
           if (opt.const !== undefined) {
-            enumValues.push(String(opt.const));
+            enumValues.push(opt.const);
           } else if (Array.isArray(opt.enum)) {
-            enumValues.push(...opt.enum.map(String));
+            enumValues.push(...opt.enum);
           } else {
             isEnumPattern = false;
             break;
@@ -165,7 +182,16 @@ function flattenAnyOfOneOf(schema: any): any {
 
       if (isEnumPattern && enumValues.length > 0) {
         const { [unionKey]: _, ...rest } = result;
-        result = { ...rest, type: "string", enum: enumValues };
+        if (isStringEnum(enumValues)) {
+          result = { ...rest, type: "string", enum: enumValues };
+        } else {
+          // Not something Google can take as an enum, so foldNonStringEnums will turn
+          // it into a hint. What matters here is that the parameter keeps the type its
+          // options declared: this used to call String() on the values and retype it as
+          // a string, so a model asked for chainId sent "10143" where the server wanted
+          // the number 10143.
+          result = { ...rest, type: sharedOptionType(options) || inferEnumType(enumValues), enum: enumValues };
+        }
         continue;
       }
 
@@ -179,6 +205,44 @@ function flattenAnyOfOneOf(schema: any): any {
   for (const [key, value] of Object.entries(result)) {
     if (typeof value === "object" && value !== null) {
       result[key] = flattenAnyOfOneOf(value);
+    }
+  }
+  return result;
+}
+
+/**
+ * Google's function-declaration `enum` is a list of strings, and a request is
+ * refused outright if any element is not one:
+ *
+ *   Invalid value at '...parameters.properties[2].value.enum[0]' (TYPE_STRING), 10143
+ *
+ * `{ "const": 10143, "type": "number" }` is how an MCP server declares a chain
+ * id, and convertConstToEnum made that `enum: [10143]` with the number intact —
+ * which took down every request carrying the tool, for every client, until the
+ * plugin was removed. An enum that cannot be expressed as strings is dropped and
+ * its values go into the description instead, as every other keyword Google
+ * cannot take already does. The declared type is kept (or inferred from the
+ * values when there was none), so the model still sends a number where a number
+ * is wanted. A genuine string enum is left exactly as it was.
+ */
+function foldNonStringEnums(schema: any): any {
+  if (!schema || typeof schema !== "object") return schema;
+  if (Array.isArray(schema)) return schema.map(foldNonStringEnums);
+
+  let result = { ...schema };
+  if (Array.isArray(result.enum) && !isStringEnum(result.enum)) {
+    const values: unknown[] = result.enum;
+    const { enum: _dropped, ...rest } = result;
+    const hint =
+      values.length === 1
+        ? `must equal ${JSON.stringify(values[0])}`
+        : `one of: ${values.map((v) => JSON.stringify(v)).join(", ")}`;
+    result = appendDescriptionHint({ ...rest, type: rest.type || inferEnumType(values) }, hint);
+  }
+
+  for (const [key, value] of Object.entries(result)) {
+    if (typeof value === "object" && value !== null) {
+      result[key] = foldNonStringEnums(value);
     }
   }
   return result;
@@ -435,6 +499,7 @@ export function cleanJSONSchemaForAntigravity(schema: any): any {
   result = mergeAllOf(result);
   result = flattenAnyOfOneOf(result);
   result = flattenTypeArrays(result);
+  result = foldNonStringEnums(result);
   result = removeUnsupportedKeywords(result);
   result = cleanupRequiredFields(result);
   result = strictSanitizeSchemaKeys(result);
