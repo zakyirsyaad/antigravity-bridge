@@ -24,6 +24,23 @@ async function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/**
+ * An HTTP error answered by Google, with the status kept as data.
+ *
+ * It used to exist only inside the message ("... (400): ..."), so deciding what
+ * to do about a failure meant searching a string for a number. The message text
+ * is unchanged, so the checks that still do that keep working.
+ */
+export class UpstreamError extends Error {
+  public readonly status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = "UpstreamError";
+    this.status = status;
+  }
+}
+
 export class AntigravityClient {
   private oauth: OAuthManager;
 
@@ -150,7 +167,7 @@ export class AntigravityClient {
               hitCapacity = true;
             }
 
-            lastError = new Error(`Antigravity ${endpoint} (${res.status}): ${message}`);
+            lastError = new UpstreamError(res.status, `Antigravity ${endpoint} (${res.status}): ${message}`);
             if (res.status === 400) {
               throw lastError;
             }
@@ -270,7 +287,7 @@ export class AntigravityClient {
               hitCapacity = true;
             }
 
-            lastError = new Error(`Antigravity stream ${endpoint} (${res.status}): ${message}`);
+            lastError = new UpstreamError(res.status, `Antigravity stream ${endpoint} (${res.status}): ${message}`);
             if (res.status === 400) {
               throw lastError;
             }
