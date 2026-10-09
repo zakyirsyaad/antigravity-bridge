@@ -41,9 +41,12 @@ triggered it:
 constants is now a number or boolean in what the model sees, where before it was a
 string enum.
 
-Not changed: the bridge reports this upstream 400 to the client as HTTP 500, so
-clients such as FCC print "usually temporary — try again". It is neither; retrying
-a malformed schema never helps.
+Not changed: an upstream 400 is not reported to the client as a client error.
+Three of the four API paths answer HTTP 500 (`server_error` / `api_error`). The
+OpenAI **stream** — what FCC uses — answers `200` and carries the error as an
+in-band `data: {"error": ...}` event with no type or code, which FCC then labels a
+500 and describes as "usually temporary — try again". It is neither; retrying a
+malformed schema never helps.
 
 ## 2.2.1
 
