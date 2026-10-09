@@ -1,5 +1,48 @@
 # Changelog
 
+## 2.3.0
+
+### Changed: a request Google rejects is now a 400, on every path
+
+When Google answers HTTP 400 — a tool schema it cannot take, a parameter out of
+range — the request itself is wrong and retrying can never help. The bridge did
+not say so:
+
+| Path | before | after |
+|---|---|---|
+| OpenAI non-stream | 500 `server_error` | **400** `invalid_request_error` |
+| OpenAI stream | **200**, error as an in-band event | **400** `invalid_request_error` |
+| Anthropic non-stream | 500 `server_error` | **400** `invalid_request_error` |
+| Anthropic stream | 500 `api_error` | **400** `invalid_request_error` |
+
+The OpenAI stream was the worst of them, and it is the one FCC uses. The handler
+wrote `200` before asking Google anything, so a refused request arrived as an event
+inside a success; FCC labelled it a 500 and printed "usually temporary — try again",
+sending a permanent mistake looking for a transient cause. It now obtains the
+upstream stream first, as the Anthropic handler always did.
+
+The body is `{ "type": "error", "error": { "type": "invalid_request_error",
+"message": ... } }` with Google's own message kept verbatim, because it names what
+to fix (`...parameters.properties[2].value.enum[0]`). OpenAI clients ignore the
+extra top-level `type`; Anthropic clients expect it.
+
+**Only 400 changed.** A 401 is the bridge's credentials, a 429 or 503 is capacity,
+and none of those is the caller's mistake, so they behave exactly as before — which
+means the OpenAI stream still reports *those* as an in-band event inside a `200`.
+That asymmetry is recorded in `CLAUDE.md` rather than hidden. A failure after a
+stream has begun can only ever be in-band.
+
+**Behaviour change for clients**: a client that retried automatically on 5xx will
+no longer retry these, which is the point. A client that parsed the in-band error
+event for this case will now receive an ordinary HTTP error instead.
+
+Underneath, errors from Google are an `UpstreamError` carrying `.status`. It used
+to exist only inside the message text; the text is unchanged.
+
+### Added
+
+- `npm run test:upstream` — the four paths, what must not change, and a failure after streaming began.
+
 ## 2.2.2
 
 ### Fixed: one MCP plugin with a numeric `const` took down every request

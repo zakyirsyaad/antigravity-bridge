@@ -2,12 +2,33 @@ import http from "node:http";
 import crypto from "node:crypto";
 import { BRIDGE_DEFAULT_PORT, SUPPORTED_MODELS } from "./constants";
 import { OAuthManager } from "./oauth";
-import { AntigravityClient } from "./antigravity-client";
+import { AntigravityClient, UpstreamError } from "./antigravity-client";
 import { Transformer, UnknownModelError } from "./transformer";
 import { UsageTracker } from "./usage-tracker";
 import { QuotaService } from "./quota-service";
 import { QuotaTracker } from "./quota-tracker";
 import { getDashboardHtml } from "./dashboard-html";
+
+/**
+ * Google rejected the request itself (HTTP 400): a tool schema it cannot take, a
+ * parameter out of range. Retrying can never help, so the caller is told it is
+ * theirs to fix. Only 400 qualifies — a 401 is our credentials, a 429 or 503 is
+ * capacity, and neither is the caller's mistake.
+ */
+function isUpstreamClientError(err: unknown): err is UpstreamError {
+  return err instanceof UpstreamError && err.status === 400;
+}
+
+/**
+ * Both protocols' clients read `error.type` and `error.message`; the Anthropic
+ * SDKs also expect the top-level `type: "error"`, which OpenAI clients ignore.
+ * Google's own message is kept verbatim, because it names what to fix.
+ */
+function sendInvalidRequest(res: http.ServerResponse, route: string, err: Error): void {
+  console.warn(`[Bridge] ${route}: Google rejected the request (400): ${String(err.message).slice(0, 400)}`);
+  res.writeHead(400, { "Content-Type": "application/json" });
+  res.end(JSON.stringify({ type: "error", error: { type: "invalid_request_error", message: err.message } }));
+}
 
 export class BridgeServer {
   private server: http.Server | null = null;
@@ -429,6 +450,10 @@ export class BridgeServer {
             }
             return;
           }
+          if (isUpstreamClientError(err)) {
+            if (!res.headersSent) sendInvalidRequest(res, pathname, err);
+            return;
+          }
           console.error(`[Bridge Error] ${pathname}:`, err);
           if (!res.headersSent) {
             res.writeHead(500, { "Content-Type": "application/json" });
@@ -633,6 +658,10 @@ export class BridgeServer {
           streamUsage?.thoughtsTokenCount || 0
         );
       } catch (streamErr: any) {
+        if (!res.headersSent && isUpstreamClientError(streamErr)) {
+          sendInvalidRequest(res, "/v1/messages", streamErr);
+          return;
+        }
         console.error("[Stream Error]", streamErr);
         if (res.headersSent) {
           res.write(`event: error\ndata: ${JSON.stringify({ type: "error", error: { message: streamErr.message } })}\n\n`);
@@ -669,6 +698,22 @@ export class BridgeServer {
     }
   }
 
+  private beginOpenAIStream(res: http.ServerResponse): void {
+    res.writeHead(200, {
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+    });
+  }
+
+  /** Reports a failure inside a stream already committed to 200: the only place left to put it. */
+  private endOpenAIStreamWithError(res: http.ServerResponse, err: any): void {
+    console.error("[OpenAI Stream Error]", err);
+    res.write(`data: ${JSON.stringify({ error: { message: err.message } })}\n\n`);
+    res.write("data: [DONE]\n\n");
+    res.end();
+  }
+
   /**
    * Handle OpenAI /v1/chat/completions endpoint
    */
@@ -680,14 +725,27 @@ export class BridgeServer {
     const created = Math.floor(Date.now() / 1000);
 
     if (body.stream) {
-      res.writeHead(200, {
-        "Content-Type": "text/event-stream; charset=utf-8",
-        "Cache-Control": "no-cache",
-        Connection: "keep-alive",
-      });
+      // Obtain the upstream stream BEFORE committing to 200. This handler used to
+      // write the status first, so a request Google refused arrived as an event
+      // inside a success, and clients took a permanent mistake for a transient
+      // fault and retried it. The Anthropic handler already worked in this order.
+      let stream: AsyncIterable<any>;
+      try {
+        stream = await this.client.streamGenerateContent(payload);
+      } catch (err: any) {
+        if (isUpstreamClientError(err)) {
+          sendInvalidRequest(res, "/v1/chat/completions", err);
+          return;
+        }
+        // Any other failure keeps the behaviour it has always had: a 200 that
+        // reports the error in-band.
+        this.beginOpenAIStream(res);
+        this.endOpenAIStreamWithError(res, err);
+        return;
+      }
+      this.beginOpenAIStream(res);
 
       try {
-        const stream = await this.client.streamGenerateContent(payload);
         // A rough estimate, kept only as the fallback for when upstream reports no
         // completion count; the real figures arrive in `streamUsage` below.
         let outputTokens = 0;
@@ -825,10 +883,7 @@ export class BridgeServer {
           streamUsage?.thoughtsTokenCount || 0
         );
       } catch (streamErr: any) {
-        console.error("[OpenAI Stream Error]", streamErr);
-        res.write(`data: ${JSON.stringify({ error: { message: streamErr.message } })}\n\n`);
-        res.write("data: [DONE]\n\n");
-        res.end();
+        this.endOpenAIStreamWithError(res, streamErr);
       }
     } else {
       const resp = await this.client.generateContent(payload);

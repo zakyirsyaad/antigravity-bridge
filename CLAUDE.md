@@ -63,6 +63,7 @@ Everything else runs offline — no account, no network, no quota — by stubbin
 | `test:quota` | a 429 cools the model family that earned it, not the whole account |
 | `test:updater` | `update` refuses dirty worktrees and non-git installs, tolerates only npm's own lockfile version rewrite; the release check never throws; the lockfile tracks package.json |
 | `test:effort` | Anthropic `output_config.effort` scales the budget; the default level changes nothing |
+| `test:upstream` | a request Google rejects (400) is a 400 on all four paths, the OpenAI stream included; every other failure keeps its old shape; a failure after streaming began stays in-band |
 
 When stubbing, keep side effects off the real `~/.zcode` files and off `launchctl` — several suites
 assert that explicitly, and that is deliberate.
@@ -103,18 +104,28 @@ OpenAI's contract instead: one extra chunk (`choices: []` plus the totals) after
 before `[DONE]`, sent **only** when the caller sets `stream_options.include_usage`, and left out
 rather than zeroed when upstream reported no prompt size.
 
-The two handlers also differ in *when* they commit: the Anthropic one obtains the upstream stream
-first and only then writes `200`, so an exhausted pool is a real error status; the OpenAI one writes
-`200` first, so the same failure arrives as an in-band `data: {"error": ...}` event inside a `200`.
-Read nginx status codes with that in mind — a `200` on `/v1/chat/completions` proves nothing about
-success, while on `/v1/messages` it does.
+The two handlers differ in what a failure *before the first byte of the stream* looks like. Both
+answer HTTP 400 `invalid_request_error`, carrying Google's own message, when Google rejected the
+request itself (an `UpstreamError` with `status === 400`: a schema it cannot take, a parameter out of
+range). The OpenAI handler used to write `200` before asking Google anything, which made that
+impossible — the failure arrived as an event inside a success, and FCC described a permanent mistake
+as "usually temporary — try again" — so it now obtains the upstream stream first, as the Anthropic one
+always did. **Only 400 changed.** Every other pre-stream failure is as before: the Anthropic handler
+answers a real 500 (`api_error`), but the OpenAI stream still commits to `200` and reports it as an
+in-band `data: {"error": ...}` event. So read nginx status codes with that in mind: a `200` on
+`/v1/chat/completions` proves nothing about success, while on `/v1/messages` it does. A failure after
+the stream has started can only ever be in-band, on either protocol.
 
 ### Failover model (`antigravity-client.ts`)
 
 Two nested loops per request: an outer loop bounded by pool size, an inner loop over
 `ANTIGRAVITY_ENDPOINTS`. Rules encoded there:
 
-- HTTP 400 throws immediately (client error — retrying another account won't help).
+- HTTP 400 throws immediately (client error — retrying another account won't help) and reaches the
+  caller as a 400, not a 500. Google's errors are `UpstreamError`, which carries `.status` as data;
+  the message still embeds `(400)` and some checks in this file still read it from the text. Do not
+  widen `isUpstreamClientError()` in `server.ts` beyond 400: a 401 is our credentials, a 429/503 is
+  capacity, and none of those is the caller's mistake.
 - HTTP 429 calls `QuotaTracker.record429()` and, if auto-failover is on, rotates to the next
   non-cooling account and retries the whole request.
 - HTTP 503 (`No capacity available for model X on the server`) rotates too, but records **no**
