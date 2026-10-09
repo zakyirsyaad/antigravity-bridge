@@ -53,7 +53,7 @@ Everything else runs offline — no account, no network, no quota — by stubbin
 | `test:refresh` | token refresh is bound to its own account, not the active one |
 | `test:launchagent` | project-root resolution; `install()` rejects a bad root |
 | `test:budget` | thinking budget fits inside the caller's `max_tokens` |
-| `test:schema` | schema keywords are dropped, not hoisted into `properties` |
+| `test:schema` | schema keywords are dropped, not hoisted into `properties`; a non-string enum is folded into the description with its type kept, a string enum is untouched |
 | `test:usage` | both protocols record usage; both report reasoning inside their output figure without double counting it in the tracker |
 | `test:storage` | malformed accounts file does not throw |
 | `test:auth` | non-loopback callers need a key; a proxy confers no exemption |
@@ -157,6 +157,19 @@ Antigravity's protobuf parser rejects most JSON Schema vocabulary. `cleanToolDec
 `format`, `minLength`, etc., folding the semantics into the `description` string as hints, and
 flattens `allOf`/`anyOf`/`oneOf` and type arrays. Tool calling breaks in opaque ways when a keyword
 slips through, so any new tool-schema support belongs here rather than in `transformer.ts`.
+
+**An `enum` that is not all strings never reaches Google.** Its function-declaration `enum` is a list
+of strings, and the whole request is refused (`Invalid value at '...properties[2].value.enum[0]'
+(TYPE_STRING), 10143`) if one element is not. `{"const": 10143, "type": "number"}` — how an MCP
+server declares a chain id — used to become `enum: [10143]` with the number intact, and because a
+client sends *all* its tools on *every* request, three such tools in one plugin took down every call
+for every client, which looked exactly like the gateway being down. `foldNonStringEnums()` now drops
+such an enum, keeps the declared `type` (inferred from the values when there was none) and says the
+values in the description (`must equal 10143`, `one of: 143, 10143`). The `anyOf`/`oneOf`-of-consts
+path used to dodge the refusal with `String()` and retype the parameter as a string, so the model sent
+`"10143"` where the server wanted `10143`; it no longer does. A genuine string enum is untouched. Do
+not "fix" a numeric enum by stringifying it: the model then sends a string, and the tool's own
+validation rejects it.
 
 ### Thought signatures
 

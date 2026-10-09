@@ -1,5 +1,53 @@
 # Changelog
 
+## 2.2.2
+
+### Fixed: one MCP plugin with a numeric `const` took down every request
+
+Google's function-declaration `enum` is a list of strings, and the request is
+refused outright if any element is not one:
+
+```
+Invalid value at 'request.tools[0].function_declarations[260].parameters.properties[2].value.enum[0]' (TYPE_STRING), 10143
+```
+
+`{ "const": 10143, "type": "number" }` is how an MCP server declares a chain id.
+The cleaner turned it into `enum: [10143]` with the number intact. A client sends
+all of its tools on every request, so three such tools in one plugin made every
+call fail, for every client, with nothing to say which tool was at fault. It
+looked like the gateway being down.
+
+A quieter bug sat beside it. A union of consts (`anyOf: [{ const: 143 }, { const:
+10143 }]`) avoided the refusal by calling `String()` on the values and retyping
+the parameter as a string, so a model asked for the chain id sent `"10143"` where
+the server wanted `10143`.
+
+An enum that cannot be expressed as strings is now dropped and its values go into
+the description, the way every other keyword Google cannot take already does
+(`must equal 10143`, `one of: 143, 10143`). The declared type is kept, or inferred
+from the values when there was none, so a number stays a number. A genuine string
+enum is untouched.
+
+Checked against Google with the nine real tool schemas of the plugin that
+triggered it:
+
+| | before | after |
+|---|---|---|
+| all nine tools in one request | HTTP 500, three violations at `property[2]`, `[4]`, `[1]` | HTTP 200 |
+| `chainId` the model sends, union tool | `"10143"` (string) | `10143` (number) |
+| `chainId` the model sends, `const` tool | request refused | `10143` (number) |
+
+**Behaviour change**: a parameter declared as a union of numeric or boolean
+constants is now a number or boolean in what the model sees, where before it was a
+string enum.
+
+Not changed: an upstream 400 is not reported to the client as a client error.
+Three of the four API paths answer HTTP 500 (`server_error` / `api_error`). The
+OpenAI **stream** — what FCC uses — answers `200` and carries the error as an
+in-band `data: {"error": ...}` event with no type or code, which FCC then labels a
+500 and describes as "usually temporary — try again". It is neither; retrying a
+malformed schema never helps.
+
 ## 2.2.1
 
 ### Fixed: Anthropic `output_tokens` left out the thinking
