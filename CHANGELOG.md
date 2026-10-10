@@ -1,5 +1,25 @@
 # Changelog
 
+## 2.3.1
+
+### Fixed: `/v1/models` now says how large each model's window is
+
+The model list carried an id and a few constants, nothing about size. A client that
+sizes its own prompt from the list had to guess, and Onyx guesses 32,000 tokens for
+a model it does not know. With `gemini-3.8-flash-tiered` — a 1,048,576-token
+window — it refused a 54,000-token prompt itself ("Not enough tokens to include the
+last user message… Required: 53902, Available: 27201") before sending anything, so
+the bridge's own logs showed no failure at all.
+
+Every entry now carries `context_length`, taken from the model table, which is
+Google's own metadata. It is the one field name OpenAI-compatible clients agree on
+(Onyx reads it; so do OpenRouter-style listings). The fields that were already
+there are unchanged, so no client sees anything it did not before except the extra
+number.
+
+A client that has already stored a guessed size keeps it until it refreshes its
+model list. In Onyx that means re-fetching the models for the provider.
+
 ## 2.3.0
 
 ### Changed: a request Google rejects is now a 400, on every path

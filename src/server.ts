@@ -416,6 +416,9 @@ export class BridgeServer {
                   permission: [],
                   root: m.id,
                   parent: null,
+                  // What an OpenAI-compatible client sizes its prompt from. Without
+                  // it Onyx assumes 32k and refuses a 54k prompt before it is sent.
+                  context_length: m.contextLimit,
                 })),
               })
             );
