@@ -64,6 +64,7 @@ Everything else runs offline — no account, no network, no quota — by stubbin
 | `test:updater` | `update` refuses dirty worktrees and non-git installs, tolerates only npm's own lockfile version rewrite; the release check never throws; the lockfile tracks package.json |
 | `test:effort` | Anthropic `output_config.effort` scales the budget; the default level changes nothing |
 | `test:upstream` | a request Google rejects (400) is a 400 on all four paths, the OpenAI stream included; every other failure keeps its old shape; a failure after streaming began stays in-band |
+| `test:models-context` | every `/v1/models` entry carries `context_length` from `SUPPORTED_MODELS`; the older fields are unchanged; `/models` answers the same |
 
 When stubbing, keep side effects off the real `~/.zcode` files and off `launchctl` — several suites
 assert that explicitly, and that is deliberate.
@@ -226,6 +227,12 @@ Every field is Google's metadata from `v1internal:fetchAvailableModels`. **Run `
 before editing the table** — it reports ids that no longer exist, metadata that drifted, and
 thinking-capable models Google offers that the bridge does not expose. It needs a logged-in account
 but costs no inference quota.
+
+`/v1/models` advertises each model's `context_length` (from `contextLimit`). OpenAI-compatible
+clients size their own prompts from it, and Onyx assumes 32,000 tokens for a model it does not
+know — it then refuses a 54k prompt *in the client*, so the bridge's logs show no failure at all.
+If a client claims "not enough tokens" for a model with a 1M window, check what it was told
+before looking at the bridge. Keep the field when touching that handler.
 
 Reasoning config is per model, not global:
 
