@@ -15,6 +15,7 @@ import {
   getAntigravityHeaders,
 } from "./constants";
 import { QuotaTracker } from "./quota-tracker";
+import { StallRegistry } from "./upstream-stall";
 
 export interface PoolEvent {
   id: string;
@@ -371,7 +372,11 @@ export class OAuthManager {
       if (!candidate || !candidate.refreshToken) continue;
       if (excludeEmail && candidate.email?.toLowerCase() === excludeEmail.toLowerCase()) continue;
 
-      const isLimited = candidate.email ? tracker.isAccountRateLimited(candidate.email, model) : false;
+      // An account resting after a stall is skipped too, but it is not "limited":
+      // it is not out of quota, and nothing about it is written to the quota file.
+      const isLimited = candidate.email
+        ? tracker.isAccountRateLimited(candidate.email, model) || StallRegistry.isResting(candidate.email)
+        : false;
       if (!isLimited) {
         storage.activeAccountIndex = candidateIdx;
         try {
