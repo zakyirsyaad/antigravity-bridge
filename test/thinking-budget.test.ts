@@ -137,6 +137,37 @@ function runTests() {
   expect("reserve clamped to half", anthropic(PRO_HIGH, { max_tokens: 12000 }).thinkingConfig?.thinking_budget, 6000);
   delete process.env.BRIDGE_ANSWER_RESERVE_TOKENS;
 
+  console.log("\n[8b/8] An agent request can be given a larger output floor, opt-in ...");
+  // OpenDesign's agent asked for one `write` call carrying a ~40,000-token file with a
+  // 16,384 cap. Google drops a function call the cap cuts off, so the bridge saw
+  // text=0 tools=0 and the client reported "empty output". The client's own setting
+  // did not reach that path, so the bridge can raise the floor — only when asked to,
+  // and only for requests that carry tools.
+  const aTools = [{ name: "write", description: "write a file", input_schema: { type: "object", properties: {} } }];
+  const oTools = [{ type: "function", function: { name: "write", description: "write a file", parameters: { type: "object", properties: {} } } }];
+  delete process.env.BRIDGE_TOOL_MIN_OUTPUT_TOKENS;
+  expect("off by default: the caller's cap stands", anthropic(TIERED, { max_tokens: 16384, tools: aTools }).maxOutputTokens, 16384);
+  process.env.BRIDGE_TOOL_MIN_OUTPUT_TOKENS = "65536";
+  expect("anthropic + tools: raised to the floor", anthropic(TIERED, { max_tokens: 16384, tools: aTools }).maxOutputTokens, 65536);
+  expect("openai + tools: raised to the floor", openai(TIERED, { max_tokens: 16384, tools: oTools }).maxOutputTokens, 65536);
+  expect("no tools: the caller's cap stands", anthropic(TIERED, { max_tokens: 16384 }).maxOutputTokens, 16384);
+  expect("empty tools list: the caller's cap stands", anthropic(TIERED, { max_tokens: 16384, tools: [] }).maxOutputTokens, 16384);
+  expect("a larger cap is never lowered", anthropic(TIERED, { max_tokens: 100000, tools: aTools }).maxOutputTokens, 100000);
+  expect("no cap sent: the usual default, not the floor", anthropic(TIERED, { tools: aTools }).maxOutputTokens, 64000);
+  process.env.BRIDGE_TOOL_MIN_OUTPUT_TOKENS = "200000";
+  expect("never above what the model can write", anthropic(TIERED, { max_tokens: 16384, tools: aTools }).maxOutputTokens, 65536);
+  expect("a lower model limit wins (claude, 64000)", anthropic("claude-opus-4-6-thinking", { max_tokens: 16384, tools: aTools }).maxOutputTokens, 64000);
+  for (const junk of ["abc", "-5", "0", ""]) {
+    process.env.BRIDGE_TOOL_MIN_OUTPUT_TOKENS = junk;
+    expect(`ignored when set to "${junk}"`, anthropic(TIERED, { max_tokens: 16384, tools: aTools }).maxOutputTokens, 16384);
+  }
+  // The thinking budget is fitted to the cap that is actually sent: 12000 squeezes a
+  // fixed 10001 budget to 6000, and the raised window gives it back.
+  process.env.BRIDGE_TOOL_MIN_OUTPUT_TOKENS = "65536";
+  expect("budget is fitted to the raised window", anthropic(PRO_HIGH, { max_tokens: 12000, tools: aTools }).thinkingConfig?.thinking_budget, 10001);
+  expect("without the floor it was squeezed", anthropic(PRO_HIGH, { max_tokens: 12000 }).thinkingConfig?.thinking_budget, 6000);
+  delete process.env.BRIDGE_TOOL_MIN_OUTPUT_TOKENS;
+
   console.log("\n[+] A non-thinking model gets no thinkingConfig at all ...");
   const plain = anthropic(PLAIN, { max_tokens: 100 });
   expect("maxOutputTokens", plain.maxOutputTokens, 100);
