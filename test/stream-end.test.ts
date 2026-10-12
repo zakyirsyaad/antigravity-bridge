@@ -66,7 +66,7 @@ function chunk(parts: any[], extra: any = {}, top: any = {}) {
 const USAGE = { usageMetadata: { promptTokenCount: 100, candidatesTokenCount: 5, thoughtsTokenCount: 20 } };
 
 /** Run one request and return the `[Stream End]` warnings it produced. */
-async function run(route: "/v1/messages" | "/v1/chat/completions", upstream: any[]) {
+async function run(route: "/v1/messages" | "/v1/chat/completions", upstream: any[], overrides: Record<string, unknown> = {}) {
   chunks = upstream;
   const warnings: string[] = [];
   const realWarn = console.warn;
@@ -84,6 +84,7 @@ async function run(route: "/v1/messages" | "/v1/chat/completions", upstream: any
         max_tokens: 256,
         stream: true,
         messages: [{ role: "user", content: "x" }],
+        ...overrides,
       }),
     });
     status = res.status;
@@ -154,6 +155,18 @@ async function runTests() {
   ]);
   expect("a blocked prompt: recorded", blocked.ended.length, 1);
   expect("a blocked prompt: names the block reason", (blocked.ended[0] || "").includes("blockReason=SAFETY"), true);
+
+  console.log("\n[5b/6] The line says what the bridge asked Google for ...");
+  // A MAX_TOKENS turn can only be read against the cap and thinking budget that
+  // were sent, and the bridge never received them back.
+  const capped2 = await run("/v1/messages", [chunk([part.thought("t")], { finishReason: "MAX_TOKENS" }, USAGE)], { max_tokens: 1200 });
+  const sent = capped2.ended[0] || "";
+  expect("names the output cap that was sent", sent.includes("maxOut=1200"), true);
+  expect("names the thinking budget that was sent", sent.includes("think=600"), true);
+  const noCap = new StreamEndTally();
+  noCap.observe(chunk([part.text("x")], { finishReason: "MAX_TOKENS" }));
+  const bare = noCap.describe("/v1/messages", "m") || "";
+  expect("a caller that sent nothing is not shown as zero", bare.includes("maxOut=?") && bare.includes("think=?"), true);
 
   console.log("\n[6/6] What the client receives is unchanged ...");
   expect("Anthropic empty answer: still 200", (await run("/v1/messages", [chunk([], { finishReason: "OTHER" })])).status, 200);

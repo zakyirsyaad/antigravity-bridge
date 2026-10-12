@@ -52,12 +52,12 @@ Everything else runs offline — no account, no network, no quota — by stubbin
 | `test:security` | management API leaks no OAuth tokens; cross-origin rejected |
 | `test:refresh` | token refresh is bound to its own account, not the active one |
 | `test:launchagent` | project-root resolution; `install()` rejects a bad root |
-| `test:budget` | thinking budget fits inside the caller's `max_tokens` |
+| `test:budget` | thinking budget fits inside the caller's `max_tokens`; a dynamic model is pinned to its room in a small window and stays dynamic in a large one |
 | `test:schema` | schema keywords are dropped, not hoisted into `properties`; a non-string enum is folded into the description with its type kept, a string enum is untouched |
 | `test:usage` | both protocols record usage; both report reasoning inside their output figure without double counting it in the tracker |
 | `test:storage` | malformed accounts file does not throw |
 | `test:auth` | non-loopback callers need a key; a proxy confers no exemption |
-| `test:models` | id resolution: exact, retired, approximated, and rejected |
+| `test:models` | id resolution: exact, retired, approximated, and rejected; a `provider/` prefix is dropped when the tail is exact |
 | `test:signature` | thinking history is dropped for Claude targets, kept for Gemini |
 | `test:capacity` | a 503 rotates the pool without recording a cooldown; 400 still does not rotate |
 | `test:quota` | a 429 cools the model family that earned it, not the whole account |
@@ -65,7 +65,7 @@ Everything else runs offline — no account, no network, no quota — by stubbin
 | `test:effort` | Anthropic `output_config.effort` scales the budget; the default level changes nothing |
 | `test:upstream` | a request Google rejects (400) is a 400 on all four paths, the OpenAI stream included; every other failure keeps its old shape; a failure after streaming began stays in-band |
 | `test:models-context` | every `/v1/models` entry carries `context_length` from `SUPPORTED_MODELS`; the older fields are unchanged; `/models` answers the same |
-| `test:stream-end` | a stream that ends empty, non-STOP or without a finish reason leaves one `[Stream End]` warning on both routes; a healthy one stays silent; the client's bytes are unchanged |
+| `test:stream-end` | a stream that ends empty, non-STOP or without a finish reason leaves one `[Stream End]` warning (with the `maxOut`/`think` that were sent) on both routes; a healthy one stays silent; the client's bytes are unchanged |
 
 When stubbing, keep side effects off the real `~/.zcode` files and off `launchctl` — several suites
 assert that explicitly, and that is deliberate.
@@ -247,7 +247,11 @@ Reasoning config is per model, not global:
 
 - `thinkingBudget` is Google's declared default. `-1` means the model sizes its own reasoning, and
   the bridge forwards `-1` rather than pinning a number — an explicit budget switches dynamic
-  thinking off.
+  thinking off. **Except in a small window:** when the room left after the answer reserve is under
+  `DYNAMIC_PIN_BELOW` (4096), the budget is pinned to that room. Left at `-1`, a dynamic model spends
+  the whole cap thinking (measured: `max_tokens` 1200 -> 1150 thought, 46 answer) and the turn ends
+  `MAX_TOKENS` with no text, which clients report as empty output — OpenDesign's agent steps hit
+  exactly this, with a ~100k prompt and a small output window.
 - **Tiered ids carry no upstream `displayName`, and that does not make them internal.** Google's
   `tieredModelIds` maps Antigravity's own picker: `flash` -> `gemini-3.8-flash-tiered`. Their tier
   is a per-request parameter, which is why they are dynamic. Filter Google's catalogue on the
@@ -267,6 +271,11 @@ Reasoning config is per model, not global:
   every fixed-budget model on upgrade. Precedence on the Anthropic path: `thinking: disabled` >
   `budget_tokens` > `output_config.effort` > the model's declared default. Dynamic (-1) models take
   1000 / 4000 / dynamic by tier instead.
+
+A `provider/` routing prefix (`open-design-byok/gemini-3.8-flash-tiered`, `openrouter/google/...`)
+is dropped when the tail is an exact or retired id, and the nearest-match guess reads only the model
+name, never the prefix — it used to guess from the whole string, so that id became
+`gemini-3.6-flash-high`, an older generation, and `someprovider/...` matched "pro".
 
 Retired ids are kept as explicit aliases in `resolveModel()` so existing client configs keep working;
 each points at the model its name claimed, which is often not what it used to resolve to.

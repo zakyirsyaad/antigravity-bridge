@@ -22,6 +22,13 @@ export class Transformer {
   private static readonly MIN_THINKING_BUDGET = 1024;
   private static readonly DEFAULT_MAX_OUTPUT_TOKENS = 64000;
   /**
+   * A dynamic model is pinned to its room when the room is smaller than this.
+   * Measured on gemini-3.8-flash-tiered, dynamic reasoning spends roughly 2-2.5k
+   * tokens on a moderately hard prompt and takes whatever is left of a smaller
+   * window; above this the usual caps (Claude Code sends 32000) stay dynamic.
+   */
+  private static readonly DYNAMIC_PIN_BELOW = 4096;
+  /**
    * Tokens held back from the window for the visible answer.
    *
    * Thinking and the answer share maxOutputTokens, so this is the actual knob:
@@ -175,8 +182,18 @@ export class Transformer {
     // -1 asks the model to size its own reasoning. Forward it untouched: pinning
     // a number would switch dynamic thinking off, which is the opposite of what
     // a caller asking for more reasoning wants.
+    //
+    // Except in a small window. Left dynamic, the model reasons until the cap is
+    // gone and the reserve above is a fiction: on gemini-3.8-flash-tiered a cap of
+    // 1200 spent 1150 on thought and left 46 for the answer, 2500 left 97, and a
+    // client got a MAX_TOKENS turn with no text — OpenDesign's "empty output".
+    // Below DYNAMIC_PIN_BELOW of room, pin the budget to the room so the answer
+    // keeps what was held back for it.
     if (requestedBudget < 0) {
-      generationConfig.thinkingConfig = { include_thoughts: true, thinking_budget: -1 };
+      generationConfig.thinkingConfig = {
+        include_thoughts: true,
+        thinking_budget: room < this.DYNAMIC_PIN_BELOW ? room : -1,
+      };
       return;
     }
 
@@ -218,25 +235,44 @@ export class Transformer {
     );
   }
 
+  /** Ids that no longer exist, each pointed at the model its name claimed. */
+  private static readonly RETIRED_IDS: Record<string, string> = {
+    // Was pinned to the Low tier despite the plain name; High is the better default.
+    "gemini-3.1-pro": "gemini-3.1-pro-high",
+    "gemini-3-pro": "gemini-3.1-pro-high",
+    // These five all collapsed onto gemini-3-flash. Point each at the newest
+    // flash tier that matches the effort its name advertised.
+    "gemini-3.8-flash": "gemini-3.8-flash-tiered",
+    "gemini-3.8-flash-high": "gemini-3.8-flash-tiered",
+    "gemini-3.7-flash": "gemini-3.7-flash-tiered",
+    "gemini-3.7-flash-high": "gemini-3.7-flash-tiered",
+    "gemini-2.5-flash": "gemini-3.1-flash-lite",
+  };
+
+  /**
+   * Drop a routing prefix: `open-design-byok/gemini-3.8-flash-tiered` is the model
+   * `gemini-3.8-flash-tiered`, reached through a provider called open-design-byok.
+   * OpenCode and OpenRouter-style clients write ids this way. Only a tail that is
+   * an exact id (or a retired one) counts, so this never invents a match — it used
+   * to be guessed from the whole string and landed on a different model generation.
+   */
+  private static stripRoutingPrefix(id: string): string {
+    const parts = id.split("/");
+    for (let i = 1; i < parts.length; i++) {
+      const tail = parts.slice(i).join("/");
+      if (SUPPORTED_MODELS.some((m) => m.id === tail) || this.RETIRED_IDS[tail]) return tail;
+    }
+    return id;
+  }
+
   public static resolveModel(requestedModel: string): string {
     const raw = (requestedModel || "").toLowerCase().trim();
-    const clean = raw.replace(/^google\//, "").replace(/^antigravity-/, "");
+    const clean = this.stripRoutingPrefix(raw.replace(/^google\//, "").replace(/^antigravity-/, ""));
 
     const exact = SUPPORTED_MODELS.find((m) => m.id === clean || m.name.toLowerCase() === raw);
     if (exact) return exact.id;
 
-    const retired: Record<string, string> = {
-      // Was pinned to the Low tier despite the plain name; High is the better default.
-      "gemini-3.1-pro": "gemini-3.1-pro-high",
-      "gemini-3-pro": "gemini-3.1-pro-high",
-      // These five all collapsed onto gemini-3-flash. Point each at the newest
-      // flash tier that matches the effort its name advertised.
-      "gemini-3.8-flash": "gemini-3.8-flash-tiered",
-      "gemini-3.8-flash-high": "gemini-3.8-flash-tiered",
-      "gemini-3.7-flash": "gemini-3.7-flash-tiered",
-      "gemini-3.7-flash-high": "gemini-3.7-flash-tiered",
-      "gemini-2.5-flash": "gemini-3.1-flash-lite",
-    };
+    const retired = this.RETIRED_IDS;
     if (retired[clean]) {
       // With no GitHub watchers on this project, the software itself is the
       // only thing that will tell an existing user their model changed under
@@ -248,16 +284,19 @@ export class Transformer {
     // Clients legitimately send names the bridge does not list — Claude Code
     // sends Anthropic's own model ids, for instance — so a nearest match is
     // still better than refusing. It just has to be visible.
+    // Guess from the model's own name, not a routing prefix in front of it:
+    // `someprovider/totally-made-up` used to match "pro" in the word "provider".
+    const name = clean.split("/").pop() || clean;
     const guess =
-      clean.includes("claude") && clean.includes("sonnet")
+      name.includes("claude") && name.includes("sonnet")
         ? "claude-sonnet-4-6"
-        : clean.includes("claude")
+        : name.includes("claude")
           ? "claude-opus-4-6-thinking"
-          : clean.includes("pro")
+          : name.includes("pro")
             ? "gemini-3.1-pro-high"
-            : clean.includes("lite")
+            : name.includes("lite")
               ? "gemini-3.1-flash-lite"
-              : clean.includes("flash") || clean.includes("gemini")
+              : name.includes("flash") || name.includes("gemini")
                 ? "gemini-3.6-flash-high"
                 : null;
 
