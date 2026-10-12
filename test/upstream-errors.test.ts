@@ -149,6 +149,50 @@ async function runTests() {
     googleReplies(503, "No capacity");
     const capacity = await caught(() => realGenerate.call(client, payload));
     expect("a 503 carries its own status, not 400", capacity?.status, 503);
+
+    // A 400 for "function call turn comes immediately after a user turn" says nothing
+    // about WHICH turn. The log now carries the shape of the request: roles and part
+    // kinds, never the text of the conversation.
+    googleReplies(400, "Please ensure that function call turn comes immediately after a user turn");
+    const shapePayload: any = {
+      model: "gemini-3.8-flash-tiered",
+      request: {
+        contents: [
+          { role: "model", parts: [{ functionCall: { name: "read_file", args: {} } }] },
+          { role: "user", parts: [{ functionResponse: { name: "read_file", response: { content: "Secret code is 42." } } }] },
+        ],
+      },
+    };
+    for (const [label, call] of [
+      ["generateContent", () => realGenerate.call(client, shapePayload)],
+      ["streamGenerateContent", () => realStream.call(client, shapePayload)],
+    ] as const) {
+      const warned: string[] = [];
+      const realWarn = console.warn;
+      console.warn = (...a: any[]) => {
+        warned.push(a.map(String).join(" "));
+      };
+      try {
+        await caught(call);
+      } finally {
+        console.warn = realWarn;
+      }
+      const line = warned.find((w) => w.includes("[Upstream 400]")) || "";
+      expect(`${label}: logs the request shape on a 400`, line.includes("2 turns: model:call > user:response"), true);
+      expect(`${label}: the log carries no conversation text`, /secret|42/i.test(line), false);
+    }
+    googleReplies(503, "No capacity");
+    const quiet: string[] = [];
+    const realWarn2 = console.warn;
+    console.warn = (...a: any[]) => {
+      quiet.push(a.map(String).join(" "));
+    };
+    try {
+      await caught(() => realGenerate.call(client, shapePayload));
+    } finally {
+      console.warn = realWarn2;
+    }
+    expect("a 503 does not log a request shape", quiet.some((w) => w.includes("[Upstream 400]")), false);
   } finally {
     (globalThis as any).fetch = realFetch;
   }

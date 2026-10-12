@@ -15,9 +15,24 @@
  * Pure transformation — no server, no disk, no network, no quota.
  */
 import { Transformer } from "../src/transformer";
+import { SUPPORTED_MODELS } from "../src/constants";
 
-/** Declared budget 10001, floor 128 — a fixed, generous budget. */
-const PRO_HIGH = "gemini-3.1-pro-high";
+/**
+ * A fixed, generous budget (10001, floor 128). It is a stand-in registered here rather than a real
+ * Google model: this suite checks the arithmetic, and it used to depend on `gemini-3.1-pro-high`,
+ * which Google later stopped serving, so a catalogue change would have rewritten the numbers.
+ */
+SUPPORTED_MODELS.push({
+  id: "test-fixed-budget",
+  name: "Test fixed budget",
+  family: "gemini",
+  contextLimit: 1048576,
+  outputLimit: 65535,
+  supportsThinking: true,
+  thinkingBudget: 10001,
+  minThinkingBudget: 128,
+});
+const PRO_HIGH = "test-fixed-budget";
 /** Declared budget -1: the model sizes its own reasoning. */
 const DYNAMIC = "gemini-3.6-flash-high";
 /** Tier chosen per request rather than baked into the id. */

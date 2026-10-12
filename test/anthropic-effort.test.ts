@@ -18,6 +18,7 @@
  * Pure transformation — no disk, network, credential or quota.
  */
 import { Transformer } from "../src/transformer";
+import { SUPPORTED_MODELS } from "../src/constants";
 
 let failures = 0;
 
@@ -31,7 +32,19 @@ function expect(label: string, actual: unknown, wanted: unknown) {
 }
 
 const DYNAMIC = "gemini-3.8-flash-tiered"; // declared budget -1: sizes its own reasoning
-const FIXED = "gemini-3.1-pro-high"; // declared budget 10001
+// A stand-in rather than a real Google model: this suite checks the scaling, and a catalogue
+// change (Google stopped serving gemini-3.1-pro-high) must not rewrite its numbers.
+SUPPORTED_MODELS.push({
+  id: "test-fixed-budget",
+  name: "Test fixed budget",
+  family: "gemini",
+  contextLimit: 1048576,
+  outputLimit: 65535,
+  supportsThinking: true,
+  thinkingBudget: 10001,
+  minThinkingBudget: 128,
+});
+const FIXED = "test-fixed-budget"; // declared budget 10001
 const NO_THINKING = "gemini-3.1-flash-lite";
 
 /** The thinking_budget that would actually reach Google, or undefined if none. */

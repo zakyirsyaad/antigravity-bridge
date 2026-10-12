@@ -7,6 +7,7 @@ import {
 import { OAuthManager } from "./oauth";
 import { QuotaTracker } from "./quota-tracker";
 import { MAX_STALL_ROTATIONS, StallRegistry, UpstreamStall, stallRestSeconds, upstreamTimeoutMs } from "./upstream-stall";
+import { describeContentsShape } from "./stream-diagnostics";
 
 export interface AntigravityPayload {
   project?: string;
@@ -209,6 +210,8 @@ export class AntigravityClient {
 
             lastError = new UpstreamError(res.status, `Antigravity ${endpoint} (${res.status}): ${message}`);
             if (res.status === 400) {
+              // Google's message names the rule broken, not the turn that broke it.
+              console.warn(`[Upstream 400] request shape: ${describeContentsShape(payload.request?.contents)}`);
               throw lastError;
             }
             continue;
@@ -349,6 +352,8 @@ export class AntigravityClient {
 
             lastError = new UpstreamError(res.status, `Antigravity stream ${endpoint} (${res.status}): ${message}`);
             if (res.status === 400) {
+              // Google's message names the rule broken, not the turn that broke it.
+              console.warn(`[Upstream 400] request shape: ${describeContentsShape(payload.request?.contents)}`);
               throw lastError;
             }
             continue;

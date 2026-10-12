@@ -16,6 +16,46 @@ const CLEAN_FINISH = "STOP";
 /** Google's own explanation can be long; a prefix names the problem. */
 const MAX_FINISH_MESSAGE = 300;
 
+/** What a part is, without what it says. */
+function partKind(part: any): string {
+  if (part?.functionResponse) return "response";
+  if (part?.functionCall) return "call";
+  if (part?.thought) return "thought";
+  if (typeof part?.text === "string") return "text";
+  return "other";
+}
+
+const SHAPE_TURNS_SHOWN = 6;
+
+/**
+ * The roles and part kinds of a conversation, never its text:
+ * `3 turns: model:thought×2+call > user:response > user:text`.
+ *
+ * Google answers a malformed history with a message that says what rule was broken but
+ * not which turn broke it ("function call turn comes immediately after a user turn..."),
+ * and the history itself is private. This is what the bridge logs on a 400, so the next
+ * one can be read. A long history keeps its first and last turns and its true length.
+ */
+export function describeContentsShape(contents: unknown): string {
+  if (!Array.isArray(contents) || contents.length === 0) return "0 turns";
+  const turn = (content: any): string => {
+    const runs: Array<{ kind: string; count: number }> = [];
+    for (const part of content?.parts || []) {
+      const kind = partKind(part);
+      const last = runs[runs.length - 1];
+      if (last && last.kind === kind) last.count++;
+      else runs.push({ kind, count: 1 });
+    }
+    const parts = runs.map((r) => (r.count > 1 ? `${r.kind}×${r.count}` : r.kind)).join("+");
+    return `${content?.role ?? "?"}:${parts || "empty"}`;
+  };
+  const shown =
+    contents.length > SHAPE_TURNS_SHOWN * 2
+      ? `${contents.slice(0, SHAPE_TURNS_SHOWN).map(turn).join(" > ")} … ${contents.slice(-SHAPE_TURNS_SHOWN).map(turn).join(" > ")}`
+      : contents.map(turn).join(" > ");
+  return `${contents.length} ${contents.length === 1 ? "turn" : "turns"}: ${shown}`;
+}
+
 /** The slice of the request's generationConfig that explains a cut-off answer. */
 export interface SentGenerationConfig {
   maxOutputTokens?: number;

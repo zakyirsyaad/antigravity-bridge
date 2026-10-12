@@ -44,7 +44,8 @@ It throws on the first failure, and every step checks the reply's content, not j
 **Use exact model ids in it** (`FLASH`, `FLASH_DYNAMIC`, `PRO`, `CLAUDE` at the top of the file), and
 check them with `npm run bridge:models` first: it used to send retired names such as `gemini-3.1-pro`,
 which the bridge aliased onto a model Google had stopped serving, so a failure looked like a
-`max_tokens` problem when the model was simply gone. `[2/7]` refuses any id it uses that the bridge
+`max_tokens` problem when the model was simply gone. `bridge:models` alone is not enough, because the
+catalogue keeps listing dead ids: the suite's own requests are what prove an id is served. `[2/7]` refuses any id it uses that the bridge
 does not list. The Claude step is reported as SKIPPED, loudly, when Claude's quota is exhausted —
 that says nothing about the bridge — and every other failure still fails the run.
 
@@ -70,6 +71,7 @@ Everything else runs offline — no account, no network, no quota — by stubbin
 | `test:effort` | Anthropic `output_config.effort` scales the budget; the default level changes nothing |
 | `test:upstream` | a request Google rejects (400) is a 400 on all four paths, the OpenAI stream included; every other failure keeps its old shape; a failure after streaming began stays in-band |
 | `test:models-context` | every `/v1/models` entry carries `context_length` from `SUPPORTED_MODELS`; the older fields are unchanged; `/models` answers the same |
+| `test:turns` | a history that opens with a model turn gets a user note in front (both protocols, Claude too) and is otherwise untouched; the logged request shape names roles and part kinds and never carries text |
 | `test:stall` | a request Google never answers rotates to the next account after one timeout (not three), rests the stalled one in memory without a quota cooldown, is bounded to two rotations, and keeps the old in-place retries with one account or failover off |
 | `test:stream-end` | a stream that ends empty, non-STOP or without a finish reason leaves one `[Stream End]` warning (with the `maxOut`/`think` that were sent) on both routes; a healthy one stays silent; a `MAX_TOKENS` turn closes as `max_tokens` / `length` (a complete tool call still wins); everything else the client receives is unchanged |
 
@@ -223,6 +225,17 @@ path used to dodge the refusal with `String()` and retype the parameter as a str
 not "fix" a numeric enum by stringifying it: the model then sends a string, and the tool's own
 validation rejects it.
 
+### History shape
+
+Gemini wants a conversation to open with a user turn: a history whose first turn is a model function
+call is refused with "function call turn comes immediately after a user turn or after a function
+response turn" — verified against Google, the only one of six shapes that produced it. Clients can send
+one (OpenDesign's agent, after a long run, re-sent a history whose earlier messages had been dropped), so
+`ensureStartsWithUser()` puts a short user note in front rather than dropping the calls and responses
+that remain. When Google does reject a request with a 400, the client logs `[Upstream 400] request shape:`
+— roles and part kinds only, never text (`describeContentsShape()`), because the message names the rule
+that broke and not the turn.
+
 ### Thought signatures
 
 Gemini 3 validates a `thoughtSignature` on thinking parts in multi-turn history. The bridge cannot
@@ -267,6 +280,14 @@ Every field is Google's metadata from `v1internal:fetchAvailableModels`. **Run `
 before editing the table** — it reports ids that no longer exist, metadata that drifted, and
 thinking-capable models Google offers that the bridge does not expose. It needs a logged-in account
 but costs no inference quota.
+
+**The catalogue can list an id that no longer works, and `bridge:models` cannot see that.**
+`gemini-3.1-pro-high` stayed in `fetchAvailableModels` with full metadata while Google answered HTTP
+400 "Request contains an invalid argument" to every request for it, on all six accounts and every request
+shape (its working name is `gemini-pro-agent`); the 3.7 and 3.6 tiered ids went 404. Every client that
+asked for "pro" got a 400 and nothing in the bridge said why. Only calling a model proves it is served:
+after editing the table, send each id one tiny request (`npm test` does this for the ones it uses).
+`gemini-2.5-pro` currently answers 503 "no capacity" on every account; that is capacity, not a dead id.
 
 `/v1/models` advertises each model's `context_length` (from `contextLimit`). OpenAI-compatible
 clients size their own prompts from it, and Onyx assumes 32,000 tokens for a model it does not
