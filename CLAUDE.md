@@ -65,6 +65,7 @@ Everything else runs offline — no account, no network, no quota — by stubbin
 | `test:effort` | Anthropic `output_config.effort` scales the budget; the default level changes nothing |
 | `test:upstream` | a request Google rejects (400) is a 400 on all four paths, the OpenAI stream included; every other failure keeps its old shape; a failure after streaming began stays in-band |
 | `test:models-context` | every `/v1/models` entry carries `context_length` from `SUPPORTED_MODELS`; the older fields are unchanged; `/models` answers the same |
+| `test:stall` | a request Google never answers rotates to the next account after one timeout (not three), rests the stalled one in memory without a quota cooldown, is bounded to two rotations, and keeps the old in-place retries with one account or failover off |
 | `test:stream-end` | a stream that ends empty, non-STOP or without a finish reason leaves one `[Stream End]` warning (with the `maxOut`/`think` that were sent) on both routes; a healthy one stays silent; a `MAX_TOKENS` turn closes as `max_tokens` / `length` (a complete tool call still wins); everything else the client receives is unchanged |
 
 When stubbing, keep side effects off the real `~/.zcode` files and off `launchctl` — several suites
@@ -153,7 +154,21 @@ Two nested loops per request: an outer loop bounded by pool size, an inner loop 
   cooldown — capacity is per project, not a quota signal, and parking a healthy account for hours
   over a transient server condition is worse than the failure it replaces. `ANTIGRAVITY_ENDPOINTS`
   holds a single endpoint, so without this a 503 reached the caller on the first try.
-- Before each attempt, a *proactive* check skips the active account if it's already cooling down.
+- **A stall rotates, it does not retry.** Google sometimes accepts a request and never answers — no
+  429, no 503 — in bursts of several minutes on one account, usually after a run of large requests.
+  The wait for the first response is `BRIDGE_UPSTREAM_TIMEOUT_MS` (60 s). When failover is on and the
+  pool has another account, the *first* timeout gives up (`UpstreamStall`), the account is rested in
+  memory for `BRIDGE_STALL_REST_SECONDS` (300 s) and the request goes to the next one, at most
+  `MAX_STALL_ROTATIONS` (2) times, so three accounts and never the whole pool. It used to retry the
+  same account three times, which spent three minutes inside the burst and ended as a 500 — and
+  OpenDesign's run died after three of those in a row with five accounts idle. A single-account pool,
+  or failover off, keeps the old three in-place retries. A reset or dropped connection is quick and
+  local and is still retried in place. Resting lives in `StallRegistry` (`upstream-stall.ts`), **not**
+  in the quota file: the account is not out of quota, and the dashboard's cooldown should keep meaning
+  that. Look for `[Upstream Stall]` in the log; if it fires on every account in turn, the stall is
+  global and rotation cannot help.
+- Before each attempt, a *proactive* check skips the active account if it's already cooling down or
+  resting after a stall.
 - Failover happens before the response is streamed, so a mid-stream 429 is not recovered.
 
 `selectNextAvailableAccount()` mutates `activeAccountIndex` in the accounts file as a side effect —

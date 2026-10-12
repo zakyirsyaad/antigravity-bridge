@@ -1,5 +1,40 @@
 # Changelog
 
+## 2.4.1
+
+### Fixed: an upstream that stops answering no longer costs three minutes on one account
+
+OpenDesign's run finished its design and then died: three requests in a row ended as 500s,
+each exactly three minutes after it started, with five of the six accounts idle. Google
+had accepted the requests and never answered — no 429, no 503 — and the client waited
+60 s, aborted, and retried the **same** account twice more before giving up. The caller's own
+retry then did the same, three times over.
+
+These stalls come in bursts of five to nine minutes on one account, and each one followed a
+run of large requests on it (seven in 70 s, five in 70 s, nine in 80 s). Prompt size and long
+thinking were ruled out by measurement: 100–160k-token prompts and reasoning-heavy questions
+all got their first response in 5–11 s. That the burst belongs to the account, rather than to
+Google as a whole, is the working hypothesis, not a measured fact.
+
+When failover is on and the pool has another account, the **first** timeout now gives up and
+moves on:
+
+- the stalled account is rested in memory for 300 s (`BRIDGE_STALL_REST_SECONDS`) and skipped by
+  pool selection — it is **not** written to the quota file, because it is not out of quota and
+  the dashboard's cooldown should keep meaning that;
+- the request goes to the next account, at most twice, so three accounts and never the whole
+  pool; if all three stall the error says "No response from Google within 60s";
+- each rotation logs `[Upstream Stall] <account> gave no response within 60s; resting it ...`.
+  If that line fires on every account in turn, the stall is global and rotation cannot help.
+
+A single-account pool, or failover turned off, keeps the three in-place retries. A reset or
+dropped connection is quick and local and is still retried in place.
+
+### Added: `BRIDGE_UPSTREAM_TIMEOUT_MS`
+
+The wait for Google's first response, 60000 by default. It covers only that wait; once the
+response starts, the stream is the caller's to read.
+
 ## 2.4.0
 
 The real cause of OpenDesign's "Agent completed without producing any output", found with

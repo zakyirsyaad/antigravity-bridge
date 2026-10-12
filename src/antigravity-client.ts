@@ -6,6 +6,7 @@ import {
 } from "./constants";
 import { OAuthManager } from "./oauth";
 import { QuotaTracker } from "./quota-tracker";
+import { MAX_STALL_ROTATIONS, StallRegistry, UpstreamStall, stallRestSeconds, upstreamTimeoutMs } from "./upstream-stall";
 
 export interface AntigravityPayload {
   project?: string;
@@ -49,29 +50,43 @@ export class AntigravityClient {
   }
 
   /**
-   * Safe fetch with retries on network timeout/drop
+   * Safe fetch with retries on network timeout/drop.
+   *
+   * `onTimeout` says what Google not answering means. "retry" is the old behaviour:
+   * try the same account again, which is all there is to do when the pool has no
+   * other account. "throw" gives up at the first timeout with an UpstreamStall so
+   * the caller can move to another account — a stall comes in bursts on one
+   * account, and two more minutes spent inside it only ended as a 500. A dropped or
+   * reset connection is quick and local, and is retried in place either way.
    */
   private async fetchWithRetry(
     url: string,
     options: RequestInit,
+    onTimeout: "retry" | "throw" = "retry",
     maxRetries: number = 3
   ): Promise<Response> {
     let lastError: any = null;
+    const timeoutMs = upstreamTimeoutMs();
 
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      let timedOut = false;
+      const controller = new AbortController();
+      // Covers the wait for the first response only; once it arrives the stream
+      // is the caller's to read.
+      const timeoutId = setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+      }, timeoutMs);
       try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 60000); // 60s timeout
-
-        const res = await fetch(url, {
+        return await fetch(url, {
           ...options,
           signal: controller.signal,
         });
-
-        clearTimeout(timeoutId);
-        return res;
       } catch (err: any) {
         lastError = err;
+        if (timedOut && onTimeout === "throw") {
+          throw new UpstreamStall(url, timeoutMs);
+        }
         const isNetworkErr =
           err.name === "AbortError" ||
           err.code === "UND_ERR_CONNECT_TIMEOUT" ||
@@ -87,10 +102,27 @@ export class AntigravityClient {
         }
 
         throw err;
+      } finally {
+        clearTimeout(timeoutId);
       }
     }
 
     throw lastError;
+  }
+
+  /**
+   * Rest an account that stalled and move the pool to the next one.
+   * Returns false when there is no other account to move to.
+   */
+  private restAndRotate(stalledEmail: string | undefined, model: string): boolean {
+    StallRegistry.rest(stalledEmail);
+    const next = this.oauth.selectNextAvailableAccount(stalledEmail, model);
+    if (!next) return false;
+    console.warn(
+      `[Upstream Stall] ${stalledEmail ?? "The active account"} gave no response within ` +
+        `${Math.round(upstreamTimeoutMs() / 1000)}s; resting it for ${stallRestSeconds()}s and switching to ${next.email}.`
+    );
+    return true;
   }
 
   /**
@@ -99,16 +131,19 @@ export class AntigravityClient {
   public async generateContent(payload: AntigravityPayload): Promise<any> {
     const totalAccounts = Math.max(1, this.oauth.listAccounts().accounts.length);
     let attempts = 0;
+    let stallRotations = 0;
 
     while (attempts < totalAccounts) {
       attempts++;
 
-      // Proactive check: if current account is in cooldown, switch proactively
+      // Proactive check: if current account is in cooldown, or resting after a
+      // stall, switch proactively
       let account = this.oauth.loadSavedAccount();
       if (
         this.oauth.isAutoFailoverEnabled() &&
         account?.email &&
-        QuotaTracker.getInstance().isAccountRateLimited(account.email, payload.model)
+        (QuotaTracker.getInstance().isAccountRateLimited(account.email, payload.model) ||
+          StallRegistry.isResting(account.email))
       ) {
         const nextAcc = this.oauth.selectNextAvailableAccount(account.email, payload.model);
         if (nextAcc) {
@@ -130,6 +165,11 @@ export class AntigravityClient {
       let lastError: any = null;
       let hit429 = false;
       let hitCapacity = false;
+      let stalled = false;
+      // Whether this pool has anywhere to go if Google stops answering. When it
+      // does, the first timeout gives up; when it does not, retrying in place is
+      // all there is.
+      const poolRotates = this.oauth.isAutoFailoverEnabled() && totalAccounts > 1;
 
       for (const endpoint of ANTIGRAVITY_ENDPOINTS) {
         const url = `${endpoint}/v1internal:generateContent`;
@@ -142,7 +182,7 @@ export class AntigravityClient {
               ...getAntigravityHeaders(),
             },
             body: JSON.stringify(requestBody),
-          });
+          }, poolRotates ? "throw" : "retry");
 
           if (!res.ok) {
             const errText = await res.text();
@@ -178,6 +218,9 @@ export class AntigravityClient {
           return data;
         } catch (e: any) {
           lastError = e;
+          if (e instanceof UpstreamStall) {
+            stalled = true;
+          }
           if (e.message?.includes("(400)")) {
             throw e;
           }
@@ -187,6 +230,15 @@ export class AntigravityClient {
           if (e.message?.includes("(503)")) {
             hitCapacity = true;
           }
+          continue;
+        }
+      }
+
+      // Google stopped answering: leave this account for another one, a bounded
+      // number of times, rather than spend the request waiting inside the burst.
+      if (stalled && poolRotates && stallRotations < MAX_STALL_ROTATIONS) {
+        if (this.restAndRotate(currentAccount?.email, payload.model)) {
+          stallRotations++;
           continue;
         }
       }
@@ -218,16 +270,19 @@ export class AntigravityClient {
   ): Promise<AsyncIterable<any>> {
     const totalAccounts = Math.max(1, this.oauth.listAccounts().accounts.length);
     let attempts = 0;
+    let stallRotations = 0;
 
     while (attempts < totalAccounts) {
       attempts++;
 
-      // Proactive check: if current account is in cooldown, switch proactively
+      // Proactive check: if current account is in cooldown, or resting after a
+      // stall, switch proactively
       let account = this.oauth.loadSavedAccount();
       if (
         this.oauth.isAutoFailoverEnabled() &&
         account?.email &&
-        QuotaTracker.getInstance().isAccountRateLimited(account.email, payload.model)
+        (QuotaTracker.getInstance().isAccountRateLimited(account.email, payload.model) ||
+          StallRegistry.isResting(account.email))
       ) {
         const nextAcc = this.oauth.selectNextAvailableAccount(account.email, payload.model);
         if (nextAcc) {
@@ -249,6 +304,11 @@ export class AntigravityClient {
       let lastError: any = null;
       let hit429 = false;
       let hitCapacity = false;
+      let stalled = false;
+      // Whether this pool has anywhere to go if Google stops answering. When it
+      // does, the first timeout gives up; when it does not, retrying in place is
+      // all there is.
+      const poolRotates = this.oauth.isAutoFailoverEnabled() && totalAccounts > 1;
 
       for (const endpoint of ANTIGRAVITY_ENDPOINTS) {
         const url = `${endpoint}/v1internal:streamGenerateContent?alt=sse`;
@@ -262,7 +322,7 @@ export class AntigravityClient {
               ...getAntigravityHeaders(),
             },
             body: JSON.stringify(requestBody),
-          });
+          }, poolRotates ? "throw" : "retry");
 
           if (!res.ok) {
             const errText = await res.text();
@@ -301,6 +361,9 @@ export class AntigravityClient {
           return this.parseSSEStream(res.body);
         } catch (e: any) {
           lastError = e;
+          if (e instanceof UpstreamStall) {
+            stalled = true;
+          }
           if (e.message?.includes("(400)")) {
             throw e;
           }
@@ -310,6 +373,13 @@ export class AntigravityClient {
           if (e.message?.includes("(503)")) {
             hitCapacity = true;
           }
+          continue;
+        }
+      }
+
+      if (stalled && poolRotates && stallRotations < MAX_STALL_ROTATIONS) {
+        if (this.restAndRotate(currentAccount?.email, payload.model)) {
+          stallRotations++;
           continue;
         }
       }
