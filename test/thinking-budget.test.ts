@@ -81,9 +81,33 @@ function runTests() {
   expect("still gets a default window", dynNoCap.maxOutputTokens, 64000);
   expect("still dynamic", dynNoCap.thinkingConfig?.thinking_budget, -1);
   // This model's floor is 32, so a 100-token window still has room (50). Only
-  // below twice the floor does dynamic thinking actually get switched off.
-  expect("still dynamic at 100", anthropic(DYNAMIC, { max_tokens: 100 }).thinkingConfig?.thinking_budget, -1);
+  // below twice the floor does thinking actually get switched off. At 100 the room
+  // is pinned rather than left dynamic: see [5b/8].
+  expect("pinned to the room at 100", anthropic(DYNAMIC, { max_tokens: 100 }).thinkingConfig?.thinking_budget, 50);
   expect("no room -> disabled", anthropic(DYNAMIC, { max_tokens: 50 }).thinkingConfig?.thinking_budget, 0);
+
+  console.log("\n[5b/8] A dynamic model cannot spend a small cap entirely on thinking ...");
+  // Forwarding -1 lets the model reason until the window is gone: measured on
+  // gemini-3.8-flash-tiered, max_tokens 1200 spent 1150 on thought and left 46 for
+  // the answer, and OpenDesign got a MAX_TOKENS turn with no text ("empty output").
+  // Below DYNAMIC_PIN_BELOW of room the budget is pinned to the room instead, so
+  // the reserve held back for the answer is real.
+  for (const [cap, room] of [[1200, 600], [2500, 1250], [4096, 2048], [6000, 3000]] as const) {
+    const cfg = anthropic(TIERED, { max_tokens: cap });
+    expect(`cap ${cap}: budget pinned to the room`, cfg.thinkingConfig?.thinking_budget, room);
+    expect(`cap ${cap}: still thinking`, cfg.thinkingConfig?.include_thoughts, true);
+    expect(`cap ${cap}: the caller's cap is untouched`, cfg.maxOutputTokens, cap);
+    expect(`cap ${cap}: answer reserve is real`, cap - (cfg.thinkingConfig?.thinking_budget as number) >= room, true);
+  }
+  expect("openai path pins too", openai(TIERED, { max_tokens: 1200 }).thinkingConfig?.thinking_budget, 600);
+  expect("a roomier cap stays dynamic (8192 -> 4096 room)", anthropic(TIERED, { max_tokens: 8192 }).thinkingConfig?.thinking_budget, -1);
+  expect("Claude Code's usual cap stays dynamic", anthropic(TIERED, { max_tokens: 32000 }).thinkingConfig?.thinking_budget, -1);
+  expect("no cap at all stays dynamic", anthropic(TIERED).thinkingConfig?.thinking_budget, -1);
+  expect("an explicit budget still wins over the pin", anthropic(TIERED, { max_tokens: 4096, thinking: { budget_tokens: 500 } }).thinkingConfig?.thinking_budget, 500);
+  expect("thinking disabled is still disabled", anthropic(TIERED, { max_tokens: 4096, thinking: { type: "disabled" } }).thinkingConfig?.thinking_budget, 0);
+  process.env.BRIDGE_ANSWER_RESERVE_TOKENS = "500";
+  expect("a smaller reserve leaves more to think with", anthropic(TIERED, { max_tokens: 2500 }).thinkingConfig?.thinking_budget, 2000);
+  delete process.env.BRIDGE_ANSWER_RESERVE_TOKENS;
 
   console.log("\n[6/8] Explicit caller budgets and disabling still win ...");
   expect("explicit budget", anthropic(PRO_HIGH, { max_tokens: 64000, thinking: { budget_tokens: 2048 } }).thinkingConfig?.thinking_budget, 2048);

@@ -16,6 +16,12 @@ const CLEAN_FINISH = "STOP";
 /** Google's own explanation can be long; a prefix names the problem. */
 const MAX_FINISH_MESSAGE = 300;
 
+/** The slice of the request's generationConfig that explains a cut-off answer. */
+export interface SentGenerationConfig {
+  maxOutputTokens?: number;
+  thinkingConfig?: { thinking_budget?: number };
+}
+
 export class StreamEndTally {
   text = 0;
   thinking = 0;
@@ -49,7 +55,7 @@ export class StreamEndTally {
    * Bad means: no finish reason at all (the stream may have been cut), any reason
    * other than a clean STOP, a blocked prompt, or nothing a client can use.
    */
-  describe(route: string, model: string): string | null {
+  describe(route: string, model: string, sent?: SentGenerationConfig): string | null {
     const usable = this.text > 0 || this.tools > 0;
     const clean = this.finishReason === CLEAN_FINISH && !this.blockReason;
     if (clean && usable) return null;
@@ -61,6 +67,9 @@ export class StreamEndTally {
       ...(this.blockReason ? [`blockReason=${this.blockReason}`] : []),
       `text=${this.text} thinking=${this.thinking} tools=${this.tools}`,
       `prompt=${figure(this.usage?.promptTokenCount)} candidates=${figure(this.usage?.candidatesTokenCount)} thoughts=${figure(this.usage?.thoughtsTokenCount)}`,
+      // What the bridge asked for. A MAX_TOKENS turn only reads against the cap and
+      // the thinking budget that were sent; "?" means the caller sent none.
+      `maxOut=${figure(sent?.maxOutputTokens)} think=${figure(sent?.thinkingConfig?.thinking_budget)}`,
       ...(this.finishMessage
         ? [`finishMessage=${JSON.stringify(this.finishMessage.slice(0, MAX_FINISH_MESSAGE))}`]
         : []),
@@ -69,8 +78,8 @@ export class StreamEndTally {
   }
 
   /** Log the description as a warning when there is one. */
-  warn(route: string, model: string): void {
-    const line = this.describe(route, model);
+  warn(route: string, model: string, sent?: SentGenerationConfig): void {
+    const line = this.describe(route, model, sent);
     if (line) console.warn(line);
   }
 }

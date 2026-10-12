@@ -1,5 +1,50 @@
 # Changelog
 
+## 2.3.3
+
+Both fixes below come from one OpenDesign failure ("Agent completed without producing
+any output") that the 2.3.2 `[Stream End]` line explained the first time it recurred.
+
+### Fixed: a small output cap could be spent entirely on thinking
+
+A dynamic model (declared budget `-1`, e.g. `gemini-3.8-flash-tiered`) was sent `-1`
+whatever the caller's `max_tokens`, so it reasoned until the window was gone and the
+reserve the bridge holds back for the answer was never enforced for it. Measured with
+one prompt, only the cap changing:
+
+| `max_tokens` | thinking | answer | result |
+|---|---|---|---|
+| 1200 | 1150 | **46** | `MAX_TOKENS` |
+| 2500 | 2399 | **97** | `MAX_TOKENS` |
+
+OpenDesign's agent steps run with a small output window beside a ~100k-token prompt, so
+a step could finish with thinking and no text, which the client reports as empty output
+(`finishReason=MAX_TOKENS text=0 thinking=3 thoughts=1152`).
+
+When the room left after the answer reserve is under 4096 tokens, the thinking budget is
+now pinned to that room instead of `-1`, so the reserve is real. Same prompt, after:
+3,563 / 7,677 / 14,808 visible characters at caps 1200 / 2500 / 4096.
+
+- Larger caps are untouched: Claude Code's 32000, no cap at all, and 8192 stay dynamic.
+- An explicit `budget_tokens`, `thinking: disabled` and `reasoning_effort` still win.
+- **Trade-off:** in a window that small the model no longer writes reasoning of its own;
+  the answer gets the room. A thinking-heavy task needs a larger `max_tokens`.
+- A `tiny` cap (below twice the model's floor) disables thinking, as before.
+
+### Fixed: a `provider/` prefix made the bridge pick a different model
+
+`open-design-byok/gemini-3.8-flash-tiered` — the shape OpenCode and OpenRouter-style
+clients use — was guessed from the whole string and landed on `gemini-3.6-flash-high`, an
+older generation, with a warning that appears once per process. A prefix is now dropped
+when what follows is an exact (or retired) model id, so it resolves to the model it names.
+The guess for a name that matches nothing also looks at the model name alone, not the
+prefix: `someprovider/totally-made-up` used to match "pro" in "provider".
+
+### Changed: `[Stream End]` says what was asked of Google
+
+The line now ends with `maxOut=<cap sent> think=<thinking budget sent>` (`?` when the
+caller sent none), because a `MAX_TOKENS` turn only reads against those two numbers.
+
 ## 2.3.2
 
 ### Added: a stream that ends badly now says why

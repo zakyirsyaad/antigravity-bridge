@@ -629,7 +629,7 @@ export class BridgeServer {
 
         // Everything below closes the turn as a normal one whatever Google did; this
         // is the only place that records when it was not.
-        tally.warn("/v1/messages", requestedModel);
+        tally.warn("/v1/messages", requestedModel, payload.request?.generationConfig);
 
         if (currentBlockType !== null) {
           res.write(`event: content_block_stop\ndata: ${JSON.stringify({ type: "content_block_stop", index: currentBlockIndex })}\n\n`);
@@ -848,7 +848,7 @@ export class BridgeServer {
 
         // The finish chunk below says "stop" whatever Google did; this is the only
         // place that records when it was not a clean one.
-        tally.warn("/v1/chat/completions", requestedModel);
+        tally.warn("/v1/chat/completions", requestedModel, payload.request?.generationConfig);
 
         res.write(
           `data: ${JSON.stringify({

@@ -65,6 +65,32 @@ async function runTests() {
   // The shape that used to change generation without a word.
   expect("model+reasoning suffix", resolve("gemini-3.8-flash-tiered-high"), "gemini-3.6-flash-high");
 
+  console.log("\n[3b/4] A routing prefix is not part of the model name ...");
+  // OpenCode / OpenRouter-style clients write `provider/model`. The tail is an exact
+  // id, so guessing from the whole string landed on gemini-3.6-flash-high — a
+  // different model generation, with only a once-per-process warning to say so.
+  const warned: string[] = [];
+  const realWarn = console.warn;
+  console.warn = (...a: any[]) => {
+    warned.push(a.map(String).join(" "));
+  };
+  const prefixed = {
+    custom: resolve("open-design-byok/gemini-3.8-flash-tiered"),
+    nested: resolve("openrouter/google/gemini-3.8-flash-tiered"),
+    claude: resolve("anthropic/claude-sonnet-4-6"),
+    mixedCase: resolve("Open-Design-BYOK/Gemini-3.8-Flash-Tiered"),
+    retiredTail: resolve("openrouter/gemini-3.8-flash"),
+    unknownTail: resolve("someprovider/totally-made-up"),
+  };
+  console.warn = realWarn;
+  expect("custom provider prefix", prefixed.custom, "gemini-3.8-flash-tiered");
+  expect("two-level prefix", prefixed.nested, "gemini-3.8-flash-tiered");
+  expect("claude with a prefix", prefixed.claude, "claude-sonnet-4-6");
+  expect("prefix is case-insensitive", prefixed.mixedCase, "gemini-3.8-flash-tiered");
+  expect("a retired tail still maps to what it claimed", prefixed.retiredTail, "gemini-3.8-flash-tiered");
+  expect("an unknown tail is still rejected", prefixed.unknownTail, "THREW UnknownModelError");
+  expect("stripping a prefix is not a guess, so it does not warn about approximating", warned.some((w) => w.includes("approximated")), false);
+
   console.log("\n[4/4] An unmappable id is rejected here, not by Google ...");
   expect("gpt-4o", resolve("gpt-4o"), "THREW UnknownModelError");
   expect("nonsense", resolve("totally-made-up"), "THREW UnknownModelError");
