@@ -134,6 +134,27 @@ export class Transformer {
   }
 
   /**
+   * Opt-in: raise a small output cap on a request that carries tools.
+   *
+   * An agent can ask for one tool call whose arguments are a whole file. Google
+   * drops a function call that the cap cuts off, so a 16,384 cap against a
+   * ~40,000-token `write` ended with nothing at all — text=0, tools=0 — and
+   * OpenDesign, whose own setting did not reach that path, reported "empty
+   * output". Overriding a caller's cap is what this project otherwise refuses to
+   * do (it costs quota), so it is off unless BRIDGE_TOOL_MIN_OUTPUT_TOKENS is set,
+   * touches only requests with tools, never lowers a cap, and never asks for more
+   * than the model can write. A request that sent no cap keeps the usual default.
+   */
+  private static raiseToolOutputCap(generationConfig: any, hasTools: boolean, model?: ModelDef): void {
+    const configured = Number(process.env.BRIDGE_TOOL_MIN_OUTPUT_TOKENS);
+    const floor = Number.isFinite(configured) && configured > 0 ? Math.floor(configured) : 0;
+    const cap = generationConfig.maxOutputTokens;
+    if (!floor || !hasTools || typeof cap !== "number") return;
+    const target = Math.min(floor, model?.outputLimit ?? floor);
+    if (cap < target) generationConfig.maxOutputTokens = target;
+  }
+
+  /**
    * Fit the thinking budget inside the caller's output cap.
    *
    * Thinking tokens are billed as output tokens and count against
@@ -435,6 +456,7 @@ export class Transformer {
 
     // Thinking configuration
     const model = findModel(targetModel);
+    this.raiseToolOutputCap(generationConfig, Array.isArray(body.tools) && body.tools.length > 0, model);
     const isClaude = model?.family === "claude";
 
     if (model?.supportsThinking) {
@@ -598,6 +620,7 @@ export class Transformer {
     }
 
     const model = findModel(targetModel);
+    this.raiseToolOutputCap(generationConfig, Array.isArray(body.tools) && body.tools.length > 0, model);
     const isClaude = model?.family === "claude";
 
     if (model?.supportsThinking) {

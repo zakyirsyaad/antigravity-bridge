@@ -13,7 +13,10 @@
  * model's own explanation (`finishMessage`), a block reason, and how many text /
  * thinking / tool parts were actually delivered. A normal stream stays silent.
  *
- * Diagnostic only: what the client receives is exactly what it received before.
+ * Diagnostic, with one correction: a turn Google cut at the token limit used to close
+ * as end_turn / stop like any other. It now says max_tokens / length (a complete
+ * tool call still wins), as the non-streaming path always did. Everything else the
+ * client receives is exactly what it received before.
  *
  * Stubbed throughout — no disk, network, credential or quota.
  */
@@ -168,7 +171,32 @@ async function runTests() {
   const bare = noCap.describe("/v1/messages", "m") || "";
   expect("a caller that sent nothing is not shown as zero", bare.includes("maxOut=?") && bare.includes("think=?"), true);
 
-  console.log("\n[6/6] What the client receives is unchanged ...");
+  console.log("\n[5c/6] A turn Google cut at the token limit says so, on both protocols ...");
+  // Both handlers closed every outcome as end_turn / stop. A cut-off turn is not a
+  // finished one, and a client cannot tell a truncated answer (or a dropped tool call)
+  // from a completed turn unless the stop reason says so. The non-streaming path
+  // already did; this makes the streams agree with it.
+  const anthropicCut = await run("/v1/messages", [chunk([part.text("half an answ")], { finishReason: "MAX_TOKENS" }, USAGE)]);
+  expect("Anthropic text + MAX_TOKENS: max_tokens", anthropicCut.text.includes('"stop_reason":"max_tokens"'), true);
+  const anthropicDropped = await run("/v1/messages", [chunk([], { finishReason: "MAX_TOKENS" }, USAGE)]);
+  expect("Anthropic empty + MAX_TOKENS (a dropped tool call): max_tokens", anthropicDropped.text.includes('"stop_reason":"max_tokens"'), true);
+  const anthropicTool = await run("/v1/messages", [chunk([part.call("write")], { finishReason: "MAX_TOKENS" }, USAGE)]);
+  expect("Anthropic complete tool call + MAX_TOKENS: tool_use still wins", anthropicTool.text.includes('"stop_reason":"tool_use"'), true);
+  const anthropicStop = await run("/v1/messages", [chunk([part.text("done")], { finishReason: "STOP" }, USAGE)]);
+  expect("Anthropic STOP: end_turn", anthropicStop.text.includes('"stop_reason":"end_turn"'), true);
+  const anthropicOther = await run("/v1/messages", [chunk([part.text("x")], { finishReason: "SAFETY" }, USAGE)]);
+  expect("Anthropic another reason: end_turn, as before", anthropicOther.text.includes('"stop_reason":"end_turn"'), true);
+  const openaiCut = await run("/v1/chat/completions", [chunk([part.text("half an answ")], { finishReason: "MAX_TOKENS" }, USAGE)]);
+  expect("OpenAI text + MAX_TOKENS: length", openaiCut.text.includes('"finish_reason":"length"'), true);
+  const openaiDropped = await run("/v1/chat/completions", [chunk([], { finishReason: "MAX_TOKENS" }, USAGE)]);
+  expect("OpenAI empty + MAX_TOKENS: length", openaiDropped.text.includes('"finish_reason":"length"'), true);
+  const openaiTool = await run("/v1/chat/completions", [chunk([part.call("write")], { finishReason: "MAX_TOKENS" }, USAGE)]);
+  expect("OpenAI complete tool call + MAX_TOKENS: tool_calls still wins", openaiTool.text.includes('"finish_reason":"tool_calls"'), true);
+  const openaiStop = await run("/v1/chat/completions", [chunk([part.text("done")], { finishReason: "STOP" }, USAGE)]);
+  expect("OpenAI STOP: stop", openaiStop.text.includes('"finish_reason":"stop"'), true);
+  expect("a cut-off turn still terminates cleanly", openaiCut.text.trim().endsWith("data: [DONE]") && anthropicCut.text.includes("message_stop"), true);
+
+  console.log("\n[6/6] Everything else the client receives is unchanged ...");
   expect("Anthropic empty answer: still 200", (await run("/v1/messages", [chunk([], { finishReason: "OTHER" })])).status, 200);
   const anthropic = await run("/v1/messages", [chunk([], { finishReason: "OTHER" }, USAGE)]);
   expect("Anthropic empty answer: still ends the turn", anthropic.text.includes('"stop_reason":"end_turn"'), true);

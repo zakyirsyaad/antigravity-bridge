@@ -639,7 +639,13 @@ export class BridgeServer {
         res.write(
           `event: message_delta\ndata: ${JSON.stringify({
             type: "message_delta",
-            delta: { stop_reason: sawToolUse ? "tool_use" : "end_turn", stop_sequence: null },
+            // A complete tool call is still a tool turn. Otherwise a turn Google cut at
+            // the token limit says so: closed as end_turn, a truncated answer — or a
+            // tool call the cap dropped — was indistinguishable from a finished one.
+            delta: {
+              stop_reason: sawToolUse ? "tool_use" : tally.finishReason === "MAX_TOKENS" ? "max_tokens" : "end_turn",
+              stop_sequence: null,
+            },
             usage: {
               // Google's own figure when it reported one, thinking included — the
               // text-length estimate only sees the short summary that is emitted, not
@@ -860,7 +866,9 @@ export class BridgeServer {
               {
                 index: 0,
                 delta: {},
-                finish_reason: toolCallIndex > 0 ? "tool_calls" : "stop",
+                // As on the Anthropic stream: a complete tool call wins, and a turn
+                // cut at the token limit is "length", the non-streaming answer's word.
+                finish_reason: toolCallIndex > 0 ? "tool_calls" : tally.finishReason === "MAX_TOKENS" ? "length" : "stop",
               },
             ],
           })}\n\n`

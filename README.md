@@ -126,6 +126,14 @@ Each protocol's *default* level is the model's own default, deliberately: Claude
 `high` even when nobody chose it, and OpenAI clients default to `medium`. Doing nothing therefore
 changes nothing — lower levels save, higher levels spend.
 
+An agent can ask for a single tool call whose argument is an entire file. Google sends a function
+call only when it is complete, so one that the output cap cuts off never arrives: the turn ends
+`max_tokens` with nothing in it, and some clients call that "empty output". If you cannot raise the
+client's own limit, set `BRIDGE_TOOL_MIN_OUTPUT_TOKENS` (for example `65536`) and any request that
+carries tools and sent a smaller cap is raised to it, up to the model's own limit. It is off by
+default, because it overrides a cap the caller chose and a model that writes at length uses more
+quota; requests without tools keep the cap they sent.
+
 Thinking tokens count against `max_tokens`, so the bridge fits the budget inside whatever cap you
 send and holds back 8,192 tokens for the visible answer. Tune that with
 `BRIDGE_ANSWER_RESERVE_TOKENS` — lower it for more reasoning, raise it if long answers get

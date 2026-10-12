@@ -52,7 +52,7 @@ Everything else runs offline — no account, no network, no quota — by stubbin
 | `test:security` | management API leaks no OAuth tokens; cross-origin rejected |
 | `test:refresh` | token refresh is bound to its own account, not the active one |
 | `test:launchagent` | project-root resolution; `install()` rejects a bad root |
-| `test:budget` | thinking budget fits inside the caller's `max_tokens`; a dynamic model is pinned to its room in a small window and stays dynamic in a large one |
+| `test:budget` | thinking budget fits inside the caller's `max_tokens`; a dynamic model is pinned to its room in a small window and stays dynamic in a large one; `BRIDGE_TOOL_MIN_OUTPUT_TOKENS` raises a small cap only on requests with tools and never past the model's limit |
 | `test:schema` | schema keywords are dropped, not hoisted into `properties`; a non-string enum is folded into the description with its type kept, a string enum is untouched |
 | `test:usage` | both protocols record usage; both report reasoning inside their output figure without double counting it in the tracker |
 | `test:storage` | malformed accounts file does not throw |
@@ -65,7 +65,7 @@ Everything else runs offline — no account, no network, no quota — by stubbin
 | `test:effort` | Anthropic `output_config.effort` scales the budget; the default level changes nothing |
 | `test:upstream` | a request Google rejects (400) is a 400 on all four paths, the OpenAI stream included; every other failure keeps its old shape; a failure after streaming began stays in-band |
 | `test:models-context` | every `/v1/models` entry carries `context_length` from `SUPPORTED_MODELS`; the older fields are unchanged; `/models` answers the same |
-| `test:stream-end` | a stream that ends empty, non-STOP or without a finish reason leaves one `[Stream End]` warning (with the `maxOut`/`think` that were sent) on both routes; a healthy one stays silent; the client's bytes are unchanged |
+| `test:stream-end` | a stream that ends empty, non-STOP or without a finish reason leaves one `[Stream End]` warning (with the `maxOut`/`think` that were sent) on both routes; a healthy one stays silent; a `MAX_TOKENS` turn closes as `max_tokens` / `length` (a complete tool call still wins); everything else the client receives is unchanged |
 
 When stubbing, keep side effects off the real `~/.zcode` files and off `launchctl` — several suites
 assert that explicitly, and that is deliberate.
@@ -118,13 +118,24 @@ in-band `data: {"error": ...}` event. So read nginx status codes with that in mi
 `/v1/chat/completions` proves nothing about success, while on `/v1/messages` it does. A failure after
 the stream has started can only ever be in-band, on either protocol.
 
-Neither stream handler reads Google's `finishReason` to decide what to send: whatever happened
-upstream, the turn closes as `end_turn` / `stop`. A malformed function call, a token limit, a safety
-filter and a dropped connection therefore reach the client as an empty-but-successful answer
-(OpenDesign: "Agent completed without producing any output"). `StreamEndTally`
-(`stream-diagnostics.ts`) records the cause as a `[Stream End]` warning when a stream ends empty,
-non-STOP or without a finish reason — look there first. It only observes; changing what is sent is a
-separate decision that wants a real failure's `finishReason` first.
+The streams read exactly one thing from Google's `finishReason`: `MAX_TOKENS` closes the turn as
+`max_tokens` / `length` (a complete tool call still wins: `tool_use` / `tool_calls`), as the
+non-streaming path always did. Every other reason — a malformed function call, a safety filter, a
+dropped connection — still closes as `end_turn` / `stop`, so it reaches the client as an
+empty-but-successful answer (OpenDesign: "Agent completed without producing any output").
+`StreamEndTally` (`stream-diagnostics.ts`) records the cause as a `[Stream End]` warning, with the
+`maxOut` / `think` that were sent, when a stream ends empty, non-STOP or without a finish reason —
+**look there first**; it has diagnosed every case so far. Do not map more reasons without a real
+failure's `finishReason` in hand.
+
+**A function call is delivered whole, or not at all.** Google sends it only when complete, so one the
+output cap cuts off simply never arrives: `MAX_TOKENS`, `text=0 tools=0`, ~100 s of generation
+discarded, and the usage figure omits those tokens. That is what OpenDesign hit — one `write` call
+carrying a ~40,000-token file under a 16,384 cap, with the client's own max-tokens setting not
+reaching that path. `BRIDGE_TOOL_MIN_OUTPUT_TOKENS` (off by default) raises a smaller cap on requests
+that carry tools; it overrides what the caller chose, which is why it is opt-in. Such a call also
+takes minutes with the client receiving nothing, so a short idle timeout on the client side can still
+cut it off.
 
 ### Failover model (`antigravity-client.ts`)
 

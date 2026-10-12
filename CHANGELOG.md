@@ -1,5 +1,43 @@
 # Changelog
 
+## 2.4.0
+
+The real cause of OpenDesign's "Agent completed without producing any output", found with
+the 2.3.2/2.3.3 `[Stream End]` line and then reproduced (and a correction: 2.3.3 attributed
+it to a small cap, which was a coincidence of numbers — its two fixes are real but were not
+this failure).
+
+The agent asks for **one `write` call whose argument is a whole file** — about 40,000 tokens
+here — under a 16,384-token output cap. Google sends a function call only once it is
+complete, so a call the cap cuts off never arrives: the stream ends `MAX_TOKENS` with no text
+and no tool call (`text=0 tools=0`, ~100 s of generation discarded). The bridge closed that as
+a normal `end_turn`, and the client reported nothing. Reproduced: cap 16384 gave exactly that;
+cap 65536 gave one `tool_use` block of 41,627 tokens. The client's own max-tokens setting did
+not reach that path (the log still read `maxOut=16384`).
+
+### Changed: a turn cut at the token limit now says so on the stream
+
+Both streaming handlers closed every outcome as `end_turn` / `stop`; the non-streaming path
+already answered `max_tokens` / `length`. A `MAX_TOKENS` finish now ends the stream with
+`stop_reason: "max_tokens"` (Anthropic) or `finish_reason: "length"` (OpenAI), so a client
+can tell a truncated answer, or a dropped tool call, from a finished turn. A complete tool
+call still wins (`tool_use` / `tool_calls`), and every other finish reason closes as before.
+
+### Added: `BRIDGE_TOOL_MIN_OUTPUT_TOKENS` (off by default)
+
+When set, a request that **carries tools** and sent a smaller output cap is raised to that
+value (never above the model's own limit, never lowering a cap, and a request that sent no cap
+keeps the usual default). It is the only way to let a client whose cap you cannot change finish
+a large tool call — `65536` is the limit of the Gemini flash models.
+
+It deliberately overrides a cap the caller chose, which this project otherwise refuses to do,
+because the output is quota: a model that writes at length now can. Hence off, and limited to
+requests with tools, so a title or a "reply ok" call keeps its small cap.
+
+Measured with a 16,384 cap and the variable set to 65536: one `tool_use` block of 42,679 tokens,
+`stop_reason: tool_use`, no warning. It took 253 s, and the client receives nothing meanwhile
+(Google delivers the call whole), so a client with a shorter idle timeout can still give up first.
+
 ## 2.3.3
 
 Both fixes below come from one OpenDesign failure ("Agent completed without producing
