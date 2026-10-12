@@ -40,8 +40,13 @@ scratch script.
 
 **`npm test` (`test/bridge.test.ts`) is the odd one out**: it issues **real requests to Google's
 CloudCode API**, so it needs a logged-in account (`npm run bridge:login`) and consumes real quota.
-It throws on the first failure. Its console numbering is stale (`[2/5]`, `[3/5]`… while 7 tests
-run); ignore it.
+It throws on the first failure, and every step checks the reply's content, not just that a reply came.
+**Use exact model ids in it** (`FLASH`, `FLASH_DYNAMIC`, `PRO`, `CLAUDE` at the top of the file), and
+check them with `npm run bridge:models` first: it used to send retired names such as `gemini-3.1-pro`,
+which the bridge aliased onto a model Google had stopped serving, so a failure looked like a
+`max_tokens` problem when the model was simply gone. `[2/7]` refuses any id it uses that the bridge
+does not list. The Claude step is reported as SKIPPED, loudly, when Claude's quota is exhausted —
+that says nothing about the bridge — and every other failure still fails the run.
 
 Everything else runs offline — no account, no network, no quota — by stubbing `AntigravityClient`,
 `OAuthManager`, `UsageTracker`, or `fs`. Prefer adding to these; CI can run them.
