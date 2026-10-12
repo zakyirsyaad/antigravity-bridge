@@ -18,7 +18,7 @@ const TEST_PORT = 52131;
 /** Exact ids from SUPPORTED_MODELS. Change them only after `npm run bridge:models`. */
 const FLASH = "gemini-3.8-flash-tiered";
 const FLASH_DYNAMIC = "gemini-3.6-flash-high";
-const PRO = "gemini-3.1-pro-low";
+const PRO = "gemini-pro-agent"; // Google's High tier; the old gemini-3.1-pro-high answers 400 to everything
 const CLAUDE = "claude-opus-4-6-thinking";
 
 const HEADERS_ANTHROPIC = {

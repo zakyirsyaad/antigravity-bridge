@@ -1,6 +1,6 @@
 {
   "name": "antigravity-bridge",
-  "version": "2.4.1",
+  "version": "2.5.0",
   "description": "Universal Multi-Account AI Gateway & Proxy for Google Antigravity (CloudCode) with Zero-Downtime Auto-Failover",
   "main": "src/index.ts",
   "types": "src/index.ts",
@@ -42,6 +42,7 @@
     "test:models-context": "tsx test/models-context.test.ts",
     "test:stream-end": "tsx test/stream-end.test.ts",
     "test:stall": "tsx test/upstream-stall.test.ts",
+    "test:turns": "tsx test/turn-order.test.ts",
     "build": "tsc"
   },
   "keywords": [

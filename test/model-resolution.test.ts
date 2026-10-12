@@ -17,6 +17,7 @@ import { AntigravityClient } from "../src/antigravity-client";
 import { OAuthManager } from "../src/oauth";
 import { BridgeServer } from "../src/server";
 import { Transformer, UnknownModelError } from "../src/transformer";
+import { SUPPORTED_MODELS } from "../src/constants";
 
 const TEST_PORT = 52143;
 
@@ -51,12 +52,30 @@ async function runTests() {
 
   console.log("[1/4] Exact ids pass through untouched ...");
   expect("tiered", resolve("gemini-3.8-flash-tiered"), "gemini-3.8-flash-tiered");
-  expect("pro high", resolve("gemini-3.1-pro-high"), "gemini-3.1-pro-high");
+  expect("pro high is Google's gemini-pro-agent", resolve("gemini-pro-agent"), "gemini-pro-agent");
+  expect("pro low", resolve("gemini-3.1-pro-low"), "gemini-3.1-pro-low");
   expect("claude opus", resolve("claude-opus-4-6-thinking"), "claude-opus-4-6-thinking");
+  expect("the display name still resolves", resolve("Gemini 3.1 Pro (High)"), "gemini-pro-agent");
 
   console.log("\n[2/4] Retired ids resolve to what their name claimed ...");
   expect("gemini-3.8-flash", resolve("gemini-3.8-flash"), "gemini-3.8-flash-tiered");
-  expect("gemini-3-pro", resolve("gemini-3-pro"), "gemini-3.1-pro-high");
+  // Google still lists gemini-3.1-pro-high but answers 400 to every request for it, on
+  // every account; its current name is gemini-pro-agent. These used to resolve to the dead id.
+  expect("gemini-3-pro", resolve("gemini-3-pro"), "gemini-pro-agent");
+  expect("gemini-3.1-pro", resolve("gemini-3.1-pro"), "gemini-pro-agent");
+  expect("the dead gemini-3.1-pro-high", resolve("gemini-3.1-pro-high"), "gemini-pro-agent");
+  // Google answers 404 for these two tiered ids; the newest tiered model is the closest living one.
+  expect("gemini-3.7-flash-tiered", resolve("gemini-3.7-flash-tiered"), "gemini-3.8-flash-tiered");
+  expect("gemini-3.6-flash-tiered", resolve("gemini-3.6-flash-tiered"), "gemini-3.8-flash-tiered");
+  expect("gemini-3.7-flash", resolve("gemini-3.7-flash"), "gemini-3.8-flash-tiered");
+  expect("gemini-3.7-flash-high", resolve("gemini-3.7-flash-high"), "gemini-3.8-flash-tiered");
+  expect("a nearest-match for a pro name lands on the living pro", resolve("some-pro-model"), "gemini-pro-agent");
+  const exposed = new Set(SUPPORTED_MODELS.map((m) => m.id));
+  for (const dead of ["gemini-3.1-pro-high", "gemini-3.7-flash-tiered", "gemini-3.6-flash-tiered"]) {
+    expect(`${dead} is no longer exposed`, exposed.has(dead), false);
+  }
+  expect("gemini-pro-agent is exposed", exposed.has("gemini-pro-agent"), true);
+  expect("a model Google serves has not been dropped", exposed.has("gemini-3.8-flash-tiered") && exposed.has("gemini-3.1-pro-low"), true);
 
   console.log("\n[3/4] Near-misses still resolve, rather than failing a real client ...");
   // Claude Code sends Anthropic's own ids; refusing them would break the

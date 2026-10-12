@@ -259,14 +259,20 @@ export class Transformer {
   /** Ids that no longer exist, each pointed at the model its name claimed. */
   private static readonly RETIRED_IDS: Record<string, string> = {
     // Was pinned to the Low tier despite the plain name; High is the better default.
-    "gemini-3.1-pro": "gemini-3.1-pro-high",
-    "gemini-3-pro": "gemini-3.1-pro-high",
+    // Google serves High as gemini-pro-agent: it answers 400 to every request for the
+    // old gemini-3.1-pro-high (checked on all six accounts), so these now point there.
+    "gemini-3.1-pro": "gemini-pro-agent",
+    "gemini-3-pro": "gemini-pro-agent",
+    "gemini-3.1-pro-high": "gemini-pro-agent",
     // These five all collapsed onto gemini-3-flash. Point each at the newest
-    // flash tier that matches the effort its name advertised.
+    // flash tier that matches the effort its name advertised. The 3.7 and 3.6 tiered
+    // ids are gone from Google (404), so they, and the names that led to them, land on 3.8.
     "gemini-3.8-flash": "gemini-3.8-flash-tiered",
     "gemini-3.8-flash-high": "gemini-3.8-flash-tiered",
-    "gemini-3.7-flash": "gemini-3.7-flash-tiered",
-    "gemini-3.7-flash-high": "gemini-3.7-flash-tiered",
+    "gemini-3.7-flash": "gemini-3.8-flash-tiered",
+    "gemini-3.7-flash-high": "gemini-3.8-flash-tiered",
+    "gemini-3.7-flash-tiered": "gemini-3.8-flash-tiered",
+    "gemini-3.6-flash-tiered": "gemini-3.8-flash-tiered",
     "gemini-2.5-flash": "gemini-3.1-flash-lite",
   };
 
@@ -314,7 +320,7 @@ export class Transformer {
         : name.includes("claude")
           ? "claude-opus-4-6-thinking"
           : name.includes("pro")
-            ? "gemini-3.1-pro-high"
+            ? "gemini-pro-agent"
             : name.includes("lite")
               ? "gemini-3.1-flash-lite"
               : name.includes("flash") || name.includes("gemini")
@@ -496,7 +502,9 @@ export class Transformer {
     }
 
     const mergedContents = this.mergeConsecutiveContents(contents);
-    const sanitizedContents = this.sanitizeThoughtSignaturesInContents(mergedContents, isClaude);
+    const sanitizedContents = this.ensureStartsWithUser(
+      this.sanitizeThoughtSignaturesInContents(mergedContents, isClaude)
+    );
 
     return {
       model: targetModel,
@@ -657,7 +665,9 @@ export class Transformer {
     }
 
     const mergedContents = this.mergeConsecutiveContents(contents);
-    const sanitizedContents = this.sanitizeThoughtSignaturesInContents(mergedContents, isClaude);
+    const sanitizedContents = this.ensureStartsWithUser(
+      this.sanitizeThoughtSignaturesInContents(mergedContents, isClaude)
+    );
 
     return {
       model: targetModel,
@@ -670,6 +680,24 @@ export class Transformer {
       },
     };
   }
+
+  /**
+   * A conversation has to open with a user turn.
+   *
+   * A history that begins with a model function call is refused ("function call turn
+   * comes immediately after a user turn or after a function response turn") — verified
+   * against Google, where it is the one shape of six tried that produces that message.
+   * Clients can send one: OpenDesign's agent, after a long run, re-sent a conversation
+   * that began with the assistant's tool call because its earlier messages had been
+   * dropped, and the 400 ended the run. A short user note in front keeps the calls and
+   * responses that remain exactly as they were, which dropping them would not.
+   */
+  private static ensureStartsWithUser(contents: any[]): any[] {
+    if (contents.length === 0 || contents[0].role !== "model") return contents;
+    return [{ role: "user", parts: [{ text: this.LEADING_TURN_NOTE }] }, ...contents];
+  }
+
+  private static readonly LEADING_TURN_NOTE = "(Earlier messages in this conversation were omitted.)";
 
   /**
    * Merge consecutive contents with the same role into a single turn

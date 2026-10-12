@@ -109,27 +109,30 @@ export const SUPPORTED_MODELS: ModelDef[] = [
     thinkingBudget: 1024,
   },
 
-  // Gemini Pro. The -high variant reasons roughly ten times as hard as -low;
-  // the tier is fixed by the model name, not by thinking_budget.
+  // Gemini Pro. Google serves the High tier as `gemini-pro-agent`. The old id
+  // `gemini-3.1-pro-high` is still listed in its catalogue, with metadata, but every
+  // request for it is refused with HTTP 400 "Request contains an invalid argument" on
+  // all six pooled accounts — only calling it shows that, which is why
+  // `bridge:models` cannot flag it. It is a retired alias of this id now.
   {
-    id: "gemini-3.1-pro-high",
+    id: "gemini-pro-agent",
     name: "Gemini 3.1 Pro (High)",
     family: "gemini",
     contextLimit: 1048576,
-    outputLimit: 65535,
+    outputLimit: 65536,
     supportsThinking: true,
-    thinkingBudget: 10001,
-    minThinkingBudget: 128,
+    thinkingBudget: -1,
+    minThinkingBudget: 32,
   },
   {
     id: "gemini-3.1-pro-low",
     name: "Gemini 3.1 Pro (Low)",
     family: "gemini",
     contextLimit: 1048576,
-    outputLimit: 65535,
+    outputLimit: 65536,
     supportsThinking: true,
     thinkingBudget: 1001,
-    minThinkingBudget: 128,
+    minThinkingBudget: 32,
   },
   {
     id: "gemini-2.5-pro",
@@ -222,26 +225,9 @@ export const SUPPORTED_MODELS: ModelDef[] = [
     thinkingBudget: -1,
     minThinkingBudget: 32,
   },
-  {
-    id: "gemini-3.7-flash-tiered",
-    name: "Gemini 3.7 Flash (Tiered)",
-    family: "gemini",
-    contextLimit: 1048576,
-    outputLimit: 65536,
-    supportsThinking: true,
-    thinkingBudget: -1,
-    minThinkingBudget: 32,
-  },
-  {
-    id: "gemini-3.6-flash-tiered",
-    name: "Gemini 3.6 Flash (Tiered)",
-    family: "gemini",
-    contextLimit: 1048576,
-    outputLimit: 65536,
-    supportsThinking: true,
-    thinkingBudget: -1,
-    minThinkingBudget: 32,
-  },
+  // gemini-3.7-flash-tiered and gemini-3.6-flash-tiered were here until Google began
+  // answering HTTP 404 "Requested entity was not found" for both (and dropped them from
+  // its catalogue). They are retired aliases of the newest tiered model now.
 
   // Gemini 3 Flash
   {

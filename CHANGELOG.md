@@ -1,5 +1,60 @@
 # Changelog
 
+## 2.5.0
+
+Two things found while running OpenDesign and `npm test`, both reproduced against Google.
+
+### Fixed: three model ids Google no longer serves
+
+`npm test` failed at its Pro step with `Request contains an invalid argument`, which looked like
+a `max_tokens` problem and was not: Google answers HTTP 400 to **every** request for
+`gemini-3.1-pro-high` — on all six pooled accounts, with no generationConfig, a cap only, and fixed
+or dynamic thinking. `gemini-pro-agent`, Google's name for the same "Gemini 3.1 Pro (High)", answers
+on every account. The old id is still in Google's catalogue with full metadata, which is why
+`bridge:models` never flagged it: only calling a model shows it is dead.
+
+So any client asking for "pro" (the id, `gemini-3.1-pro`, `gemini-3-pro`, or any name containing
+"pro") got a 400 and nothing said why. Likewise `gemini-3.7-flash-tiered` and
+`gemini-3.6-flash-tiered` answer 404.
+
+- `gemini-pro-agent` replaces `gemini-3.1-pro-high` (dynamic budget, floor 32, 65,536 output).
+- The 3.7 and 3.6 tiered ids are removed from the model list.
+- Every old name keeps working and resolves to a model that answers, with the usual one-time
+  "deprecated" warning: `gemini-3.1-pro-high`, `gemini-3.1-pro`, `gemini-3-pro` -> `gemini-pro-agent`;
+  `gemini-3.7-flash`, `gemini-3.7-flash-high`, `gemini-3.7-flash-tiered`, `gemini-3.6-flash-tiered`
+  -> `gemini-3.8-flash-tiered`. A "pro" nearest-match lands on `gemini-pro-agent`.
+- `gemini-3.1-pro-low` metadata follows Google's (floor 32, 65,536 output).
+- `/v1/models` lists 15 models, down from 17. A client that cached the old list will still work
+  through the aliases.
+
+I tried every remaining id with one request: all answer, except `gemini-2.5-pro`, which currently
+returns 503 "no capacity" on every account — capacity, not a dead id, so it stays.
+
+### Fixed: a history that opens with a tool call was a 400 that ended the run
+
+OpenDesign's run produced an empty turn, retried, and Google answered 400 "function call turn
+comes immediately after a user turn or after a function response turn". Of six history shapes
+sent to Google, exactly one produces that message: a conversation whose **first turn is a model
+function call**. The client's retry had re-sent a history whose earlier messages were gone.
+
+A history that opens with a model turn now gets a short user note in front ("Earlier messages in
+this conversation were omitted"). The calls and responses that remain are left exactly as they were,
+which dropping them would not do. Verified against Google: such a history now answers.
+
+### Added: a rejected request logs its shape
+
+Google's 400 names the rule that broke, not the turn that broke it, and the history is private. On
+every 400 the bridge now logs `[Upstream 400] request shape: 3 turns: model:call > user:response >
+user:text` — roles and part kinds, never any text; a long history keeps its first and last turns and
+its true length.
+
+### Known, not changed
+
+The same run's empty turn was `finishReason=MALFORMED_FUNCTION_CALL` ("Function call is empty - no
+input to parse") after 20,406 thinking tokens and over two minutes. It is a model failure, seen once,
+and the bridge still closes it as an empty `end_turn`. Retrying it upstream would double a
+two-minute wait on one occurrence, so it is left until it recurs.
+
 ## 2.4.1
 
 ### Fixed: an upstream that stops answering no longer costs three minutes on one account

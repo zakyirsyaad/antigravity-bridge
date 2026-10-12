@@ -84,12 +84,10 @@ figure below comes from Google's `fetchAvailableModels`; re-check it any time wi
 | :--- | :--- | :--- | :--- | :--- |
 | `claude-opus-4-6-thinking` | 1,024 | 250K | 64K | Complex refactors, deep reasoning |
 | `claude-sonnet-4-6` | 1,024 | 250K | 64K | High-speed agentic coding, daily pair-programming |
-| `gemini-3.1-pro-high` | 10,001 | 1M | 65K | Hardest reasoning — 10× the budget of the Low tier |
+| `gemini-pro-agent` | dynamic | 1M | 65K | Hardest reasoning — Google's High tier (it was `gemini-3.1-pro-high`, which Google no longer serves) |
 | `gemini-3.1-pro-low` | 1,001 | 1M | 65K | Pro-class answers when reasoning depth is not the bottleneck |
 | `gemini-2.5-pro` | 1,024 | 1M | 65K | Robust general development |
 | `gemini-3.8-flash-tiered` | dynamic | 1M | 65K | **Newest flash — pick low/medium/high per request** |
-| `gemini-3.7-flash-tiered` | dynamic | 1M | 65K | Same, one generation back |
-| `gemini-3.6-flash-tiered` | dynamic | 1M | 65K | Same, two generations back |
 | `gemini-3.6-flash-high` | dynamic | 1M | 65K | **Google's own default agent model** |
 | `gemini-3.6-flash-medium` | 4,000 | 1M | 65K | Fast multi-step work |
 | `gemini-3.6-flash-low` | 1,000 | 1M | 65K | High-speed tool loops |
@@ -153,10 +151,14 @@ be, but prefer the real ids above.
 
 | Old id | Now resolves to |
 | :--- | :--- |
-| `gemini-3.1-pro`, `gemini-3-pro` | `gemini-3.1-pro-high` |
-| `gemini-3.6-flash-high`, `gemini-3.6-flash-high-high`, `gemini-3.7-flash-high` | `gemini-3.6-flash-high` |
-| `gemini-3.7-flash` | `gemini-3.6-flash-medium` |
+| `gemini-3.1-pro`, `gemini-3-pro`, `gemini-3.1-pro-high` | `gemini-pro-agent` |
+| `gemini-3.8-flash`, `gemini-3.8-flash-high`, `gemini-3.7-flash`, `gemini-3.7-flash-high`, `gemini-3.7-flash-tiered`, `gemini-3.6-flash-tiered` | `gemini-3.8-flash-tiered` |
 | `gemini-2.5-flash` | `gemini-3.1-flash-lite` |
+
+Google still lists `gemini-3.1-pro-high` in its catalogue, but answers HTTP 400 to every request for it
+(verified on all six pooled accounts), and answers 404 for the 3.7 and 3.6 tiered ids; `npm run
+bridge:models` can only see the catalogue, so it cannot tell. The bridge therefore points those ids at
+the models that answer, and warns once when it does.
 
 ---
 
@@ -325,7 +327,7 @@ hermes --provider antigravity -m gemini-3.6-flash-high --tui
 In **Cursor** (`Settings > Models > OpenAI`):
 1. **OpenAI API Key**: `antigravity-local`
 2. **Override OpenAI Base URL**: `http://127.0.0.1:52130/v1`
-3. Add model names: `gemini-3.6-flash-high`, `claude-opus-4-6-thinking`, `gemini-3.1-pro-high`
+3. Add model names: `gemini-3.6-flash-high`, `claude-opus-4-6-thinking`, `gemini-pro-agent`
 
 In **Continue.dev** (`~/.continue/config.json`):
 ```json
