@@ -65,6 +65,7 @@ Everything else runs offline — no account, no network, no quota — by stubbin
 | `test:effort` | Anthropic `output_config.effort` scales the budget; the default level changes nothing |
 | `test:upstream` | a request Google rejects (400) is a 400 on all four paths, the OpenAI stream included; every other failure keeps its old shape; a failure after streaming began stays in-band |
 | `test:models-context` | every `/v1/models` entry carries `context_length` from `SUPPORTED_MODELS`; the older fields are unchanged; `/models` answers the same |
+| `test:stream-end` | a stream that ends empty, non-STOP or without a finish reason leaves one `[Stream End]` warning on both routes; a healthy one stays silent; the client's bytes are unchanged |
 
 When stubbing, keep side effects off the real `~/.zcode` files and off `launchctl` — several suites
 assert that explicitly, and that is deliberate.
@@ -116,6 +117,14 @@ answers a real 500 (`api_error`), but the OpenAI stream still commits to `200` a
 in-band `data: {"error": ...}` event. So read nginx status codes with that in mind: a `200` on
 `/v1/chat/completions` proves nothing about success, while on `/v1/messages` it does. A failure after
 the stream has started can only ever be in-band, on either protocol.
+
+Neither stream handler reads Google's `finishReason` to decide what to send: whatever happened
+upstream, the turn closes as `end_turn` / `stop`. A malformed function call, a token limit, a safety
+filter and a dropped connection therefore reach the client as an empty-but-successful answer
+(OpenDesign: "Agent completed without producing any output"). `StreamEndTally`
+(`stream-diagnostics.ts`) records the cause as a `[Stream End]` warning when a stream ends empty,
+non-STOP or without a finish reason — look there first. It only observes; changing what is sent is a
+separate decision that wants a real failure's `finishReason` first.
 
 ### Failover model (`antigravity-client.ts`)
 

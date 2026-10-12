@@ -1,5 +1,30 @@
 # Changelog
 
+## 2.3.2
+
+### Added: a stream that ends badly now says why
+
+Google can end a response with nothing a client can use — a function call it judged
+malformed, a token limit, a safety filter, a dropped connection — and both streaming
+handlers closed every one of them as a normal `end_turn` / `stop`. They never read
+`finishReason`. OpenDesign then reported "Agent completed without producing any
+output" (the request had spent 1,663 output tokens), and the bridge's logs held
+nothing to say which of those it was.
+
+A stream that ends empty, or with any finish reason but a clean `STOP`, or with no
+finish reason at all, now leaves one warning:
+
+    [Stream End] /v1/messages model=... finishReason=MALFORMED_FUNCTION_CALL text=0
+    thinking=1 tools=0 prompt=99859 candidates=5 thoughts=1658 finishMessage="..."
+
+It carries Google's own `finishMessage` and any `blockReason`, plus counts of the
+parts actually delivered — never the text the model produced. A healthy stream
+logs nothing (checked against a real request).
+
+**Diagnostic only.** What a client receives is byte-for-byte what it received
+before; the next step is to read these lines for a real failure and fix what they
+show, rather than guess at why Google stopped.
+
 ## 2.3.1
 
 ### Fixed: `/v1/models` now says how large each model's window is

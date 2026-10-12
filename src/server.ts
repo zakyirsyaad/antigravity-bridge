@@ -5,6 +5,7 @@ import { OAuthManager } from "./oauth";
 import { AntigravityClient, UpstreamError } from "./antigravity-client";
 import { Transformer, UnknownModelError } from "./transformer";
 import { UsageTracker } from "./usage-tracker";
+import { StreamEndTally } from "./stream-diagnostics";
 import { QuotaService } from "./quota-service";
 import { QuotaTracker } from "./quota-tracker";
 import { getDashboardHtml } from "./dashboard-html";
@@ -531,8 +532,10 @@ export class BridgeServer {
         let outputTokens = 0;
         let sawToolUse = false;
         let streamUsage: any = null;
+        const tally = new StreamEndTally();
 
         for await (const chunk of stream) {
+          tally.observe(chunk);
           const chunkUsage = chunk.response?.usageMetadata || chunk.usageMetadata;
           if (chunkUsage) streamUsage = chunkUsage;
           const candidate = chunk.response?.candidates?.[0] || chunk.candidates?.[0];
@@ -623,6 +626,10 @@ export class BridgeServer {
             }
           }
         }
+
+        // Everything below closes the turn as a normal one whatever Google did; this
+        // is the only place that records when it was not.
+        tally.warn("/v1/messages", requestedModel);
 
         if (currentBlockType !== null) {
           res.write(`event: content_block_stop\ndata: ${JSON.stringify({ type: "content_block_stop", index: currentBlockIndex })}\n\n`);
@@ -758,8 +765,10 @@ export class BridgeServer {
         // single call with concatenated names and unparseable arguments.
         let toolCallIndex = 0;
         let streamUsage: any = null;
+        const tally = new StreamEndTally();
 
         for await (const chunk of stream) {
+          tally.observe(chunk);
           const chunkUsage = chunk.response?.usageMetadata || chunk.usageMetadata;
           if (chunkUsage) streamUsage = chunkUsage;
           const candidate = chunk.response?.candidates?.[0] || chunk.candidates?.[0];
@@ -836,6 +845,10 @@ export class BridgeServer {
             }
           }
         }
+
+        // The finish chunk below says "stop" whatever Google did; this is the only
+        // place that records when it was not a clean one.
+        tally.warn("/v1/chat/completions", requestedModel);
 
         res.write(
           `data: ${JSON.stringify({
