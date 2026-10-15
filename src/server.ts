@@ -9,6 +9,7 @@ import { StreamEndTally } from "./stream-diagnostics";
 import { QuotaService } from "./quota-service";
 import { QuotaTracker } from "./quota-tracker";
 import { getDashboardHtml } from "./dashboard-html";
+import { applyConnectAttemptTimeout } from "./network";
 
 /**
  * Google rejected the request itself (HTTP 400): a tool schema it cannot take, a
@@ -177,6 +178,7 @@ export class BridgeServer {
   }
 
   public start(): Promise<number> {
+    applyConnectAttemptTimeout();
     return new Promise((resolve, reject) => {
       this.server = http.createServer(async (req, res) => {
         const url = new URL(req.url || "/", `http://localhost:${this.port}`);
