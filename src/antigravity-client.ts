@@ -8,6 +8,7 @@ import { OAuthManager } from "./oauth";
 import { QuotaTracker } from "./quota-tracker";
 import { MAX_STALL_ROTATIONS, StallRegistry, UpstreamStall, stallRestSeconds, upstreamTimeoutMs } from "./upstream-stall";
 import { describeContentsShape } from "./stream-diagnostics";
+import { networkRetryDelayMs } from "./network";
 
 export interface AntigravityPayload {
   project?: string;
@@ -96,8 +97,13 @@ export class AntigravityClient {
           err.message?.includes("fetch failed");
 
         if (isNetworkErr && attempt < maxRetries) {
-          const delay = attempt * 1000;
-          console.warn(`[Network Retry] Attempt ${attempt}/${maxRetries} to ${url} failed (${err.message}). Retrying in ${delay}ms...`);
+          // A timeout has already waited the full upstream window; an error that came
+          // back quickly is usually a brief blip, so give the network time to recover.
+          const delay = timedOut ? attempt * 1000 : networkRetryDelayMs(attempt);
+          // undici says only "fetch failed"; the code that explains it (ETIMEDOUT,
+          // ECONNRESET) is on the cause.
+          const cause = err.cause?.code ? `: ${err.cause.code}` : "";
+          console.warn(`[Network Retry] Attempt ${attempt}/${maxRetries} to ${url} failed (${err.message}${cause}). Retrying in ${delay}ms...`);
           await sleep(delay);
           continue;
         }

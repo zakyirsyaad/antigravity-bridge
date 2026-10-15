@@ -1,5 +1,31 @@
 # Changelog
 
+## 2.5.1
+
+### Fixed: a few seconds of network trouble on the host no longer fail the request
+
+FCC reported `500 Upstream provider TOKENROUTER returned an error … {"message":"fetch failed"}`.
+The VPS log showed the bridge could not open a connection to Google at all: `fetch failed`, cause
+`AggregateError [ETIMEDOUT]`, three attempts in four seconds, on the one account. About 40 minutes
+later the same host connected in 3 ms.
+
+The VPS has no IPv6 route: every IPv6 connect fails at once, and IPv4 is the only address that works.
+Node tries a host's addresses in turn and gives every one but the last **250 ms**. When DNS listed
+IPv6 first, IPv4 was last and had no 250 ms limit, and nothing went wrong; when it listed IPv4 first,
+a moment of slowness abandoned the only working address after 250 ms, IPv6 failed instantly, and the
+request was lost. The retries waited 1 s and 2 s, still inside the same blip.
+
+- `BridgeServer.start()` sets Node's per-address connect limit to `BRIDGE_CONNECT_ATTEMPT_TIMEOUT_MS`
+  (default 2000 ms) for the whole process, `fetch` included. A value Node cannot take (below 10 ms, or
+  past its int32 limit) falls back to the default: Node throws on it, which would stop the bridge from
+  starting.
+- A network error that comes back quickly is retried after 2 s and then 5 s, on the same account
+  as before. A retry after the bridge's own upstream timeout keeps the old 1 s / 2 s pause: it has
+  already waited a full minute.
+- `[Network Retry]` lines name the cause (`fetch failed: ETIMEDOUT`), which used to show only in the
+  stack trace after the last attempt.
+- `test:network` covers all of this, offline.
+
 ## 2.5.0
 
 Two things found while running OpenDesign and `npm test`, both reproduced against Google.

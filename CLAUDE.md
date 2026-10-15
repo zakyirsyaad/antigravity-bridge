@@ -10,7 +10,17 @@ npm run bridge:start             # start the gateway (tsx bin/cli.ts start), por
 npm run dev                      # same, with tsx watch
 npm run build                    # tsc -> dist/. Typecheck only; NOT how the app runs (see below)
 npm test                         # tsx test/bridge.test.ts — live end-to-end suite
+npm run test:<name>              # one offline suite (table below)
 ```
+
+Every offline suite in one pass (stops nothing on failure; each line says ok/FAIL):
+
+```bash
+for s in $(node -p "Object.keys(require('./package.json').scripts).filter(k=>k.startsWith('test:')&&k!=='test:bridge').join(' ')"); do npm run -s $s >/dev/null 2>&1 && echo "ok   $s" || echo "FAIL $s"; done
+```
+
+There is no linter or formatter configured, and no CI workflow in the repo; `npm run build` is the
+only static check.
 
 CLI subcommands all route through `bin/cli.ts <command>`: `start`, `login`, `status`,
 `usage`, `accounts`, `switch <index|email>`, `sync`, `models`, `update`, `service:install`,
@@ -50,7 +60,7 @@ does not list. The Claude step is reported as SKIPPED, loudly, when Claude's quo
 that says nothing about the bridge — and every other failure still fails the run.
 
 Everything else runs offline — no account, no network, no quota — by stubbing `AntigravityClient`,
-`OAuthManager`, `UsageTracker`, or `fs`. Prefer adding to these; CI can run them.
+`OAuthManager`, `UsageTracker`, or `fs`. Prefer adding to these: they are what a CI job would run.
 
 | Script | Guards |
 |---|---|
@@ -73,6 +83,7 @@ Everything else runs offline — no account, no network, no quota — by stubbin
 | `test:models-context` | every `/v1/models` entry carries `context_length` from `SUPPORTED_MODELS`; the older fields are unchanged; `/models` answers the same |
 | `test:turns` | a history that opens with a model turn gets a user note in front (both protocols, Claude too) and is otherwise untouched; the logged request shape names roles and part kinds and never carries text |
 | `test:stall` | a request Google never answers rotates to the next account after one timeout (not three), rests the stalled one in memory without a quota cooldown, is bounded to two rotations, and keeps the old in-place retries with one account or failover off |
+| `test:network` | `start()` sets Node's per-address connect timeout (2 s, configurable; a value Node would reject falls back instead of stopping the boot); a quick connect failure is retried after 2 s then 5 s on the same account, and the retry line names the cause code; a retry after a timeout keeps the old short pause |
 | `test:stream-end` | a stream that ends empty, non-STOP or without a finish reason leaves one `[Stream End]` warning (with the `maxOut`/`think` that were sent) on both routes; a healthy one stays silent; a `MAX_TOKENS` turn closes as `max_tokens` / `length` (a complete tool call still wins); everything else the client receives is unchanged |
 
 When stubbing, keep side effects off the real `~/.zcode` files and off `launchctl` — several suites
@@ -82,7 +93,7 @@ assert that explicitly, and that is deliberate.
 
 The bridge is always executed as TypeScript through `tsx`. `npm run build` emits `dist/` but that
 output is not runnable as-is: `src/dashboard-html.ts` reads `dashboard.html` from `__dirname`, and
-`tsc` does not copy the 52KB HTML asset. Treat `npm run build` as a typecheck. The LaunchAgent
+`tsc` does not copy the ~60KB HTML asset. Treat `npm run build` as a typecheck. The LaunchAgent
 plist likewise invokes `node node_modules/tsx/dist/cli.mjs bin/cli.ts start`.
 
 ## Architecture
@@ -174,6 +185,19 @@ Two nested loops per request: an outer loop bounded by pool size, an inner loop 
   in the quota file: the account is not out of quota, and the dashboard's cooldown should keep meaning
   that. Look for `[Upstream Stall]` in the log; if it fires on every account in turn, the stall is
   global and rotation cannot help.
+- **A connect failure is the network, not the account**, so it is retried in place and never rotates.
+  The VPS has no IPv6 route, and Node's happy eyeballs gives every address but the last only 250 ms:
+  whenever DNS listed IPv4 first, a slow moment abandoned the one address that works, IPv6 failed at
+  once, and the request died as `fetch failed` (AggregateError `ETIMEDOUT`) — FCC's "500 Upstream
+  provider TOKENROUTER". `BridgeServer.start()` now sets that per-address limit to
+  `BRIDGE_CONNECT_ATTEMPT_TIMEOUT_MS` (2 s; `network.ts`), process-wide, so it covers `fetch` too. An
+  error that comes back quickly is retried after 2 s and then 5 s (it was 1 s and 2 s, all inside the
+  same blip); a retry after the bridge's own timeout keeps the 1 s / 2 s pause, since it has already
+  waited a full minute. Do not "fix" this with `dns.setDefaultResultOrder("ipv4first")`: that makes
+  IPv4 never the last address, so it would *always* get the short limit. A value outside Node's range
+  (10 ms to int32) falls back to the default: Node throws on it, and `start()` applies it first, so it
+  would stop the boot. `[Network Retry]` names the cause code (`fetch failed: ETIMEDOUT`); the message
+  alone says nothing.
 - Before each attempt, a *proactive* check skips the active account if it's already cooling down or
   resting after a stall.
 - Failover happens before the response is streamed, so a mid-stream 429 is not recovered.
@@ -393,7 +417,7 @@ whether it gets used.
 
 ## Dashboard
 
-`src/dashboard.html` is a single self-contained ~52KB file (inline CSS + JS, no build step) served
+`src/dashboard.html` is a single self-contained ~60KB file (inline CSS + JS, no build step) served
 at `/`. It polls `/api/pool`. Its visual system — OLED Zinc palette, concentric radii, tabular
 numerals on all live-updating numbers — is specified in `DESIGN.md`; follow that file when changing
 the UI.
