@@ -100,7 +100,10 @@ export class AntigravityClient {
           // A timeout has already waited the full upstream window; an error that came
           // back quickly is usually a brief blip, so give the network time to recover.
           const delay = timedOut ? attempt * 1000 : networkRetryDelayMs(attempt);
-          console.warn(`[Network Retry] Attempt ${attempt}/${maxRetries} to ${url} failed (${err.message}). Retrying in ${delay}ms...`);
+          // undici says only "fetch failed"; the code that explains it (ETIMEDOUT,
+          // ECONNRESET) is on the cause.
+          const cause = err.cause?.code ? `: ${err.cause.code}` : "";
+          console.warn(`[Network Retry] Attempt ${attempt}/${maxRetries} to ${url} failed (${err.message}${cause}). Retrying in ${delay}ms...`);
           await sleep(delay);
           continue;
         }

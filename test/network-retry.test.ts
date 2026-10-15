@@ -22,7 +22,7 @@ import { OAuthManager } from "../src/oauth";
 import { QuotaTracker } from "../src/quota-tracker";
 import { BridgeServer } from "../src/server";
 import { USER_HOME } from "../src/constants";
-import { connectAttemptTimeoutMs, networkRetryDelayMs } from "../src/network";
+import { applyConnectAttemptTimeout, connectAttemptTimeoutMs, networkRetryDelayMs } from "../src/network";
 
 const TEST_PORT = 52147;
 const ZCODE_DIR = path.join(USER_HOME, ".zcode");
@@ -90,6 +90,15 @@ function expect(label: string, actual: unknown, wanted: unknown) {
   }
 }
 
+/** What applyConnectAttemptTimeout() returns, or the error that would stop start(). */
+function applyOutcome(): number | string {
+  try {
+    return applyConnectAttemptTimeout();
+  } catch (e: any) {
+    return `THREW ${e.code}`;
+  }
+}
+
 async function timed(call: () => Promise<any>): Promise<{ text: string; ms: number }> {
   const started = Date.now();
   try {
@@ -114,6 +123,15 @@ async function runTests() {
   expect("a junk value falls back to the default", connectAttemptTimeoutMs(), 2000);
   process.env.BRIDGE_CONNECT_ATTEMPT_TIMEOUT_MS = "-5";
   expect("a negative value falls back to the default", connectAttemptTimeoutMs(), 2000);
+  process.env.BRIDGE_CONNECT_ATTEMPT_TIMEOUT_MS = "10";
+  expect("Node's own floor of 10 ms is accepted", connectAttemptTimeoutMs(), 10);
+  process.env.BRIDGE_CONNECT_ATTEMPT_TIMEOUT_MS = "5";
+  expect("a value below Node's floor falls back to the default", connectAttemptTimeoutMs(), 2000);
+  process.env.BRIDGE_CONNECT_ATTEMPT_TIMEOUT_MS = "0.5";
+  expect("a fraction that rounds down to 0 falls back to the default", connectAttemptTimeoutMs(), 2000);
+  process.env.BRIDGE_CONNECT_ATTEMPT_TIMEOUT_MS = "3e9";
+  expect("a value past Node's int32 limit falls back to the default", connectAttemptTimeoutMs(), 2000);
+  expect("applying it never throws, so it cannot stop start()", applyOutcome(), 2000);
 
   console.log("\n[2/5] Starting the server applies it to every connection Node opens ...");
   net.setDefaultAutoSelectFamilyAttemptTimeout(250);
@@ -124,6 +142,7 @@ async function runTests() {
   expect("Node's default after start()", net.getDefaultAutoSelectFamilyAttemptTimeout(), 1234);
   await server.stop();
   delete process.env.BRIDGE_CONNECT_ATTEMPT_TIMEOUT_MS;
+  delete process.env.BRIDGE_HOST;
 
   console.log("\n[3/5] Quick network errors are retried after 2 s, then 5 s ...");
   expect("before the second attempt", networkRetryDelayMs(1), 2000);
@@ -137,10 +156,25 @@ async function runTests() {
     if (n === 1) throw connectFailure();
     return ok();
   };
-  const recovered = await timed(() => client.generateContent(payload as any));
+  const warnings: string[] = [];
+  const realWarn = console.warn;
+  console.warn = (...a: any[]) => {
+    warnings.push(a.map(String).join(" "));
+  };
+  let recovered: { text: string; ms: number };
+  try {
+    recovered = await timed(() => client.generateContent(payload as any));
+  } finally {
+    console.warn = realWarn;
+  }
   expect("the request succeeds", recovered.text, "ok");
   expect("after exactly one retry", attempts, 2);
   expect("having waited at least the first pause", recovered.ms >= 1900, true);
+  expect(
+    "the retry line names the cause, not just \"fetch failed\"",
+    warnings.some((w) => w.includes("[Network Retry]") && w.includes("(fetch failed: ETIMEDOUT)")),
+    true
+  );
 
   console.log("\n[5/5] A request that timed out waiting for Google keeps its short pause ...");
   process.env.BRIDGE_UPSTREAM_TIMEOUT_MS = "30";

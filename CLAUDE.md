@@ -83,7 +83,7 @@ Everything else runs offline — no account, no network, no quota — by stubbin
 | `test:models-context` | every `/v1/models` entry carries `context_length` from `SUPPORTED_MODELS`; the older fields are unchanged; `/models` answers the same |
 | `test:turns` | a history that opens with a model turn gets a user note in front (both protocols, Claude too) and is otherwise untouched; the logged request shape names roles and part kinds and never carries text |
 | `test:stall` | a request Google never answers rotates to the next account after one timeout (not three), rests the stalled one in memory without a quota cooldown, is bounded to two rotations, and keeps the old in-place retries with one account or failover off |
-| `test:network` | `start()` sets Node's per-address connect timeout (2 s, configurable); a quick connect failure is retried after 2 s then 5 s on the same account; a retry after a timeout keeps the old short pause |
+| `test:network` | `start()` sets Node's per-address connect timeout (2 s, configurable; a value Node would reject falls back instead of stopping the boot); a quick connect failure is retried after 2 s then 5 s on the same account, and the retry line names the cause code; a retry after a timeout keeps the old short pause |
 | `test:stream-end` | a stream that ends empty, non-STOP or without a finish reason leaves one `[Stream End]` warning (with the `maxOut`/`think` that were sent) on both routes; a healthy one stays silent; a `MAX_TOKENS` turn closes as `max_tokens` / `length` (a complete tool call still wins); everything else the client receives is unchanged |
 
 When stubbing, keep side effects off the real `~/.zcode` files and off `launchctl` — several suites
@@ -194,7 +194,10 @@ Two nested loops per request: an outer loop bounded by pool size, an inner loop 
   error that comes back quickly is retried after 2 s and then 5 s (it was 1 s and 2 s, all inside the
   same blip); a retry after the bridge's own timeout keeps the 1 s / 2 s pause, since it has already
   waited a full minute. Do not "fix" this with `dns.setDefaultResultOrder("ipv4first")`: that makes
-  IPv4 never the last address, so it would *always* get the short limit.
+  IPv4 never the last address, so it would *always* get the short limit. A value outside Node's range
+  (10 ms to int32) falls back to the default: Node throws on it, and `start()` applies it first, so it
+  would stop the boot. `[Network Retry]` names the cause code (`fetch failed: ETIMEDOUT`); the message
+  alone says nothing.
 - Before each attempt, a *proactive* check skips the active account if it's already cooling down or
   resting after a stall.
 - Failover happens before the response is streamed, so a mid-stream 429 is not recovered.

@@ -19,10 +19,19 @@ const DEFAULT_CONNECT_ATTEMPT_MS = 2_000;
  */
 const NETWORK_RETRY_DELAYS_MS = [2_000, 5_000];
 
+/**
+ * The range Node accepts: it raises anything below 10 to 10, and throws past int32. A value
+ * it throws on would stop `start()`, and with it the bridge, from booting.
+ */
+const MIN_CONNECT_ATTEMPT_MS = 10;
+const MAX_CONNECT_ATTEMPT_MS = 2_147_483_647;
+
 /** How long one address may take to connect before Node moves on to the next. */
 export function connectAttemptTimeoutMs(): number {
-  const configured = Number(process.env.BRIDGE_CONNECT_ATTEMPT_TIMEOUT_MS);
-  return Number.isFinite(configured) && configured > 0 ? Math.floor(configured) : DEFAULT_CONNECT_ATTEMPT_MS;
+  const configured = Math.floor(Number(process.env.BRIDGE_CONNECT_ATTEMPT_TIMEOUT_MS));
+  return configured >= MIN_CONNECT_ATTEMPT_MS && configured <= MAX_CONNECT_ATTEMPT_MS
+    ? configured
+    : DEFAULT_CONNECT_ATTEMPT_MS;
 }
 
 /** Make every connection this process opens, `fetch` included, use that timeout. */
