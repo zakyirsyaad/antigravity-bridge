@@ -438,6 +438,8 @@ Open **`http://127.0.0.1:52130`** in your browser to access the management inter
   - `● Active`: Currently handling primary traffic.
   - `○ Ready`: Standing by for failover or manual switch.
   - `⏳ Cooling Down`: Rate-limited by Google (HTTP 429) with live ticking countdown timer (*"Resets in 1h 14m 20s"*).
+  - `◌ Resting`: Google stopped answering on this account, so failover skips it for a few minutes (`BRIDGE_STALL_REST_SECONDS`). Held in memory, not a quota cooldown.
+- **Activity Stream**: every failover says why it happened (429 quota, 503 no capacity, 503 service unavailable, stall, cooling down, resting) and for which model.
 - **Dual Live Quotas**: Real-time bars showing internal 5-hour rolling limit and weekly cycle cap percentages.
 - **One-Click Actions**:
   - **Set Active**: Manually route traffic to a specific account.
@@ -455,12 +457,19 @@ Open **`http://127.0.0.1:52130`** in your browser to access the management inter
 | Method | Endpoint | Description |
 | :--- | :--- | :--- |
 | `GET` | `/health` | Service status, current active account, and supported models list |
-| `GET` | `/api/pool` | Complete pool state, all accounts with live quota telemetry, and recent events |
+| `GET` | `/api/pool` | Complete pool state, all accounts with live quota telemetry, and recent events (see below) |
 | `POST` | `/api/pool/switch` | Switch active account (`{"email": "user@gmail.com"}`) |
 | `POST` | `/api/pool/toggle` | Toggle auto-failover engine ON/OFF |
 | `POST` | `/api/pool/clear-cooldown` | Manually clear cooldown on an account (`{"email": "user@gmail.com"}`) |
 | `POST` | `/api/pool/delete` | Remove an account from the pool (`{"email": "user@gmail.com"}`) |
 | `GET` | `/api/pool/auth-url` | Generate Google OAuth PKCE authorization URL for browser login |
+
+Each account in `/api/pool` has a `status`:
+- `active` or `ready`: failover can pick it.
+- `cooling_down`: a 429 quota cooldown, with `cooldown.resetsAt`.
+- `resting`: Google stopped answering on it, so failover skips it until `resting.resetsAt`. This is held in memory and is not quota.
+
+A quota cooldown wins when an account has both. The pool also reports `readyCount`, `coolingDownCount` and `restingCount`. Each `failover` event carries a `reason`: `quota`, `no_capacity`, `unavailable`, `stall`, `cooling_down` or `resting`.
 
 ### Inference Endpoints
 

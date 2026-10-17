@@ -1,5 +1,6 @@
 import { UpstreamError } from "./upstream-error";
 import { upstreamTimeoutMs } from "./upstream-stall";
+import type { FailoverReason } from "./oauth";
 
 /**
  * How one pass over one account ended. Each kind the run can end on gets its own
@@ -24,6 +25,12 @@ export interface AttemptOutcome {
 }
 
 const NO_CAPACITY = /no capacity/i;
+
+/** Why a 429 or 503 moved the pool on, for the failover event the dashboard shows. */
+export function rotationReason(hit429: boolean, message503: string): FailoverReason {
+  if (hit429) return "quota";
+  return NO_CAPACITY.test(message503) ? "no_capacity" : "unavailable";
+}
 
 /**
  * The error a run ends with when `PoolFailures` words it. The kind is carried as

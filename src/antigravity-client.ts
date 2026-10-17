@@ -12,7 +12,7 @@ import { networkRetryDelayMs } from "./network";
 import { UpstreamError } from "./upstream-error";
 // Its home is upstream-error.ts; callers and tests have always imported it from here.
 export { UpstreamError };
-import { PoolFailures } from "./pool-failures";
+import { PoolFailures, rotationReason } from "./pool-failures";
 
 const POOL_RATE_LIMITED = "All accounts in the pool are currently rate limited. Please wait for cooldown to reset.";
 
@@ -119,7 +119,7 @@ export class AntigravityClient {
    */
   private restAndRotate(stalledEmail: string | undefined, model: string): boolean {
     StallRegistry.rest(stalledEmail);
-    const next = this.oauth.selectNextAvailableAccount(stalledEmail, model);
+    const next = this.oauth.selectNextAvailableAccount(stalledEmail, model, "stall");
     if (!next) return false;
     console.warn(
       `[Upstream Stall] ${stalledEmail ?? "The active account"} gave no response within ` +
@@ -150,9 +150,16 @@ export class AntigravityClient {
         (QuotaTracker.getInstance().isAccountRateLimited(account.email, payload.model) ||
           StallRegistry.isResting(account.email))
       ) {
-        const nextAcc = this.oauth.selectNextAvailableAccount(account.email, payload.model);
+        // A quota cooldown outlasts a stall rest, so it is the reason to report, as the
+        // dashboard does.
+        const why = QuotaTracker.getInstance().isAccountRateLimited(account.email, payload.model)
+          ? "cooling_down"
+          : "resting";
+        const nextAcc = this.oauth.selectNextAvailableAccount(account.email, payload.model, why);
         if (nextAcc) {
-          console.log(`[AutoPool] Active account ${account.email} is cooling down. Switched to ${nextAcc.email}`);
+          console.log(
+            `[AutoPool] Active account ${account.email} is ${why === "resting" ? "resting after a stall" : "cooling down"}. Switched to ${nextAcc.email}`
+          );
           account = nextAcc;
         }
       }
@@ -254,11 +261,12 @@ export class AntigravityClient {
 
       // If rate limited or starved of capacity, auto-failover to next available account
       if ((hit429 || hit503) && this.oauth.isAutoFailoverEnabled()) {
-        const nextAccount = this.oauth.selectNextAvailableAccount(currentAccount?.email, payload.model);
+        const why = rotationReason(hit429, message503);
+        const nextAccount = this.oauth.selectNextAvailableAccount(currentAccount?.email, payload.model, why);
         if (nextAccount) {
           console.log(
             `[AutoPool] Failover from ${currentAccount?.email} to ${nextAccount.email} due to ${
-              hit429 ? "429 rate limit" : "503 no capacity"
+              hit429 ? "429 rate limit" : why === "no_capacity" ? "503 no capacity" : "503 service unavailable"
             }.`
           );
           continue;
@@ -295,9 +303,16 @@ export class AntigravityClient {
         (QuotaTracker.getInstance().isAccountRateLimited(account.email, payload.model) ||
           StallRegistry.isResting(account.email))
       ) {
-        const nextAcc = this.oauth.selectNextAvailableAccount(account.email, payload.model);
+        // A quota cooldown outlasts a stall rest, so it is the reason to report, as the
+        // dashboard does.
+        const why = QuotaTracker.getInstance().isAccountRateLimited(account.email, payload.model)
+          ? "cooling_down"
+          : "resting";
+        const nextAcc = this.oauth.selectNextAvailableAccount(account.email, payload.model, why);
         if (nextAcc) {
-          console.log(`[AutoPool] Active account ${account.email} is cooling down. Switched to ${nextAcc.email}`);
+          console.log(
+            `[AutoPool] Active account ${account.email} is ${why === "resting" ? "resting after a stall" : "cooling down"}. Switched to ${nextAcc.email}`
+          );
           account = nextAcc;
         }
       }
@@ -400,11 +415,12 @@ export class AntigravityClient {
       }
 
       if ((hit429 || hit503) && this.oauth.isAutoFailoverEnabled()) {
-        const nextAccount = this.oauth.selectNextAvailableAccount(currentAccount?.email, payload.model);
+        const why = rotationReason(hit429, message503);
+        const nextAccount = this.oauth.selectNextAvailableAccount(currentAccount?.email, payload.model, why);
         if (nextAccount) {
           console.log(
             `[AutoPool] Stream failover from ${currentAccount?.email} to ${nextAccount.email} due to ${
-              hit429 ? "429 rate limit" : "503 no capacity"
+              hit429 ? "429 rate limit" : why === "no_capacity" ? "503 no capacity" : "503 service unavailable"
             }.`
           );
           continue;

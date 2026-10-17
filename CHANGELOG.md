@@ -1,5 +1,30 @@
 # Changelog
 
+## 2.6.3
+
+### Fixed: the dashboard showed a resting account as ready, and every failover looked the same
+
+- **A resting account is no longer drawn as ready.** After a stall the bridge skips an account for
+  `BRIDGE_STALL_REST_SECONDS` (300 s), in memory, but `/api/pool` called it `ready`. The dashboard
+  drew it green, and "Ready for Gemini / Claude" counted an account that failover would not pick.
+  `/api/pool` now reports such an account as `status: "resting"` with `resting: { remainingMs, resetsAt }`,
+  plus a pool-level `restingCount`. `readyCount` leaves it out. A quota cooldown still wins, since it
+  outlasts the rest. The card shows a monochrome "Resting" chip and a live countdown on each family row.
+  It is deliberately not amber: amber means a 429 cooldown, and a rest is not quota.
+  The active account says both ("● Active · Resting"). A rest that runs out between polls reads
+  "ending" rather than "ready to reset".
+- **Every failover says why.** The activity stream read "Auto-failover switched from A to B" for a 429,
+  a 503 and a stall alike. Each failover event now carries a `reason` (`quota`, `no_capacity`,
+  `unavailable`, `stall`, `cooling_down`, `resting`), and its message ends with that reason and the
+  model, e.g. `: 503 no capacity · gemini-3-flash`. The client passes the reason from every place it
+  moves the pool, on both the streaming and the non-streaming path. An account that is both cooling
+  and resting is reported as cooling, as the dashboard shows it. The server log now tells a
+  generic 503 apart from "no capacity" too.
+- The Auto-Failover toggle's tooltip said "on HTTP 429". It now names all three triggers: a 429, a 503,
+  and a stall.
+- New offline suite `test:pool` guards the new fields and every reason on both paths. It runs the
+  dashboard's own `readyFor()` / `statusChip()` helpers rather than matching its source text.
+
 ## 2.6.2
 
 ### Fixed: a pool that runs out on stalls no longer says "rate limited" or "This operation was aborted"
