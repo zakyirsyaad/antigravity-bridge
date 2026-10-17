@@ -78,7 +78,7 @@ Everything else runs offline — no account, no network, no quota — by stubbin
 | `test:capacity` | a 503 rotates the pool without recording a cooldown; 400 still does not rotate |
 | `test:quota` | a 429 cools the model family that earned it, not the whole account |
 | `test:updater` | `update` refuses dirty worktrees and non-git installs, tolerates only npm's own lockfile version rewrite; the release check never throws; the lockfile tracks package.json |
-| `test:effort` | Anthropic `output_config.effort` scales the budget; the default level changes nothing; a model with no declared budget reasons only above the default level; a retired fixed-tier id keeps its tier on both protocols; every ZCode reasoning variant sends a distinct budget |
+| `test:effort` | Anthropic `output_config.effort` scales the budget; the default level changes nothing; a model with no declared budget reasons only above the default level; a retired fixed-tier id, or a reasoning suffix on a guessed one, keeps its tier on both protocols; every ZCode reasoning variant sends a distinct budget |
 | `test:upstream` | a request Google rejects (400) is a 400 on all four paths, the OpenAI stream included; every other failure keeps its old shape; a failure after streaming began stays in-band |
 | `test:models-context` | every `/v1/models` entry carries `context_length` from `SUPPORTED_MODELS`; the older fields are unchanged; `/models` answers the same |
 | `test:turns` | a history that opens with a model turn gets a user note in front (both protocols, Claude too) and is otherwise untouched; the logged request shape names roles and part kinds and never carries text |
@@ -376,17 +376,23 @@ Retired ids are kept as explicit aliases in `resolveModel()` so existing client 
 each points at the model its name claimed, which is often not what it used to resolve to. An alias
 whose name fixed a reasoning tier (`gemini-3.6-flash-low`, `gemini-3.5-flash-extra-low`,
 `gemini-2.5-flash-thinking`, ...) carries it in `RETIRED_IDS`. `withAliasTier()` then substitutes that
-tier's budget (`DYNAMIC_TIERS`: 1000 / 4000 / dynamic) for the target model's declared one, and every
+tier's budget (`ALIAS_TIER_BUDGETS`: 1000 / 4000 / dynamic, what the old fixed models declared) for the
+target model's declared one, and every
 effort and explicit-budget rule treats it as the model's own default. Without it, a tool loop configured
 with a `-low` id and no effort went from 1000 thinking tokens to unbounded dynamic reasoning on every
 step, behind a single warning. The tier lives on the alias, never on the target: the same model
-requested by its own id keeps its own default.
+requested by its own id keeps its own default. `ALIAS_TIER_BUDGETS` holds the same numbers as
+`DYNAMIC_TIERS` but is a separate constant on purpose: the effort scale may be retuned, and an old id's
+promise should not move with it.
 
 **`resolveModel()` never resolves silently.** An inexact match warns once naming what it used, and
 an id matching nothing throws `UnknownModelError`, which `server.ts` turns into a 400. Approximation
 is deliberate — Claude Code sends Anthropic's own ids and refusing them would break the main use
 case — but a client that appends a reasoning suffix (`gemini-3.8-flash-tiered-high`) once silently
-got a different model generation, so the guess has to be audible.
+got a different model generation, so the guess has to be audible. The suffix itself is kept: a
+trailing `-low` / `-medium` / `-high` (or Google's `-extra-low`) on a Gemini guess becomes the same
+tier a retired id carries, and the warning names it. Only a whole trailing segment counts (`-lite` is
+a model), and a Claude guess ignores it, because its budget is fixed and `-high` would send `-1`.
 
 OpenAI responses — the non-streaming body and the `include_usage` stream chunk alike, both built by
 `Transformer.openaiUsage()` — report `completion_tokens` **including** reasoning, with

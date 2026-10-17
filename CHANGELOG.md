@@ -27,6 +27,11 @@ with the right content, on both protocols: `claude-opus-4-6-thinking`, `claude-s
   are the budgets the old models declared, so a tool loop configured with `gemini-3.6-flash-low` does not
   start reasoning without bound. `gemini-3.1-pro-low` keeps the low tier too. Effort scales that tier as
   it scaled the old declared budget: Claude Code's "high" keeps it, and an explicit budget still wins.
+  A reasoning suffix on an id the bridge has to approximate works the same way:
+  `gemini-3.8-flash-tiered-low`, with or without a `provider/` prefix, is the tiered model at the low
+  tier, and the warning says so. Only a trailing `-low` / `-medium` / `-high` / `-extra-low` counts,
+  and only on a Gemini guess. These budgets are a constant of their own (`ALIAS_TIER_BUDGETS`), not the
+  effort scale's, so retuning effort cannot change what an old id means.
   The nearest-match guess for "flash" used to be
   `gemini-3.6-flash-high`, one of the dead ids; it is now `gemini-3.8-flash-tiered`. For "lite" it is
   `gemini-3.5-flash-lite`.

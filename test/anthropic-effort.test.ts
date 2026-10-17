@@ -185,6 +185,45 @@ function runTests() {
   expect("the lite model itself does not", anthropicBudget(UNDECLARED, effort("high")), undefined);
   console.warn = realWarn;
 
+  console.log("\n[7b/8] A reasoning suffix on an approximated id is kept as its tier, on both paths ...");
+  // `gemini-3.8-flash-tiered-low` is the shape a client produces by appending a reasoning
+  // level to a model name. The nearest-match guess used to drop it, so "-low" became
+  // unbounded dynamic reasoning; now it reads the suffix the way a retired id carries a tier.
+  const warned: string[] = [];
+  console.warn = (...a: any[]) => {
+    warned.push(a.map(String).join(" "));
+  };
+  const suffixed: Array<[string, unknown, string]> = [
+    ["gemini-3.8-flash-tiered-low", 1000, "a suffix on an exact id"],
+    ["gemini-3.8-flash-tiered-medium", 4000, "medium"],
+    ["gemini-3.8-flash-tiered-high", -1, "high"],
+    ["openrouter/gemini-3.8-flash-tiered-low", 1000, "behind a provider prefix"],
+    ["open-design-byok/google/gemini-3.8-flash-tiered-medium", 4000, "behind a two-level prefix"],
+    ["gemini-9-flash-extra-low", 1000, "-extra-low is Google's Low, not a stray segment"],
+    ["some-pro-model-low", 1000, "a pro guess keeps its suffix too"],
+    ["gemini-9-flash-lite-low", 1000, "on the lite model it lands on"],
+  ];
+  for (const [id, wanted, why] of suffixed) {
+    expect(`${id} (${why}): anthropic`, anthropicBudget(id, effort("high")), wanted);
+    expect(`${id} (${why}): openai`, openaiBudget(id), wanted);
+  }
+  // Only a whole trailing segment is a tier: "-lite" is a model, and these name none.
+  expect("-lite is not a tier", anthropicBudget("gemini-9-flash-lite", effort("high")), undefined);
+  expect("an unsuffixed guess keeps the model default", anthropicBudget("gemini-9-flash", effort("high")), -1);
+  expect("'low' inside a name is not a suffix", anthropicBudget("gemini-lowkey-flash", effort("high")), -1);
+  expect("a mid-name '-low-' is not a suffix", anthropicBudget("gemini-low-flash", effort("high")), -1);
+  // Claude targets have a fixed budget; "-high" must not send them -1.
+  expect("a claude guess ignores a suffix", anthropicBudget("claude-opus-9-high", effort("high")), 1024);
+  // The suffix is the default, so effort scales it and an explicit budget still wins.
+  expect("suffix -low, anthropic max", anthropicBudget("gemini-3.8-flash-tiered-low", effort("max")), 4000);
+  expect("suffix -low, explicit budget wins", anthropicBudget("gemini-3.8-flash-tiered-low", { thinking: { type: "enabled", budget_tokens: 7777 } }), 7777);
+  expect("suffix -low, openai none disables", openaiBudget("gemini-3.8-flash-tiered-low", { reasoning_effort: "none" }), 0);
+  console.warn = realWarn;
+  const lowWarning = warned.find((w) => w.includes('"gemini-3.8-flash-tiered-low"')) || "";
+  expect("the approximated warning names the tier", lowWarning.includes("approximated") && lowWarning.includes("low reasoning tier"), true);
+  const plainWarning = warned.find((w) => w.includes('"gemini-9-flash"')) || "";
+  expect("and says nothing of a tier when there was none", plainWarning !== "" && !plainWarning.includes("reasoning tier"), true);
+
   console.log("\n[8/8] Every reasoning level ZCode is offered changes what is sent ...");
   // ZCode speaks the Anthropic protocol, so its variants arrive as output_config.effort.
   // A level that sends the same thing as another one is a control that does nothing.

@@ -59,6 +59,27 @@ export class Transformer {
   private static readonly DYNAMIC_TIERS: Record<string, number> = { low: 1000, medium: 4000, high: -1 };
 
   /**
+   * The budget a tier in a model's *name* stands for: what Google's fixed-tier
+   * models declared (gemini-3.6-flash-low 1000, -medium 4000, -high dynamic).
+   * The same numbers as DYNAMIC_TIERS today, but a different fact: that one says
+   * what an effort level buys on a dynamic model, this one what an old id
+   * promised. Kept apart so retuning effort cannot rewrite a retired id.
+   */
+  private static readonly ALIAS_TIER_BUDGETS: Record<ReasoningTier, number> = { low: 1000, medium: 4000, high: -1 };
+
+  /**
+   * Reasoning suffixes a client appends to a model name (`gemini-3.8-flash-tiered-low`).
+   * Longest first, and whole trailing segments only: `-lite` is a model, not a tier,
+   * and `-extra-low` is Google's own name for its Low tier.
+   */
+  private static readonly TIER_SUFFIXES: Array<[string, ReasoningTier]> = [
+    ["-extra-low", "low"],
+    ["-low", "low"],
+    ["-medium", "medium"],
+    ["-high", "high"],
+  ];
+
+  /**
    * Effort scales multiply the model's own declared budget, so "high" means high
    * *for that model*. Each is anchored on its protocol's DEFAULT level at 1x:
    * OpenAI's default is "medium", Anthropic's is "high" — Claude Code sends it on
@@ -344,16 +365,26 @@ export class Transformer {
   }
 
   /**
-   * The model as thinking configuration should see it, given a retired id's tier.
+   * The model as thinking configuration should see it, given the tier a retired id
+   * or a reasoning suffix named.
    *
    * The tier replaces the declared budget with what the old fixed-tier models
-   * declared (DYNAMIC_TIERS: 1000 / 4000 / dynamic), and everything downstream
+   * declared (ALIAS_TIER_BUDGETS: 1000 / 4000 / dynamic), and everything downstream
    * treats it as that model's own default: Claude Code's ever-present "high" keeps
    * it, another effort level scales it, and an explicit budget still wins.
    */
   private static withAliasTier(model: ModelDef | undefined, tier?: ReasoningTier): ModelDef | undefined {
     if (!model || !tier || !model.supportsThinking) return model;
-    return { ...model, thinkingBudget: this.DYNAMIC_TIERS[tier] };
+    return { ...model, thinkingBudget: this.ALIAS_TIER_BUDGETS[tier] };
+  }
+
+  /** The tier a recognised trailing suffix names, or undefined. */
+  private static tierSuffix(name: string): ReasoningTier | undefined {
+    return this.TIER_SUFFIXES.find(([suffix]) => name.endsWith(suffix))?.[1];
+  }
+
+  private static tierNote(tier?: ReasoningTier): string {
+    return tier ? ` at the ${tier} reasoning tier its name promised` : "";
   }
 
   public static resolveModel(requestedModel: string): string {
@@ -373,8 +404,7 @@ export class Transformer {
       // With no GitHub watchers on this project, the software itself is the
       // only thing that will tell an existing user their model changed under
       // them. Silent aliasing would hide that completely.
-      const tierNote = retired.tier ? ` at the ${retired.tier} reasoning tier its name promised` : "";
-      this.warnInexactModel(clean, retired.to, "deprecated", tierNote);
+      this.warnInexactModel(clean, retired.to, "deprecated", this.tierNote(retired.tier));
       return { id: retired.to, tier: retired.tier };
     }
 
@@ -398,8 +428,12 @@ export class Transformer {
                 : null;
 
     if (guess) {
-      this.warnInexactModel(clean, guess, "approximated");
-      return { id: guess };
+      // A reasoning suffix is still the caller's choice of tier: dropping it sent
+      // `gemini-3.8-flash-tiered-low` to unbounded dynamic reasoning. Gemini guesses
+      // only — a Claude target has a fixed budget, and "-high" would send it -1.
+      const tier = guess.startsWith("gemini-") ? this.tierSuffix(name) : undefined;
+      this.warnInexactModel(clean, guess, "approximated", this.tierNote(tier));
+      return { id: guess, tier };
     }
 
     // Forwarding an unmapped name only bought an opaque "invalid argument" 400
