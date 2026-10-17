@@ -25,6 +25,7 @@
  */
 import * as clientModule from "../src/antigravity-client";
 import { AntigravityClient } from "../src/antigravity-client";
+import { PoolFailures } from "../src/pool-failures";
 import { OAuthManager } from "../src/oauth";
 import { QuotaTracker } from "../src/quota-tracker";
 import { UsageTracker } from "../src/usage-tracker";
@@ -36,6 +37,13 @@ const GOOGLE_400 =
 
 // Resolved at runtime so a missing export fails an assertion, not the import.
 const UpstreamError: any = (clientModule as any).UpstreamError;
+
+/** The error the client ends with when the pool's last account answered this 503. */
+function poolRanOutOn(message503: string): Error | null {
+  const failures = new PoolFailures();
+  failures.record("a@example.com", { hit429: false, hit503: true, message503, stalled: false });
+  return failures.exhaustedError("gemini-3.8-flash-tiered");
+}
 
 function upstream(status: number, text: string): Error {
   const message = `Antigravity https://example.invalid (${status}): ${text}`;
@@ -227,25 +235,27 @@ async function runTests() {
     }
     expect("Anthropic clients get the Anthropic envelope", replies["Anthropic stream"].json?.type, "error");
 
-    console.log("\n[4/6] Google-side capacity is a 503; every other failure keeps the behaviour it had ...");
+    console.log("\n[4/6] A Google 503 is a 503; every other failure keeps the behaviour it had ...");
     // A 503 used to be a 500 like everything else (and a 200 on the OpenAI stream). It
     // is Google-side — not the caller's mistake, not ours, not quota — so every path
-    // says 503 `overloaded_error` before streaming begins.
-    failure = upstream(503, "No capacity available for model X on the server");
-    const openaiPlain503 = await post(OPENAI, false);
-    expect("503, OpenAI non-stream: 503", openaiPlain503.status, 503);
-    expect("503, OpenAI non-stream: overloaded_error", openaiPlain503.json?.error?.type, "overloaded_error");
-    expect("503, OpenAI non-stream: names the cause", String(openaiPlain503.json?.error?.message).includes("No capacity"), true);
-    expect("503, Anthropic non-stream: 503", (await post(ANTHROPIC, false)).status, 503);
-    const anthropic503 = await post(ANTHROPIC, true);
-    expect("503, Anthropic stream: 503", anthropic503.status, 503);
-    expect("503, Anthropic stream: overloaded_error", anthropic503.json?.error?.type, "overloaded_error");
-    expect("503, Anthropic stream: Anthropic envelope", anthropic503.json?.type, "error");
-
-    const openai503 = await post(OPENAI, true);
-    expect("503, OpenAI stream (FCC): 503", openai503.status, 503);
-    expect("503, OpenAI stream (FCC): overloaded_error", openai503.json?.error?.type, "overloaded_error");
-    expect("503, OpenAI stream (FCC): JSON, not an event stream", openai503.contentType.includes("application/json"), true);
+    // says 503 before streaming begins. Only "no capacity" is `overloaded_error`: a
+    // generic 503 is an outage, and clients that branch on the type would take it
+    // for transient model load.
+    const kinds: Array<[string, Error | null, string]> = [
+      ["capacity", poolRanOutOn("No capacity available for model X on the server"), "overloaded_error"],
+      ["unavailable", poolRanOutOn("The service is currently unavailable."), "api_error"],
+      ["unclassified", upstream(503, "No capacity available for model X on the server"), "api_error"],
+    ];
+    for (const [kind, error, wantedType] of kinds) {
+      failure = error;
+      for (const [label, path, stream] of paths) {
+        const reply = await post(path, stream);
+        expect(`503 ${kind}, ${label}: 503`, reply.status, 503);
+        expect(`503 ${kind}, ${label}: ${wantedType}`, reply.json?.error?.type, wantedType);
+        expect(`503 ${kind}, ${label}: JSON, not an event stream`, reply.contentType.includes("application/json"), true);
+        expect(`503 ${kind}, ${label}: Anthropic envelope`, reply.json?.type, "error");
+      }
+    }
 
     failure = upstream(401, "credentials rejected");
     expect("401 is our credentials, not the caller's mistake: still 500", (await post(OPENAI, false)).status, 500);

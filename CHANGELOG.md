@@ -20,9 +20,10 @@ people to the quota file and the dashboard's meters looking for one.
 - Accounts are counted once each, by email. A 503 writes no cooldown, so the pool can come back to
   an account it already tried while skipping one that is cooling down; counting passes said
   "all 3 accounts" when two had been tried.
-- The bridge answers it as HTTP 503 `overloaded_error` instead of 500 on all four paths, the OpenAI
-  stream (FCC) included, which used to commit to `200` and report it in-band. A failure after the
-  stream began is still in-band.
+- The bridge answers it as HTTP 503 instead of 500 on all four paths, the OpenAI stream (FCC)
+  included, which used to commit to `200` and report it in-band. The type is `overloaded_error` only
+  for "no capacity"; any other 503 is an outage and goes out as `api_error`, so clients that branch on
+  the type do not take it for transient model load. A failure after the stream began is still in-band.
 - A run that ends on a 429 keeps the old wording, unchanged.
 - `test:capacity` covers all of this, offline; `test:upstream`'s 503 expectations moved from 500 (and
   the OpenAI stream's from 200) to 503.

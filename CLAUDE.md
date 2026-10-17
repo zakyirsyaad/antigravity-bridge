@@ -79,7 +79,7 @@ Everything else runs offline — no account, no network, no quota — by stubbin
 | `test:quota` | a 429 cools the model family that earned it, not the whole account |
 | `test:updater` | `update` refuses dirty worktrees and non-git installs, tolerates only npm's own lockfile version rewrite; the release check never throws; the lockfile tracks package.json |
 | `test:effort` | Anthropic `output_config.effort` scales the budget; the default level changes nothing; a model with no declared budget reasons only above the default level; a retired fixed-tier id, or a reasoning suffix on a guessed one, keeps its tier on both protocols; every ZCode reasoning variant sends a distinct budget |
-| `test:upstream` | a request Google rejects (400) is a 400 on all four paths, the OpenAI stream included; a 503 is a 503 `overloaded_error` on all four paths; every other failure keeps its old shape; a failure after streaming began stays in-band |
+| `test:upstream` | a request Google rejects (400) is a 400 on all four paths, the OpenAI stream included; a 503 is a 503 on all four paths, `overloaded_error` for no capacity and `api_error` for any other; every other failure keeps its old shape; a failure after streaming began stays in-band |
 | `test:models-context` | every `/v1/models` entry carries `context_length` from `SUPPORTED_MODELS`; the older fields are unchanged; `/models` answers the same |
 | `test:turns` | a history that opens with a model turn gets a user note in front (both protocols, Claude too) and is otherwise untouched; the logged request shape names roles and part kinds and never carries text |
 | `test:stall` | a request Google never answers rotates to the next account after one timeout (not three), rests the stalled one in memory without a quota cooldown, is bounded to two rotations, and keeps the old in-place retries with one account or failover off |
@@ -131,8 +131,9 @@ request itself (an `UpstreamError` with `status === 400`: a schema it cannot tak
 range). The OpenAI handler used to write `200` before asking Google anything, which made that
 impossible — the failure arrived as an event inside a success, and FCC described a permanent mistake
 as "usually temporary — try again" — so it now obtains the upstream stream first, as the Anthropic one
-always did. A Google 503 (no capacity, or unavailable — `UpstreamError` with `status === 503`) is
-likewise HTTP 503 `overloaded_error` on all four paths. Every other pre-stream failure is as before:
+always did. A Google 503 (`UpstreamError` with `status === 503`) is likewise HTTP 503 on all four
+paths: `overloaded_error` only when the pool ran out on "No capacity" (`PoolExhaustedError` with
+`kind === "capacity"`, read as data, never from the message), `api_error` for any other 503. Every other pre-stream failure is as before:
 the Anthropic handler answers a real 500 (`api_error`), but the OpenAI stream still commits to `200`
 and reports it as an in-band `data: {"error": ...}` event. So read nginx status codes with that in
 mind: a `200` on `/v1/chat/completions` proves nothing about success, while on `/v1/messages` it does. A failure after

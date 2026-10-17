@@ -98,6 +98,7 @@ function expectCapacityError(label: string, err: any) {
   const message = String(err?.message);
   expect(`${label}: is an UpstreamError`, err instanceof UpstreamError, true);
   expect(`${label}: carries status 503`, err?.status, 503);
+  expect(`${label}: kind is capacity, as data`, err?.kind, "capacity");
   expect(`${label}: names the model`, message.includes(payload.model), true);
   expect(`${label}: says Google-side capacity`, message.includes("Google-side capacity, not quota"), true);
   expect(`${label}: keeps Google's own message`, message.includes(CAPACITY), true);
@@ -236,6 +237,7 @@ async function runTests() {
   expect("is an UpstreamError", err instanceof UpstreamError, true);
   expect("carries status 503", err?.status, 503);
   expect("says service unavailable", String(err?.message).includes("503 (service unavailable)"), true);
+  expect("kind is unavailable, as data", err?.kind, "unavailable");
   expect("names the model", String(err?.message).includes(payload.model), true);
   expect("says not quota", String(err?.message).includes("not quota"), true);
   expect("keeps Google's own message", String(err?.message).includes(UNAVAILABLE), true);

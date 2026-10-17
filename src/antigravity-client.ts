@@ -223,14 +223,10 @@ export class AntigravityClient {
           if (e instanceof UpstreamStall) {
             stalled = true;
           }
+          // Only a 400 is thrown inside the try; a 429 or 503 response is recorded
+          // above and never reaches here.
           if (e.message?.includes("(400)")) {
             throw e;
-          }
-          if (e.message?.includes("(429)")) {
-            hit429 = true;
-          }
-          if (e.message?.includes("(503)")) {
-            hit503 = true;
           }
           continue;
         }
@@ -374,14 +370,10 @@ export class AntigravityClient {
           if (e instanceof UpstreamStall) {
             stalled = true;
           }
+          // Only a 400 is thrown inside the try; a 429 or 503 response is recorded
+          // above and never reaches here.
           if (e.message?.includes("(400)")) {
             throw e;
-          }
-          if (e.message?.includes("(429)")) {
-            hit429 = true;
-          }
-          if (e.message?.includes("(503)")) {
-            hit503 = true;
           }
           continue;
         }

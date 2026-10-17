@@ -22,6 +22,21 @@ export interface AttemptOutcome {
 
 const NO_CAPACITY = /no capacity/i;
 
+/**
+ * The error a run ends with when `PoolFailures` words it. The kind is carried as
+ * data so the server can choose the error type without reading the message: only
+ * "capacity" is a model overload, a generic 503 is an outage.
+ */
+export class PoolExhaustedError extends UpstreamError {
+  public readonly kind: FailureKind;
+
+  constructor(kind: FailureKind, status: number, message: string) {
+    super(status, message);
+    this.name = "PoolExhaustedError";
+    this.kind = kind;
+  }
+}
+
 function classify(outcome: AttemptOutcome): FailureKind {
   if (outcome.hit429) return "quota";
   if (outcome.hit503) return NO_CAPACITY.test(outcome.message503) ? "capacity" : "unavailable";
@@ -56,19 +71,21 @@ export class PoolFailures {
   }
 
   /** The error to end the run with, or null to keep the caller's own. */
-  exhaustedError(model: string): UpstreamError | null {
+  exhaustedError(model: string): PoolExhaustedError | null {
     if (!this.last) return null;
     const google = this.last.message503 ? ` (Google: ${this.last.message503})` : "";
     switch (this.last.kind) {
       case "capacity":
-        return new UpstreamError(
+        return new PoolExhaustedError(
+          "capacity",
           503,
           `Google has no capacity for model ${model} right now: ${this.describe("capacity")} answered ` +
             `HTTP 503 "no capacity". This is Google-side capacity, not quota — no account was put on ` +
             `cooldown, and there is no cooldown to wait out. Retry shortly, or use another model.${google}`
         );
       case "unavailable":
-        return new UpstreamError(
+        return new PoolExhaustedError(
+          "unavailable",
           503,
           `Google answered HTTP 503 (service unavailable) for model ${model}: ${this.describe("unavailable")} ` +
             `answered it. This is on Google's side, not quota — no account was put on cooldown, and there ` +
