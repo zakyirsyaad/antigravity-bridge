@@ -449,7 +449,8 @@ whether it gets used.
 ## Gotchas
 
 - **Bind address**: `server.ts` listens on `process.env.BRIDGE_HOST || "0.0.0.0"`, i.e. it is
-  reachable on the LAN by default. The README's security section still claims `127.0.0.1`.
+  reachable on the LAN by default. The README says so (Quick Start, Configuration, Security); keep it
+  that way if the default ever changes.
 - **This bridge is deployed publicly.** `src/dashboard.html` takes its remote base URL from
   `window.location.origin` and defaults the setup guide to that host whenever the page is not
   loaded from localhost. Anything hardcoded there is a bug: the endpoint pill read
