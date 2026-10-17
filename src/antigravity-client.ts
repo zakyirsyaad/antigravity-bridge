@@ -49,6 +49,11 @@ export class AntigravityClient {
    * the caller can move to another account — a stall comes in bursts on one
    * account, and two more minutes spent inside it only ended as a 500. A dropped or
    * reset connection is quick and local, and is retried in place either way.
+   *
+   * "retry" still ends in an UpstreamStall when its last attempt timed out, so the
+   * run is recorded as a stall and the caller is told Google stopped answering. It
+   * used to end in the bare AbortError, "This operation was aborted", after three
+   * minutes and with no model named, on exactly the pools that cannot rotate.
    */
   private async fetchWithRetry(
     url: string,
@@ -75,7 +80,7 @@ export class AntigravityClient {
         });
       } catch (err: any) {
         lastError = err;
-        if (timedOut && onTimeout === "throw") {
+        if (timedOut && (onTimeout === "throw" || attempt === maxRetries)) {
           throw new UpstreamStall(url, timeoutMs);
         }
         const isNetworkErr =

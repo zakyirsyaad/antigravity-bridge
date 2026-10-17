@@ -1,4 +1,5 @@
 import { UpstreamError } from "./upstream-error";
+import { upstreamTimeoutMs } from "./upstream-stall";
 
 /**
  * How one pass over one account ended. Each kind the run can end on gets its own
@@ -54,6 +55,10 @@ function classify(outcome: AttemptOutcome): FailureKind {
  * people to the quota file for a cooldown no 503 ever writes. The wording now
  * follows the failure that ended the run; a run that ends on a 429 keeps the old one.
  *
+ * A stall reached the same message: Google accepted the request and never answered,
+ * which writes no quota cooldown, and the pool rotated back to an account that had
+ * answered 503 and ran out of passes.
+ *
  * Accounts are counted by email, not by pass: a 503 writes no cooldown, so the
  * selector can come back to an account already tried while skipping a cooling one.
  */
@@ -90,6 +95,18 @@ export class PoolFailures {
           `Google answered HTTP 503 (service unavailable) for model ${model}: ${this.describe("unavailable")} ` +
             `answered it. This is on Google's side, not quota — no account was put on cooldown, and there ` +
             `is no cooldown to wait out. Retry shortly.${google}`
+        );
+      case "stall":
+        // A 500, as a stall has always been: it is not the 503 the server answers
+        // for Google-side capacity. Nothing is said about resting, because a pool
+        // that retried in place rested nothing.
+        return new PoolExhaustedError(
+          "stall",
+          500,
+          `Google stopped answering requests for model ${model}: ${this.describe("stall")} gave no ` +
+            `response within ${Math.round(upstreamTimeoutMs() / 1000)}s (upstream stall / timeout). This is ` +
+            `not quota — no account was put on cooldown, and there is no cooldown to wait out. Retry in a ` +
+            `few minutes.`
         );
       default:
         return null;

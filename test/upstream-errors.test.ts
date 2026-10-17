@@ -263,6 +263,21 @@ async function runTests() {
     expect("pool exhausted, OpenAI stream: still in-band", (await post(OPENAI, true)).status, 200);
     expect("pool exhausted, OpenAI non-stream: still 500", (await post(OPENAI, false)).status, 500);
 
+    // A pool that ran out because Google stopped answering is worded by PoolFailures
+    // too, but it is a 500 as a stall always was, not the 503 kept for capacity.
+    const stalled = new PoolFailures();
+    stalled.record("a@example.com", { hit429: false, hit503: false, message503: "", stalled: true });
+    failure = stalled.exhaustedError("gemini-3.8-flash-tiered");
+    for (const [label, path, stream] of paths) {
+      if (path === OPENAI && stream) continue;
+      const reply = await post(path, stream);
+      expect(`stall, ${label}: still 500`, reply.status, 500);
+      expect(`stall, ${label}: says Google stopped answering`, String(reply.json?.error?.message).includes("stopped answering"), true);
+    }
+    const stalledStream = await post(OPENAI, true);
+    expect("stall, OpenAI stream: still in-band", stalledStream.status, 200);
+    expect("stall, OpenAI stream: the event says Google stopped answering", stalledStream.text.includes("stopped answering"), true);
+
     console.log("\n[5/6] A failure after streaming has begun cannot become a status, and must not crash ...");
     failure = upstream(400, GOOGLE_400);
     failAfterFirstChunk = true;

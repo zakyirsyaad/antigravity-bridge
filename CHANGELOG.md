@@ -1,5 +1,35 @@
 # Changelog
 
+## 2.6.2
+
+### Fixed: a pool that runs out on stalls no longer says "rate limited" or "This operation was aborted"
+
+A two-account pool where A answered 503 "no capacity" and B then stalled (Google accepted the request
+and never answered within `BRIDGE_UPSTREAM_TIMEOUT_MS`) rotated back to A, spent its passes, and
+failed with "All accounts in the pool are currently rate limited. Please wait for cooldown to reset."
+A stall rests the account in memory (`StallRegistry`) and writes no quota cooldown, so — as with the
+503 case 2.6.1 fixed — there was no cooldown to wait for. A pool that spent its stall rotations, or had
+nowhere left to rotate, ended on the bare `No response from Google within 60s (<url>)`. And a pool
+that cannot rotate at all — one account, or failover off — retried three times and ended on "This
+operation was aborted", after about three minutes, with no model named: exactly where an explanation
+helps most.
+
+- When the last account tried stalled, both `generateContent` and `streamGenerateContent` now end with
+  a `PoolExhaustedError` of kind `"stall"` that names the model, says Google stopped answering
+  (upstream stall / timeout) and the timeout, says it is not quota and that no cooldown was written,
+  and counts the accounts that stalled. It is the `"stall"` case of `PoolFailures.exhaustedError()`,
+  so all four exits get it with no change of their own.
+- A pool that retries in place keeps its three attempts and their delays exactly as before; only when
+  the last attempt timed out does it end in an `UpstreamStall`, so the run is recorded as a stall. A
+  last attempt that failed some other way (a reset) is still reported as itself. The wording claims no
+  resting, because that path rests nothing.
+- Accounts are counted once each, by email, as 2.6.1 does for 503s: A 503, B 503, back to A, which
+  stalls, is "1 of 2 accounts tried", not 1 of 3 passes.
+- It still reaches the caller as a 500 — in-band on the OpenAI stream — as a stall always has, not the
+  503 kept for Google-side capacity. Only the wording changed.
+- A run that ends on a 429 keeps the rate-limited wording, and one that ends on a 503 keeps 2.6.1's.
+- `test:stall` covers the client side, offline; `test:upstream` checks the 500 on every path.
+
 ## 2.6.1
 
 ### Fixed: a pool that runs out on Google-side capacity no longer says "rate limited"
