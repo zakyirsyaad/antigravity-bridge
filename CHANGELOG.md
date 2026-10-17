@@ -1,5 +1,26 @@
 # Changelog
 
+## 2.6.1
+
+### Fixed: a pool that runs out on Google-side capacity no longer says "rate limited"
+
+A request for `gemini-2.5-pro` rotated through all six pooled accounts on HTTP 503 "No capacity
+available for model gemini-2.5-pro on the server" (`[AutoPool] Failover ... due to 503 no capacity`
+six times), then failed with "All accounts in the pool are currently rate limited. Please wait for
+cooldown to reset." That describes a quota cooldown. The cause was Google's capacity for that model,
+and a 503 deliberately records no cooldown, so there was nothing to wait for — the message sent
+people to the quota file and the dashboard's meters looking for one.
+
+- When the last account tried answered 503, both `generateContent` and `streamGenerateContent` now
+  end with a 503 `UpstreamError` that names the model, says it is Google-side capacity and not
+  quota, counts the accounts that answered 503, and keeps Google's own message. This covers the pool
+  running out, a pool with no other free account, and failover switched off.
+- The bridge answers it as HTTP 503 `overloaded_error` instead of 500 on the OpenAI non-streaming
+  path and both Anthropic paths. The OpenAI stream still commits to `200` and reports it in-band, as
+  every non-400 failure there always has.
+- A run that ends on a 429 keeps the old wording, unchanged.
+- `test:capacity` covers all of this, offline; `test:upstream`'s 503 expectations moved from 500 to 503.
+
 ## 2.6.0
 
 ### Fixed: eight more model ids Google stopped serving, and no Pro left to offer

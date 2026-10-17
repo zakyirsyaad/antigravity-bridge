@@ -16,8 +16,10 @@
  * Google's own message. For the OpenAI stream that means obtaining the upstream
  * stream before committing to `200`, as the Anthropic handler already did.
  *
- * Only 400 changes. Every other failure keeps exactly the behaviour it had, and
- * a failure after streaming has begun cannot become a status code at all.
+ * A Google 503 (no capacity) is likewise HTTP 503 `overloaded_error` on the three
+ * paths that answer a real status; the OpenAI stream still reports it in-band.
+ * Every other failure keeps exactly the behaviour it had, and a failure after
+ * streaming has begun cannot become a status code at all.
  *
  * Stubbed throughout — no disk, network, credential or quota.
  */
@@ -225,13 +227,20 @@ async function runTests() {
     }
     expect("Anthropic clients get the Anthropic envelope", replies["Anthropic stream"].json?.type, "error");
 
-    console.log("\n[4/6] Every other failure keeps the behaviour it had ...");
+    console.log("\n[4/6] Google-side capacity is a 503; every other failure keeps the behaviour it had ...");
+    // A 503 used to be a 500 like everything else. It is Google's capacity — not the
+    // caller's mistake, not ours, not quota — so the paths that answer a real status
+    // say 503 `overloaded_error`. The OpenAI stream still reports it in-band.
     failure = upstream(503, "No capacity available for model X on the server");
-    expect("503, OpenAI non-stream: still 500", (await post(OPENAI, false)).status, 500);
-    expect("503, Anthropic non-stream: still 500", (await post(ANTHROPIC, false)).status, 500);
+    const openaiPlain503 = await post(OPENAI, false);
+    expect("503, OpenAI non-stream: 503", openaiPlain503.status, 503);
+    expect("503, OpenAI non-stream: overloaded_error", openaiPlain503.json?.error?.type, "overloaded_error");
+    expect("503, OpenAI non-stream: names the cause", String(openaiPlain503.json?.error?.message).includes("No capacity"), true);
+    expect("503, Anthropic non-stream: 503", (await post(ANTHROPIC, false)).status, 503);
     const anthropic503 = await post(ANTHROPIC, true);
-    expect("503, Anthropic stream: still 500", anthropic503.status, 500);
-    expect("503, Anthropic stream: still api_error", anthropic503.json?.error?.type, "api_error");
+    expect("503, Anthropic stream: 503", anthropic503.status, 503);
+    expect("503, Anthropic stream: overloaded_error", anthropic503.json?.error?.type, "overloaded_error");
+    expect("503, Anthropic stream: Anthropic envelope", anthropic503.json?.type, "error");
 
     const openai503 = await post(OPENAI, true);
     expect("503, OpenAI stream: still commits to 200", openai503.status, 200);

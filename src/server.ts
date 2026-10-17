@@ -32,6 +32,22 @@ function sendInvalidRequest(res: http.ServerResponse, route: string, err: Error)
   res.end(JSON.stringify({ type: "error", error: { type: "invalid_request_error", message: err.message } }));
 }
 
+/**
+ * Google had no capacity for the model (HTTP 503) on the account or accounts the
+ * pool tried. Not the caller's mistake and not ours, and not quota either, so it
+ * is a 503 `overloaded_error` rather than the generic 500: a client that retries
+ * on overload does the right thing, and the message says it is Google-side.
+ */
+function isUpstreamCapacityError(err: unknown): err is UpstreamError {
+  return err instanceof UpstreamError && err.status === 503;
+}
+
+function sendCapacityUnavailable(res: http.ServerResponse, route: string, err: Error): void {
+  console.warn(`[Bridge] ${route}: ${String(err.message).slice(0, 400)}`);
+  res.writeHead(503, { "Content-Type": "application/json" });
+  res.end(JSON.stringify({ type: "error", error: { type: "overloaded_error", message: err.message } }));
+}
+
 export class BridgeServer {
   private server: http.Server | null = null;
   private client: AntigravityClient;
@@ -460,6 +476,10 @@ export class BridgeServer {
             if (!res.headersSent) sendInvalidRequest(res, pathname, err);
             return;
           }
+          if (isUpstreamCapacityError(err) && !res.headersSent) {
+            sendCapacityUnavailable(res, pathname, err);
+            return;
+          }
           console.error(`[Bridge Error] ${pathname}:`, err);
           if (!res.headersSent) {
             res.writeHead(500, { "Content-Type": "application/json" });
@@ -678,6 +698,10 @@ export class BridgeServer {
       } catch (streamErr: any) {
         if (!res.headersSent && isUpstreamClientError(streamErr)) {
           sendInvalidRequest(res, "/v1/messages", streamErr);
+          return;
+        }
+        if (!res.headersSent && isUpstreamCapacityError(streamErr)) {
+          sendCapacityUnavailable(res, "/v1/messages", streamErr);
           return;
         }
         console.error("[Stream Error]", streamErr);
