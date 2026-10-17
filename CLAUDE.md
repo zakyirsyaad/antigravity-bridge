@@ -82,7 +82,7 @@ Everything else runs offline — no account, no network, no quota — by stubbin
 | `test:upstream` | a request Google rejects (400) is a 400 on all four paths, the OpenAI stream included; a 503 is a 503 on all four paths, `overloaded_error` for no capacity and `api_error` for any other; a pool that ran out on a stall is still a 500 (in-band on the OpenAI stream); every other failure keeps its old shape; a failure after streaming began stays in-band |
 | `test:models-context` | every `/v1/models` entry carries `context_length` from `SUPPORTED_MODELS`; the older fields are unchanged; `/models` answers the same |
 | `test:turns` | a history that opens with a model turn gets a user note in front (both protocols, Claude too) and is otherwise untouched; the logged request shape names roles and part kinds and never carries text |
-| `test:stall` | a request Google never answers rotates to the next account after one timeout (not three), rests the stalled one in memory without a quota cooldown, is bounded to two rotations, and keeps the old in-place retries with one account or failover off; a pool that runs out on a stall — one that rotated, or one that retried in place — says the accounts stopped answering (model named, distinct accounts counted, status 500), not rate limited or "This operation was aborted" |
+| `test:stall` | a request Google never answers rotates to the next account after one timeout (not three), rests the stalled one in memory without a quota cooldown, is bounded to two rotations, and keeps the old in-place retries with one account or failover off; a pool that runs out on a stall — one that rotated, or one that retried in place — says the accounts stopped answering (model named, distinct accounts counted, the waits it actually made; a 500 with no Google status), not rate limited or "This operation was aborted" |
 | `test:network` | `start()` sets Node's per-address connect timeout (2 s, configurable; a value Node would reject falls back instead of stopping the boot); a quick connect failure is retried after 2 s then 5 s on the same account, and the retry line names the cause code; a retry after a timeout keeps the old short pause |
 | `test:stream-end` | a stream that ends empty, non-STOP or without a finish reason leaves one `[Stream End]` warning (with the `maxOut`/`think` that were sent) on both routes; a healthy one stays silent; a `MAX_TOKENS` turn closes as `max_tokens` / `length` (a complete tool call still wins); everything else the client receives is unchanged |
 
@@ -196,14 +196,19 @@ Two nested loops per request: an outer loop bounded by pool size, an inner loop 
   in the quota file: the account is not out of quota, and the dashboard's cooldown should keep meaning
   that. Look for `[Upstream Stall]` in the log; if it fires on every account in turn, the stall is
   global and rotation cannot help. When the last account tried stalled, the pool running out says so:
-  `PoolFailures.exhaustedError()` returns a `PoolExhaustedError` of kind `"stall"` that names the
+  `PoolFailures.exhaustedError()` returns a `PoolStalledError` (kind `"stall"`) that names the
   model, says Google stopped answering and not quota, and counts the distinct accounts that stalled.
   A two-account pool (A 503, B stalled, rotated back to A) used to end as "rate limited ... wait for
-  cooldown to reset", for a cooldown no stall writes. Its status is **500**, as a stall always was —
-  `isUpstreamUnavailable()` matches 503 only, so keep it off 503. A pool that cannot rotate retries in
-  place as before, but `fetchWithRetry()` now ends in an `UpstreamStall` when the *last* attempt timed
-  out, so it gets the same wording instead of the bare "This operation was aborted" after three
-  minutes; the wording claims no resting, because that path rests nothing.
+  cooldown to reset", for a cooldown no stall writes. **`PoolStalledError` is not an `UpstreamError`
+  and has no status**: that type means "Google answered with this status", and Google answered
+  nothing. The server answers it with its generic 500, as a stall always was — do not give it a
+  status to route on, or code that reads Google's status (the 503 routing, any future "retry on 5xx")
+  will take the bridge's choice for Google's answer. A pool that cannot rotate retries in place as
+  before, but `fetchWithRetry()` now ends in an `UpstreamStall` when the *last* attempt timed out, so
+  it gets the same wording instead of the bare "This operation was aborted" after three minutes. The
+  stall carries how many attempts timed out, and the message says so ("to 3 attempts of 60s each",
+  against "within 60s" for a pool that rotated); it claims no resting, because that path rests
+  nothing.
 - **A connect failure is the network, not the account**, so it is retried in place and never rotates.
   The VPS has no IPv6 route, and Node's happy eyeballs gives every address but the last only 250 ms:
   whenever DNS listed IPv4 first, a slow moment abandoned the one address that works, IPv6 failed at

@@ -264,10 +264,16 @@ async function runTests() {
     expect("pool exhausted, OpenAI non-stream: still 500", (await post(OPENAI, false)).status, 500);
 
     // A pool that ran out because Google stopped answering is worded by PoolFailures
-    // too, but it is a 500 as a stall always was, not the 503 kept for capacity.
+    // too, but it is a 500 as a stall always was, not the 503 kept for capacity, and
+    // it carries no status of Google's, because Google answered nothing.
+    const rotated = new PoolFailures();
+    rotated.record("a@example.com", { hit429: false, hit503: false, message503: "", stalled: true });
+    expect("a rotated stall waited once", String(rotated.exhaustedError("m")?.message).includes("no response within 60s"), true);
     const stalled = new PoolFailures();
-    stalled.record("a@example.com", { hit429: false, hit503: false, message503: "", stalled: true });
+    stalled.record("a@example.com", { hit429: false, hit503: false, message503: "", stalled: true, stallAttempts: 3 });
     failure = stalled.exhaustedError("gemini-3.8-flash-tiered");
+    expect("a stall retried in place says all three waits", String(failure?.message).includes("no response to 3 attempts of 60s each"), true);
+    expect("a stall is not an UpstreamError", failure instanceof UpstreamError, false);
     for (const [label, path, stream] of paths) {
       if (path === OPENAI && stream) continue;
       const reply = await post(path, stream);

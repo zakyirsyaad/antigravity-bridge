@@ -26,7 +26,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { AntigravityClient } from "../src/antigravity-client";
-import { PoolExhaustedError } from "../src/pool-failures";
+import { PoolStalledError } from "../src/pool-failures";
+import { UpstreamError } from "../src/upstream-error";
 import { OAuthManager } from "../src/oauth";
 import { QuotaTracker } from "../src/quota-tracker";
 import { ACCOUNTS_STORAGE_PATH, USER_HOME } from "../src/constants";
@@ -134,6 +135,7 @@ const payload = {
 
 const CAPACITY = "No capacity available for model gemini-3.8-flash-tiered on the server";
 const QUOTA = "Individual quota reached. Resets in 3h55m50s.";
+const THREE_WAITS = "no response to 3 attempts of 0s each";
 const RATE_LIMITED = "All accounts in the pool are currently rate limited. Please wait for cooldown to reset.";
 
 let failures = 0;
@@ -168,17 +170,24 @@ async function caught(fn: () => Promise<unknown>): Promise<any> {
   }
 }
 
-/** What a client has to be told when Google stopped answering, rather than quota. */
-function expectStallError(label: string, err: any) {
+/**
+ * What a client has to be told when Google stopped answering, rather than quota.
+ * `waited` is how the wait is said: one attempt when the pool rotated, three when
+ * it retried in place.
+ */
+function expectStallError(label: string, err: any, waited = "no response within 0s") {
   const message = String(err?.message);
   expect(`${label}: threw`, err instanceof Error, true);
   expect(`${label}: names the model`, message.includes(payload.model), true);
   expect(`${label}: says Google stopped answering`, message.includes("stopped answering"), true);
-  expect(`${label}: says no response, and the timeout`, message.includes("no response within 0s"), true);
+  expect(`${label}: says how long it waited (${waited})`, message.includes(waited), true);
   expect(`${label}: says it is not quota`, message.includes("not quota"), true);
   expect(`${label}: does not say rate limited`, /rate limited|cooldown to reset/i.test(message), false);
-  expect(`${label}: worded by PoolFailures as a stall`, err instanceof PoolExhaustedError && err.kind, "stall");
-  expect(`${label}: keeps the 500 a stall always was, not 503`, err?.status, 500);
+  expect(`${label}: worded by PoolFailures as a stall`, err instanceof PoolStalledError && err.kind, "stall");
+  // Google answered nothing, so the error carries no Google status: the server
+  // answers its generic 500, as a stall always was.
+  expect(`${label}: not an UpstreamError (Google sent no status)`, err instanceof UpstreamError, false);
+  expect(`${label}: no status`, err?.status, undefined);
 }
 
 async function outcome(call: () => Promise<any>): Promise<string> {
@@ -241,19 +250,19 @@ async function runTests() {
   let err = await caught(() => client.generateContent(payload as any));
   expect("a single-account pool retries the same account 3 times", attempts.length, 3);
   // It used to end in the bare "This operation was aborted", with no model named.
-  expectStallError("single account", err);
+  expectStallError("single account", err, THREE_WAITS);
   expect("single account: says the account tried", String(err?.message).includes("the account tried"), true);
   expect("single account: nothing rested", StallRegistry.isResting("a@example.com"), false);
   expect("single account: no quota cooldown", cooldownsRecorded, 0);
   reset((_a, init) => hang(init), 1, true);
   err = await caught(() => client.streamGenerateContent(payload as any));
   expect("streaming, single account: 3 tries", attempts.length, 3);
-  expectStallError("streaming, single account", err);
+  expectStallError("streaming, single account", err, THREE_WAITS);
   reset((_a, init) => hang(init), 4, false);
   err = await caught(() => client.generateContent(payload as any));
   expect("failover off retries the same account 3 times", attempts.length, 3);
   expect("failover off never rotates", switched, 0);
-  expectStallError("failover off", err);
+  expectStallError("failover off", err, THREE_WAITS);
   expect("failover off: nothing rested", StallRegistry.isResting("a@example.com"), false);
   // Only the last attempt decides: one that timed out and then reset is not a stall.
   let calls = 0;
@@ -261,6 +270,12 @@ async function runTests() {
   err = await caught(() => client.generateContent(payload as any));
   expect("timeouts then a reset: still 3 tries", attempts.length, 3);
   expect("timeouts then a reset: the reset is what is reported", String(err?.message), "fetch failed");
+  // Counted as they happened: a reset first, then two timeouts, is two attempts waited out.
+  calls = 0;
+  reset((_a, init) => (calls++ === 0 ? Promise.reject(Object.assign(new Error("fetch failed"), { code: "ECONNRESET" })) : hang(init)), 1, true);
+  err = await caught(() => client.generateContent(payload as any));
+  expect("a reset then two timeouts: still 3 tries", attempts.length, 3);
+  expectStallError("a reset then two timeouts", err, "no response to 2 attempts of 0s each");
 
   console.log("\n[6/10] The real pool selector skips a resting account, not a cooling one ...");
   reset(() => ok());

@@ -15,10 +15,13 @@ operation was aborted", after about three minutes, with no model named: exactly 
 helps most.
 
 - When the last account tried stalled, both `generateContent` and `streamGenerateContent` now end with
-  a `PoolExhaustedError` of kind `"stall"` that names the model, says Google stopped answering
-  (upstream stall / timeout) and the timeout, says it is not quota and that no cooldown was written,
-  and counts the accounts that stalled. It is the `"stall"` case of `PoolFailures.exhaustedError()`,
-  so all four exits get it with no change of their own.
+  a `PoolStalledError` (kind `"stall"`) that names the model, says Google stopped answering
+  (upstream stall / timeout), says it is not quota and that no cooldown was written, and counts the
+  accounts that stalled. It is the `"stall"` case of `PoolFailures.exhaustedError()`, so all four
+  exits get it with no change of their own.
+- The wait is said as it happened: a pool that rotated waited one timeout ("gave no response within
+  60s"); one that retried in place waited out each attempt ("gave no response to 3 attempts of 60s
+  each"). `UpstreamStall` now carries how many attempts timed out.
 - A pool that retries in place keeps its three attempts and their delays exactly as before; only when
   the last attempt timed out does it end in an `UpstreamStall`, so the run is recorded as a stall. A
   last attempt that failed some other way (a reset) is still reported as itself. The wording claims no
@@ -26,7 +29,9 @@ helps most.
 - Accounts are counted once each, by email, as 2.6.1 does for 503s: A 503, B 503, back to A, which
   stalls, is "1 of 2 accounts tried", not 1 of 3 passes.
 - It still reaches the caller as a 500 — in-band on the OpenAI stream — as a stall always has, not the
-  503 kept for Google-side capacity. Only the wording changed.
+  503 kept for Google-side capacity. Only the wording changed. `PoolStalledError` is deliberately not
+  an `UpstreamError`, which means "Google answered with this status": Google answered nothing, so the
+  error carries no status, and the server's generic 500 is the bridge's own.
 - A run that ends on a 429 keeps the rate-limited wording, and one that ends on a 503 keeps 2.6.1's.
 - `test:stall` covers the client side, offline; `test:upstream` checks the 500 on every path.
 

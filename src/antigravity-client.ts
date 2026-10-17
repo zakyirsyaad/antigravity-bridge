@@ -63,6 +63,7 @@ export class AntigravityClient {
   ): Promise<Response> {
     let lastError: any = null;
     const timeoutMs = upstreamTimeoutMs();
+    let timeouts = 0;
 
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       let timedOut = false;
@@ -80,8 +81,9 @@ export class AntigravityClient {
         });
       } catch (err: any) {
         lastError = err;
+        if (timedOut) timeouts++;
         if (timedOut && (onTimeout === "throw" || attempt === maxRetries)) {
-          throw new UpstreamStall(url, timeoutMs);
+          throw new UpstreamStall(url, timeoutMs, timeouts);
         }
         const isNetworkErr =
           err.name === "AbortError" ||
@@ -170,6 +172,7 @@ export class AntigravityClient {
       let hit503 = false;
       let message503 = "";
       let stalled = false;
+      let stallAttempts = 1;
       // Whether this pool has anywhere to go if Google stops answering. When it
       // does, the first timeout gives up; when it does not, retrying in place is
       // all there is.
@@ -227,6 +230,7 @@ export class AntigravityClient {
           lastError = e;
           if (e instanceof UpstreamStall) {
             stalled = true;
+            stallAttempts = e.timedOutAttempts;
           }
           // Only a 400 is thrown inside the try; a 429 or 503 response is recorded
           // above and never reaches here.
@@ -237,7 +241,7 @@ export class AntigravityClient {
         }
       }
 
-      failures.record(currentAccount?.email, { hit429, hit503, message503, stalled });
+      failures.record(currentAccount?.email, { hit429, hit503, message503, stalled, stallAttempts });
 
       // Google stopped answering: leave this account for another one, a bounded
       // number of times, rather than spend the request waiting inside the burst.
@@ -313,6 +317,7 @@ export class AntigravityClient {
       let hit503 = false;
       let message503 = "";
       let stalled = false;
+      let stallAttempts = 1;
       // Whether this pool has anywhere to go if Google stops answering. When it
       // does, the first timeout gives up; when it does not, retrying in place is
       // all there is.
@@ -374,6 +379,7 @@ export class AntigravityClient {
           lastError = e;
           if (e instanceof UpstreamStall) {
             stalled = true;
+            stallAttempts = e.timedOutAttempts;
           }
           // Only a 400 is thrown inside the try; a 429 or 503 response is recorded
           // above and never reaches here.
@@ -384,7 +390,7 @@ export class AntigravityClient {
         }
       }
 
-      failures.record(currentAccount?.email, { hit429, hit503, message503, stalled });
+      failures.record(currentAccount?.email, { hit429, hit503, message503, stalled, stallAttempts });
 
       if (stalled && poolRotates && stallRotations < MAX_STALL_ROTATIONS) {
         if (this.restAndRotate(currentAccount?.email, payload.model)) {
