@@ -16,13 +16,16 @@
  * Google's own message. For the OpenAI stream that means obtaining the upstream
  * stream before committing to `200`, as the Anthropic handler already did.
  *
- * Only 400 changes. Every other failure keeps exactly the behaviour it had, and
- * a failure after streaming has begun cannot become a status code at all.
+ * A Google 503 (no capacity, or unavailable) is likewise HTTP 503
+ * `overloaded_error` on all four paths, the OpenAI stream included.
+ * Every other failure keeps exactly the behaviour it had, and a failure after
+ * streaming has begun cannot become a status code at all.
  *
  * Stubbed throughout — no disk, network, credential or quota.
  */
 import * as clientModule from "../src/antigravity-client";
 import { AntigravityClient } from "../src/antigravity-client";
+import { PoolFailures } from "../src/pool-failures";
 import { OAuthManager } from "../src/oauth";
 import { QuotaTracker } from "../src/quota-tracker";
 import { UsageTracker } from "../src/usage-tracker";
@@ -34,6 +37,13 @@ const GOOGLE_400 =
 
 // Resolved at runtime so a missing export fails an assertion, not the import.
 const UpstreamError: any = (clientModule as any).UpstreamError;
+
+/** The error the client ends with when the pool's last account answered this 503. */
+function poolRanOutOn(message503: string): Error | null {
+  const failures = new PoolFailures();
+  failures.record("a@example.com", { hit429: false, hit503: true, message503, stalled: false });
+  return failures.exhaustedError("gemini-3.8-flash-tiered");
+}
 
 function upstream(status: number, text: string): Error {
   const message = `Antigravity https://example.invalid (${status}): ${text}`;
@@ -225,19 +235,27 @@ async function runTests() {
     }
     expect("Anthropic clients get the Anthropic envelope", replies["Anthropic stream"].json?.type, "error");
 
-    console.log("\n[4/6] Every other failure keeps the behaviour it had ...");
-    failure = upstream(503, "No capacity available for model X on the server");
-    expect("503, OpenAI non-stream: still 500", (await post(OPENAI, false)).status, 500);
-    expect("503, Anthropic non-stream: still 500", (await post(ANTHROPIC, false)).status, 500);
-    const anthropic503 = await post(ANTHROPIC, true);
-    expect("503, Anthropic stream: still 500", anthropic503.status, 500);
-    expect("503, Anthropic stream: still api_error", anthropic503.json?.error?.type, "api_error");
-
-    const openai503 = await post(OPENAI, true);
-    expect("503, OpenAI stream: still commits to 200", openai503.status, 200);
-    expect("503, OpenAI stream: still an event stream", openai503.contentType.includes("text/event-stream"), true);
-    expect("503, OpenAI stream: error is in-band", openai503.text.includes('"error"'), true);
-    expect("503, OpenAI stream: still terminates", openai503.text.trim().endsWith("data: [DONE]"), true);
+    console.log("\n[4/6] A Google 503 is a 503; every other failure keeps the behaviour it had ...");
+    // A 503 used to be a 500 like everything else (and a 200 on the OpenAI stream). It
+    // is Google-side — not the caller's mistake, not ours, not quota — so every path
+    // says 503 before streaming begins. Only "no capacity" is `overloaded_error`: a
+    // generic 503 is an outage, and clients that branch on the type would take it
+    // for transient model load.
+    const kinds: Array<[string, Error | null, string]> = [
+      ["capacity", poolRanOutOn("No capacity available for model X on the server"), "overloaded_error"],
+      ["unavailable", poolRanOutOn("The service is currently unavailable."), "api_error"],
+      ["unclassified", upstream(503, "No capacity available for model X on the server"), "api_error"],
+    ];
+    for (const [kind, error, wantedType] of kinds) {
+      failure = error;
+      for (const [label, path, stream] of paths) {
+        const reply = await post(path, stream);
+        expect(`503 ${kind}, ${label}: 503`, reply.status, 503);
+        expect(`503 ${kind}, ${label}: ${wantedType}`, reply.json?.error?.type, wantedType);
+        expect(`503 ${kind}, ${label}: JSON, not an event stream`, reply.contentType.includes("application/json"), true);
+        expect(`503 ${kind}, ${label}: Anthropic envelope`, reply.json?.type, "error");
+      }
+    }
 
     failure = upstream(401, "credentials rejected");
     expect("401 is our credentials, not the caller's mistake: still 500", (await post(OPENAI, false)).status, 500);

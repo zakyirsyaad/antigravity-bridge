@@ -1,5 +1,33 @@
 # Changelog
 
+## 2.6.1
+
+### Fixed: a pool that runs out on Google-side capacity no longer says "rate limited"
+
+A request for `gemini-2.5-pro` rotated through all six pooled accounts on HTTP 503 "No capacity
+available for model gemini-2.5-pro on the server" (`[AutoPool] Failover ... due to 503 no capacity`
+six times), then failed with "All accounts in the pool are currently rate limited. Please wait for
+cooldown to reset." That describes a quota cooldown. The cause was Google's capacity for that model,
+and a 503 deliberately records no cooldown, so there was nothing to wait for — the message sent
+people to the quota file and the dashboard's meters looking for one.
+
+- When the last account tried answered 503, both `generateContent` and `streamGenerateContent` now
+  end with a 503 `UpstreamError` that names the model, says it is Google-side and not quota, counts
+  the accounts that answered 503, and keeps Google's own message. This covers the pool running out, a
+  pool with no other free account, and failover switched off.
+- Only a 503 whose message says "No capacity" is reported as capacity ("use another model"); any
+  other 503 reads "Google answered HTTP 503 (service unavailable)". Both still rotate the pool.
+- Accounts are counted once each, by email. A 503 writes no cooldown, so the pool can come back to
+  an account it already tried while skipping one that is cooling down; counting passes said
+  "all 3 accounts" when two had been tried.
+- The bridge answers it as HTTP 503 instead of 500 on all four paths, the OpenAI stream (FCC)
+  included, which used to commit to `200` and report it in-band. The type is `overloaded_error` only
+  for "no capacity"; any other 503 is an outage and goes out as `api_error`, so clients that branch on
+  the type do not take it for transient model load. A failure after the stream began is still in-band.
+- A run that ends on a 429 keeps the old wording, unchanged.
+- `test:capacity` covers all of this, offline; `test:upstream`'s 503 expectations moved from 500 (and
+  the OpenAI stream's from 200) to 503.
+
 ## 2.6.0
 
 ### Fixed: eight more model ids Google stopped serving, and no Pro left to offer

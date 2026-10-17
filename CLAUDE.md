@@ -75,11 +75,11 @@ Everything else runs offline — no account, no network, no quota — by stubbin
 | `test:auth` | non-loopback callers need a key; a proxy confers no exemption |
 | `test:models` | id resolution: exact, retired, approximated, and rejected; a `provider/` prefix is dropped when the tail is exact |
 | `test:signature` | thinking history is dropped for Claude targets, kept for Gemini |
-| `test:capacity` | a 503 rotates the pool without recording a cooldown; 400 still does not rotate |
+| `test:capacity` | a 503 rotates the pool without recording a cooldown; 400 still does not rotate; a pool that runs out on a 503 says capacity (status 503, model named) only when Google said "No capacity", and service unavailable otherwise; accounts are counted once each, not per pass; one that runs out on a 429 keeps the rate-limited wording |
 | `test:quota` | a 429 cools the model family that earned it, not the whole account |
 | `test:updater` | `update` refuses dirty worktrees and non-git installs, tolerates only npm's own lockfile version rewrite; the release check never throws; the lockfile tracks package.json |
 | `test:effort` | Anthropic `output_config.effort` scales the budget; the default level changes nothing; a model with no declared budget reasons only above the default level; a retired fixed-tier id, or a reasoning suffix on a guessed one, keeps its tier on both protocols; every ZCode reasoning variant sends a distinct budget |
-| `test:upstream` | a request Google rejects (400) is a 400 on all four paths, the OpenAI stream included; every other failure keeps its old shape; a failure after streaming began stays in-band |
+| `test:upstream` | a request Google rejects (400) is a 400 on all four paths, the OpenAI stream included; a 503 is a 503 on all four paths, `overloaded_error` for no capacity and `api_error` for any other; every other failure keeps its old shape; a failure after streaming began stays in-band |
 | `test:models-context` | every `/v1/models` entry carries `context_length` from `SUPPORTED_MODELS`; the older fields are unchanged; `/models` answers the same |
 | `test:turns` | a history that opens with a model turn gets a user note in front (both protocols, Claude too) and is otherwise untouched; the logged request shape names roles and part kinds and never carries text |
 | `test:stall` | a request Google never answers rotates to the next account after one timeout (not three), rests the stalled one in memory without a quota cooldown, is bounded to two rotations, and keeps the old in-place retries with one account or failover off |
@@ -131,10 +131,12 @@ request itself (an `UpstreamError` with `status === 400`: a schema it cannot tak
 range). The OpenAI handler used to write `200` before asking Google anything, which made that
 impossible — the failure arrived as an event inside a success, and FCC described a permanent mistake
 as "usually temporary — try again" — so it now obtains the upstream stream first, as the Anthropic one
-always did. **Only 400 changed.** Every other pre-stream failure is as before: the Anthropic handler
-answers a real 500 (`api_error`), but the OpenAI stream still commits to `200` and reports it as an
-in-band `data: {"error": ...}` event. So read nginx status codes with that in mind: a `200` on
-`/v1/chat/completions` proves nothing about success, while on `/v1/messages` it does. A failure after
+always did. A Google 503 (`UpstreamError` with `status === 503`) is likewise HTTP 503 on all four
+paths: `overloaded_error` only when the pool ran out on "No capacity" (`PoolExhaustedError` with
+`kind === "capacity"`, read as data, never from the message), `api_error` for any other 503. Every other pre-stream failure is as before:
+the Anthropic handler answers a real 500 (`api_error`), but the OpenAI stream still commits to `200`
+and reports it as an in-band `data: {"error": ...}` event. So read nginx status codes with that in
+mind: a `200` on `/v1/chat/completions` proves nothing about success, while on `/v1/messages` it does. A failure after
 the stream has started can only ever be in-band, on either protocol.
 
 The streams read exactly one thing from Google's `finishReason`: `MAX_TOKENS` closes the turn as
@@ -172,6 +174,15 @@ Two nested loops per request: an outer loop bounded by pool size, an inner loop 
   cooldown — capacity is per project, not a quota signal, and parking a healthy account for hours
   over a transient server condition is worse than the failure it replaces. `ANTIGRAVITY_ENDPOINTS`
   holds a single endpoint, so without this a 503 reached the caller on the first try.
+  When the last account tried answered 503, the pool running out says so. `PoolFailures`
+  (`pool-failures.ts`) records how each pass ended and builds the final error: status 503, the
+  model named, Google's message kept, "not quota". Only a message saying "No capacity" is called
+  capacity; any other 503 reads "service unavailable". Accounts are counted by email, not by pass —
+  a 503 writes no cooldown, so the selector can come back to an account it already tried. Running
+  out used to read "All accounts in the pool are currently rate limited. Please wait for cooldown to
+  reset." whatever happened — `gemini-2.5-pro` on all six accounts — which sent people to the quota
+  file for a cooldown no 503 ever writes. That wording now means a 429 ended the run; keep it that
+  way. A new failure kind gets its wording in `PoolFailures.exhaustedError()`, not at the call sites.
 - **A stall rotates, it does not retry.** Google sometimes accepts a request and never answers — no
   429, no 503 — in bursts of several minutes on one account, usually after a run of large requests.
   The wait for the first response is `BRIDGE_UPSTREAM_TIMEOUT_MS` (60 s). When failover is on and the

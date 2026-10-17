@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import { BRIDGE_DEFAULT_PORT, SUPPORTED_MODELS } from "./constants";
 import { OAuthManager } from "./oauth";
 import { AntigravityClient, UpstreamError } from "./antigravity-client";
+import { PoolExhaustedError } from "./pool-failures";
 import { Transformer, UnknownModelError } from "./transformer";
 import { UsageTracker } from "./usage-tracker";
 import { StreamEndTally } from "./stream-diagnostics";
@@ -30,6 +31,29 @@ function sendInvalidRequest(res: http.ServerResponse, route: string, err: Error)
   console.warn(`[Bridge] ${route}: Google rejected the request (400): ${String(err.message).slice(0, 400)}`);
   res.writeHead(400, { "Content-Type": "application/json" });
   res.end(JSON.stringify({ type: "error", error: { type: "invalid_request_error", message: err.message } }));
+}
+
+/**
+ * Google answered 503 — no capacity for the model, or the service unavailable — on
+ * the account or accounts the pool tried. Not the caller's mistake and not ours,
+ * and not quota either, so it is a 503 rather than the generic 500 on all four
+ * paths before streaming begins, and the message says it is Google-side.
+ */
+function isUpstreamUnavailable(err: unknown): err is UpstreamError {
+  return err instanceof UpstreamError && err.status === 503;
+}
+
+/**
+ * Only a pool that ran out on "No capacity" is `overloaded_error`: clients that
+ * branch on the type treat that as transient model load. Any other 503 — a Google
+ * outage, or one the pool did not classify — is `api_error`. The kind comes from
+ * `PoolExhaustedError`, never from the message text.
+ */
+function sendUpstreamUnavailable(res: http.ServerResponse, route: string, err: UpstreamError): void {
+  const type = err instanceof PoolExhaustedError && err.kind === "capacity" ? "overloaded_error" : "api_error";
+  console.warn(`[Bridge] ${route}: ${String(err.message).slice(0, 400)}`);
+  res.writeHead(503, { "Content-Type": "application/json" });
+  res.end(JSON.stringify({ type: "error", error: { type, message: err.message } }));
 }
 
 export class BridgeServer {
@@ -460,6 +484,10 @@ export class BridgeServer {
             if (!res.headersSent) sendInvalidRequest(res, pathname, err);
             return;
           }
+          if (isUpstreamUnavailable(err) && !res.headersSent) {
+            sendUpstreamUnavailable(res, pathname, err);
+            return;
+          }
           console.error(`[Bridge Error] ${pathname}:`, err);
           if (!res.headersSent) {
             res.writeHead(500, { "Content-Type": "application/json" });
@@ -680,6 +708,10 @@ export class BridgeServer {
           sendInvalidRequest(res, "/v1/messages", streamErr);
           return;
         }
+        if (!res.headersSent && isUpstreamUnavailable(streamErr)) {
+          sendUpstreamUnavailable(res, "/v1/messages", streamErr);
+          return;
+        }
         console.error("[Stream Error]", streamErr);
         if (res.headersSent) {
           res.write(`event: error\ndata: ${JSON.stringify({ type: "error", error: { message: streamErr.message } })}\n\n`);
@@ -753,6 +785,12 @@ export class BridgeServer {
       } catch (err: any) {
         if (isUpstreamClientError(err)) {
           sendInvalidRequest(res, "/v1/chat/completions", err);
+          return;
+        }
+        // A Google 503 is a real 503 here too: FCC, which uses this route,
+        // otherwise saw a success carrying an error.
+        if (isUpstreamUnavailable(err)) {
+          sendUpstreamUnavailable(res, "/v1/chat/completions", err);
           return;
         }
         // Any other failure keeps the behaviour it has always had: a 200 that
