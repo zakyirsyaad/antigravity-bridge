@@ -85,6 +85,8 @@ Antigravity Bridge is a mission-critical AI inference gateway connecting local d
   - `accent-emerald` (`#10b981`): Active account indicator pulse.
   - `meter-healthy` (`linear-gradient(90deg, #a1a1aa, #ffffff)`): High-contrast monochrome quota fill.
   - `accent-amber` (`#f59e0b`): Rate-limit cooldown state (HTTP 429) and warning countdown.
+  - **Resting** (an account skipped for a few minutes after a stall) is monochrome on purpose: a hollow
+    zinc ring and a dashed chip. It is not quota, so it must not borrow amber.
   - `accent-rose` (`#f43f5e`): Total exhaustion and fatal status alerts.
 
 ## 3. Typography
@@ -103,8 +105,9 @@ Antigravity Bridge is a mission-critical AI inference gateway connecting local d
   - Truncated email with copy-on-hover.
   - **Family Availability Block** — the card's primary signal, above the meters: one row per model
     family (Gemini, Claude, GPT-OSS), each a 7px status dot (`accent-emerald` ready,
-    `accent-amber` cooling) with a live countdown. Upstream meters Claude through Vertex separately
-    from Gemini, so an account is never simply "down" — it is down *for something*.
+    `accent-amber` cooling, hollow zinc ring resting) with a live countdown. Upstream meters Claude
+    through Vertex separately from Gemini, so an account is never simply "down" — it is down *for
+    something*. A rest after a stall applies to every family; a quota cooldown on a family wins over it.
   - Real-time rolling quota progress tracks (5-Hour Rolling and Weekly Cycle Cap), carrying the
     `GOOGLE QUOTA · LIVE` group label: these are Google's numbers, not the bridge's, and the two
     disagree by design.

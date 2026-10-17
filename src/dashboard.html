@@ -630,6 +630,14 @@
       border: 1px solid rgba(245, 158, 11, 0.3);
     }
 
+    /* Resting after a stall: skipped for a few minutes, in memory, and not quota.
+       Monochrome on purpose — amber means a 429 cooldown, and this is not one. */
+    .chip-resting {
+      background: transparent;
+      color: var(--text-main);
+      border: 1px dashed var(--border-active);
+    }
+
     /* Live Quota Meters Container */
     /* Availability is per model family. Antigravity meters Claude — served
        through Vertex — separately from Gemini, so one exhausted quota says
@@ -661,6 +669,10 @@
       background: var(--amber);
       box-shadow: 0 0 6px var(--amber-glow);
     }
+    .family-dot.is-resting {
+      background: transparent;
+      box-shadow: inset 0 0 0 1.5px var(--text-muted);
+    }
     .family-name {
       min-width: 72px;
       font-weight: 600;
@@ -672,6 +684,13 @@
     }
     .family-state.is-cooling {
       color: var(--amber);
+    }
+    .family-state.is-resting {
+      color: var(--text-main);
+    }
+    /* The clock is amber for a cooldown; a rest's clock stays monochrome. */
+    .family-state.is-resting .cooldown-clock {
+      color: inherit;
     }
     .group-label {
       font-size: 0.6875rem;
@@ -1050,7 +1069,7 @@
         </select>
       </div>
 
-      <div class="toggle-pill" id="toggleFailoverBtn" title="Toggle automatic failover on HTTP 429">
+      <div class="toggle-pill" id="toggleFailoverBtn" title="Toggle automatic failover: on a 429 quota limit, a 503 from Google, or a stall">
         <div class="toggle-led" id="failoverLed"></div>
         <span id="failoverStatusText">Auto-Failover: ON</span>
       </div>
@@ -1371,6 +1390,13 @@ print(response.choices[0].message.content)</pre>
     ];
 
     /** The live cooldown window for one family, or null when it is selectable. */
+    /** First paint of a rest's countdown; the ticker takes over from the next second. */
+    function formatRestRemaining(ms) {
+      const m = Math.floor(ms / 60000);
+      const sec = Math.floor((ms % 60000) / 1000);
+      return m > 0 ? m + "m " + sec + "s" : sec + "s";
+    }
+
     function familyCooldown(acc, key) {
       const q = acc.quota || {};
       const now = Date.now();
@@ -1382,6 +1408,16 @@ print(response.choices[0].message.content)</pre>
       const accountWide = live(q.fiveHour) || live(q.weekly);
       const bucket = (q.families || {})[key] || {};
       return live(bucket.fiveHour) || live(bucket.weekly) || accountWide;
+    }
+
+    /**
+     * The account's rest after a stall, or null. Account-wide and in memory only:
+     * Google stopped answering on it, so failover skips it for a few minutes. Not
+     * quota, which is why it is not drawn as a cooldown.
+     */
+    function restingWindow(acc) {
+      const r = acc.resting;
+      return r && new Date(r.resetsAt).getTime() > Date.now() ? r : null;
     }
 
     function renderStitchDashboard(data) {
@@ -1417,7 +1453,7 @@ print(response.choices[0].message.content)</pre>
       // What the operator actually asks: can anything still serve this family?
       const total = data.totalAccounts || data.accounts.length;
       ["gemini", "claude"].forEach(function(key) {
-        const ready = data.accounts.filter(function(a) { return !familyCooldown(a, key); }).length;
+        const ready = data.accounts.filter(function(a) { return !familyCooldown(a, key) && !restingWindow(a); }).length;
         const el = document.getElementById(key === "gemini" ? "kpiGeminiReady" : "kpiClaudeReady");
         if (!el) return;
         el.textContent = ready + " / " + total;
@@ -1450,13 +1486,17 @@ print(response.choices[0].message.content)</pre>
           return { label: f.label, window: familyCooldown(acc, f.key) };
         });
         const coolingCount = families.filter(function(f) { return f.window; }).length;
+        const resting = restingWindow(acc);
 
         // Only a wholly unusable account gets the cooling treatment. One family
         // down is a fact to state, not an alarm to raise.
         if (coolingCount === families.length) card.classList.add("cooling-account");
 
         let chipHtml = "";
-        if (acc.isActive) {
+        if (resting && coolingCount < families.length) {
+          chipHtml = '<span class="status-chip chip-resting" title="Google stopped answering on this account. ' +
+            'The bridge skips it, in memory, until the timer ends. Not a quota cooldown.">◌ Resting</span>';
+        } else if (acc.isActive) {
           chipHtml = '<span class="status-chip chip-active">● Active</span>';
         } else if (coolingCount === families.length) {
           chipHtml = '<span class="status-chip chip-cooling">⏳ Cooling</span>';
@@ -1469,18 +1509,28 @@ print(response.choices[0].message.content)</pre>
         const familyHtml = '<div class="family-box">' +
           families.map(function(f) {
             const cooling = Boolean(f.window);
+            // A quota cooldown outlasts a stall rest, so it is the fact to show.
+            const dot = cooling ? "is-cooling" : resting ? "is-resting" : "is-ready";
+            let state = '<span class="family-state">Ready</span>';
+            if (cooling) {
+              state = '<span class="family-state is-cooling">Cooling · ' +
+                // The ticker rewrites this node every second, so it owns the
+                // duration alone and the word stays outside it.
+                '<span class="cooldown-clock" data-reset="' + f.window.resetsAt + '">' +
+                  ((f.window.resetMessage || "").replace(/^Resets in /, "") || "cooling") +
+                '</span>' +
+              '</span>';
+            } else if (resting) {
+              state = '<span class="family-state is-resting">Resting · ' +
+                '<span class="cooldown-clock" data-reset="' + resting.resetsAt + '">' +
+                  formatRestRemaining(resting.remainingMs) +
+                '</span>' +
+              '</span>';
+            }
             return '<div class="family-row">' +
-              '<span class="family-dot ' + (cooling ? "is-cooling" : "is-ready") + '"></span>' +
+              '<span class="family-dot ' + dot + '"></span>' +
               '<span class="family-name">' + f.label + '</span>' +
-              (cooling
-                ? '<span class="family-state is-cooling">Cooling · ' +
-                    // The ticker rewrites this node every second, so it owns the
-                    // duration alone and the word stays outside it.
-                    '<span class="cooldown-clock" data-reset="' + f.window.resetsAt + '">' +
-                      ((f.window.resetMessage || "").replace(/^Resets in /, "") || "cooling") +
-                    '</span>' +
-                  '</span>'
-                : '<span class="family-state">Ready</span>') +
+              state +
             '</div>';
           }).join("") +
         '</div>';

@@ -438,6 +438,8 @@ Open **`http://127.0.0.1:52130`** in your browser to access the management inter
   - `● Active`: Currently handling primary traffic.
   - `○ Ready`: Standing by for failover or manual switch.
   - `⏳ Cooling Down`: Rate-limited by Google (HTTP 429) with live ticking countdown timer (*"Resets in 1h 14m 20s"*).
+  - `◌ Resting`: Google stopped answering on this account, so failover skips it for a few minutes (`BRIDGE_STALL_REST_SECONDS`). Held in memory, not a quota cooldown.
+- **Activity Stream**: every failover says why it happened (429 quota, 503 no capacity, 503 service unavailable, stall, cooling down, resting) and for which model.
 - **Dual Live Quotas**: Real-time bars showing internal 5-hour rolling limit and weekly cycle cap percentages.
 - **One-Click Actions**:
   - **Set Active**: Manually route traffic to a specific account.

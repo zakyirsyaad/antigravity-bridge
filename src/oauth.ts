@@ -27,6 +27,27 @@ export interface PoolEvent {
   reason?: string;
 }
 
+/**
+ * Why the pool moved off an account. Failover used to log only "switched from A to
+ * B", and a 429, a 503 and a stall all read the same in the activity stream.
+ */
+export type FailoverReason = "quota" | "no_capacity" | "unavailable" | "stall" | "cooling_down" | "resting";
+
+const FAILOVER_REASON_TEXT: Record<FailoverReason, string> = {
+  quota: "429 quota reached",
+  no_capacity: "503 no capacity",
+  unavailable: "503 service unavailable",
+  stall: "no response from Google (stall)",
+  cooling_down: "it was cooling down",
+  resting: "it was resting after a stall",
+};
+
+/** An account the pool skips for a while after a stall: in memory, not a quota cooldown. */
+export interface RestingWindow {
+  remainingMs: number;
+  resetsAt: string;
+}
+
 export interface AccountToken {
   name?: string;
   email?: string;
@@ -347,7 +368,11 @@ export class OAuthManager {
    * Select the next available account that is not in cooldown.
    * Updates storage and returns the newly active account.
    */
-  public selectNextAvailableAccount(excludeEmail?: string, model?: string): AccountToken | null {
+  public selectNextAvailableAccount(
+    excludeEmail?: string,
+    model?: string,
+    reason?: FailoverReason
+  ): AccountToken | null {
     if (!fs.existsSync(ACCOUNTS_STORAGE_PATH)) return null;
 
     let storage: AccountsStorage;
@@ -384,11 +409,13 @@ export class OAuthManager {
         } catch {}
         memoryToken = candidate;
 
+        const why = reason ? `: ${FAILOVER_REASON_TEXT[reason]}${model ? ` (${model})` : ""}` : "";
         this.recordPoolEvent({
           type: "failover",
-          message: `Auto-failover switched from ${excludeEmail || "previous"} to ${candidate.email}`,
+          message: `Auto-failover switched from ${excludeEmail || "previous"} to ${candidate.email}${why}`,
           fromAccount: excludeEmail,
           toAccount: candidate.email,
+          reason,
         });
 
         return candidate;
@@ -408,12 +435,14 @@ export class OAuthManager {
     activeIndex: number;
     readyCount: number;
     coolingDownCount: number;
+    restingCount: number;
     accounts: Array<{
       email: string;
       name?: string;
       isActive: boolean;
-      status: "active" | "ready" | "cooling_down";
+      status: "active" | "ready" | "cooling_down" | "resting";
       cooldown: { remainingMs: number; resetMessage: string; resetsAt: string } | null;
+      resting: RestingWindow | null;
       quota: any;
     }>;
     recentEvents: PoolEvent[];
@@ -421,27 +450,25 @@ export class OAuthManager {
     const tracker = QuotaTracker.getInstance();
     const { accounts, activeIndex } = this.listAccounts();
     const activeAcc = accounts[activeIndex] || null;
-
-    let readyCount = 0;
-    let coolingDownCount = 0;
+    const now = Date.now();
 
     const accountList = accounts.map((acc, idx) => {
       const email = acc.email || `Account #${idx + 1}`;
       const isActive = idx === activeIndex;
       const cooldown = tracker.getAccountCooldownRemaining(email);
-      const isRateLimited = Boolean(cooldown);
+      // A stall rest is skipped by failover just like a cooldown, but it is not
+      // quota, so it is its own status rather than another kind of "cooling".
+      const restEnd = acc.email ? StallRegistry.restEndsAt(acc.email, now) : null;
+      const resting: RestingWindow | null =
+        restEnd === null ? null : { remainingMs: restEnd - now, resetsAt: new Date(restEnd).toISOString() };
 
-      let status: "active" | "ready" | "cooling_down" = "ready";
-      if (isRateLimited) {
-        status = "cooling_down";
-        coolingDownCount++;
-      } else if (isActive) {
-        status = "active";
-        readyCount++;
-      } else {
-        status = "ready";
-        readyCount++;
-      }
+      const status: "active" | "ready" | "cooling_down" | "resting" = cooldown
+        ? "cooling_down"
+        : resting
+          ? "resting"
+          : isActive
+            ? "active"
+            : "ready";
 
       return {
         email,
@@ -449,17 +476,21 @@ export class OAuthManager {
         isActive,
         status,
         cooldown,
+        resting,
         quota: tracker.getQuotaForAccount(email),
       };
     });
+
+    const count = (s: string) => accountList.filter((a) => a.status === s).length;
 
     return {
       autoFailoverEnabled: this.autoFailoverEnabled,
       totalAccounts: accounts.length,
       activeAccount: toPublicAccountSummary(activeAcc),
       activeIndex,
-      readyCount,
-      coolingDownCount,
+      readyCount: count("active") + count("ready"),
+      coolingDownCount: count("cooling_down"),
+      restingCount: count("resting"),
       accounts: accountList,
       recentEvents: this.poolEvents.slice(0, 20),
     };

@@ -62,14 +62,19 @@ export class StallRegistry {
   }
 
   static isResting(email: string | undefined, now: number = Date.now()): boolean {
-    if (!email) return false;
+    return this.restEndsAt(email, now) !== null;
+  }
+
+  /** When an account's rest ends (epoch ms), or null when it is not resting. */
+  static restEndsAt(email: string | undefined, now: number = Date.now()): number | null {
+    if (!email) return null;
     const until = this.restingUntil.get(email.toLowerCase());
-    if (until === undefined) return false;
+    if (until === undefined) return null;
     if (now >= until) {
       this.restingUntil.delete(email.toLowerCase());
-      return false;
+      return null;
     }
-    return true;
+    return until;
   }
 
   static clear(): void {
