@@ -21,13 +21,19 @@ with the right content, on both protocols: `claude-opus-4-6-thinking`, `claude-s
 
 - Every removed id is a retired alias, so existing client configs keep working, and the bridge logs a
   warning naming the model it used. All Pro ids, and the nearest-match guess for any "pro" name, go to
-  `gemini-3.8-flash-tiered`, the most capable Gemini that answers; so do the fixed 3.6 and 3.5 Flash
-  tiers, whose effort `reasoning_effort` now chooses. The nearest-match guess for "flash" used to be
+  `gemini-3.8-flash-tiered`, the most capable Gemini that answers. So do the fixed 3.6 and 3.5 Flash
+  tiers, but each keeps the reasoning tier its name promised: `-low` / `-extra-low` get 1000,
+  `-medium` / `gemini-3.5-flash-low` get 4000, and `-high` / `gemini-3-flash-agent` stay dynamic. These
+  are the budgets the old models declared, so a tool loop configured with `gemini-3.6-flash-low` does not
+  start reasoning without bound. `gemini-3.1-pro-low` keeps the low tier too. Effort scales that tier as
+  it scaled the old declared budget: Claude Code's "high" keeps it, and an explicit budget still wins.
+  The nearest-match guess for "flash" used to be
   `gemini-3.6-flash-high`, one of the dead ids; it is now `gemini-3.8-flash-tiered`. For "lite" it is
   `gemini-3.5-flash-lite`.
 - `gemini-2.5-flash`, `-2.5-flash-lite` and `-2.5-flash-thinking` are in Google's catalogue under the
   display name "Gemini 3.5 Flash Lite". They are aliases of `gemini-3.5-flash-lite` rather than three
-  more names for it.
+  more names for it. `gemini-2.5-flash-thinking` reasons (dynamic) by default, as its name promises;
+  the lite model itself does not.
 - Metadata now matches Google: `gemini-3-flash` has a thinking floor of 128, not 32, and
   `gemini-3.1-flash-lite` can reason (floor 128).
 - A model that declares no thinking budget (both Flash Lites) gets **no** thinking settings by default.
@@ -35,6 +41,10 @@ with the right content, on both protocols: `claude-opus-4-6-thinking`, `claude-s
   thought tokens on a one-line question. An explicit budget is honoured. An effort level turns reasoning
   on only when it is above the protocol's default (OpenAI `high`, Anthropic `xhigh` / `max`), so Claude
   Code's "high" on every request changes nothing.
+- ZCode's generated config shows no reasoning picker for the Flash Lites. ZCode speaks the Anthropic
+  protocol, where its "low" and "high" both leave a lite with no reasoning, so the picker would have done
+  nothing. Every picker it still shows sends a different budget at each level, and `test:effort` checks
+  that.
 - `bridge:models` reports catalogue ids that are retired on purpose separately, each with its target,
   instead of listing them as models to add. The dead 3.5 Flash tiers look healthy in the catalogue.
 - The live suite uses `gemini-3-flash` and `gemini-3.5-flash-lite` where it used two of the dead ids.

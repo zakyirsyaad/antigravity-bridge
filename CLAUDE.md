@@ -78,7 +78,7 @@ Everything else runs offline — no account, no network, no quota — by stubbin
 | `test:capacity` | a 503 rotates the pool without recording a cooldown; 400 still does not rotate |
 | `test:quota` | a 429 cools the model family that earned it, not the whole account |
 | `test:updater` | `update` refuses dirty worktrees and non-git installs, tolerates only npm's own lockfile version rewrite; the release check never throws; the lockfile tracks package.json |
-| `test:effort` | Anthropic `output_config.effort` scales the budget; the default level changes nothing |
+| `test:effort` | Anthropic `output_config.effort` scales the budget; the default level changes nothing; a model with no declared budget reasons only above the default level; a retired fixed-tier id keeps its tier on both protocols; every ZCode reasoning variant sends a distinct budget |
 | `test:upstream` | a request Google rejects (400) is a 400 on all four paths, the OpenAI stream included; every other failure keeps its old shape; a failure after streaming began stays in-band |
 | `test:models-context` | every `/v1/models` entry carries `context_length` from `SUPPORTED_MODELS`; the older fields are unchanged; `/models` answers the same |
 | `test:turns` | a history that opens with a model turn gets a user note in front (both protocols, Claude too) and is otherwise untouched; the logged request shape names roles and part kinds and never carries text |
@@ -350,7 +350,10 @@ Reasoning config is per model, not global:
   do not reason unless asked: with no `thinkingConfig` they spent 0 thought tokens, against about 200
   when sent `-1`. The bridge sends nothing by default. An effort level turns reasoning on (dynamic)
   only when it is above the protocol's default: OpenAI `high`, Anthropic `xhigh` / `max`. Treating
-  absent as `-1`, as the code used to, would have made every lite request reason.
+  absent as `-1`, as the code used to, would have made every lite request reason. For the same reason
+  `zcodeReasoning()` gives these models **no** ZCode picker: ZCode speaks Anthropic, where its
+  "low" / "high" would both leave them off. `test:effort` asserts that every variant ZCode is offered
+  sends a distinct budget.
 - `Transformer.applyThinkingConfig()` fits the budget inside the caller's `max_tokens`, holding back
   `BRIDGE_ANSWER_RESERVE_TOKENS` (default 8192, clamped to half the window) for the visible answer.
   Thinking tokens are billed as output and count against that cap.
@@ -370,7 +373,14 @@ name, never the prefix — it used to guess from the whole string, so that id be
 `gemini-3.6-flash-high`, an older generation, and `someprovider/...` matched "pro".
 
 Retired ids are kept as explicit aliases in `resolveModel()` so existing client configs keep working;
-each points at the model its name claimed, which is often not what it used to resolve to.
+each points at the model its name claimed, which is often not what it used to resolve to. An alias
+whose name fixed a reasoning tier (`gemini-3.6-flash-low`, `gemini-3.5-flash-extra-low`,
+`gemini-2.5-flash-thinking`, ...) carries it in `RETIRED_IDS`. `withAliasTier()` then substitutes that
+tier's budget (`DYNAMIC_TIERS`: 1000 / 4000 / dynamic) for the target model's declared one, and every
+effort and explicit-budget rule treats it as the model's own default. Without it, a tool loop configured
+with a `-low` id and no effort went from 1000 thinking tokens to unbounded dynamic reasoning on every
+step, behind a single warning. The tier lives on the alias, never on the target: the same model
+requested by its own id keeps its own default.
 
 **`resolveModel()` never resolves silently.** An inexact match warns once naming what it used, and
 an id matching nothing throws `UnknownModelError`, which `server.ts` turns into a 400. Approximation

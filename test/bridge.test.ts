@@ -160,7 +160,7 @@ async function runTests() {
       console.log(`  Final Text Response: ${streamedText.trim()}`);
     }
 
-    // 5. OpenAI chat completions, on a Pro model
+    // 5. OpenAI chat completions, on the lite model (no declared thinking budget)
     console.log(`\n[5/7] Testing OpenAI POST /v1/chat/completions (${LITE}) ...`);
     const openaiRes = await post(
       "/v1/chat/completions",

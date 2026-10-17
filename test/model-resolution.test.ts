@@ -82,8 +82,8 @@ async function runTests() {
   expect("a nearest-match for a pro name lands on the most capable living Gemini", resolve("some-pro-model"), "gemini-3.8-flash-tiered");
   expect("a nearest-match for a lite name lands on the newest lite", resolve("gemini-9-flash-lite"), "gemini-3.5-flash-lite");
   const exposed = new Set(SUPPORTED_MODELS.map((m) => m.id));
-  const retired = (Transformer as any).RETIRED_IDS as Record<string, string>;
-  for (const [dead, target] of Object.entries(retired)) {
+  const retired = (Transformer as any).RETIRED_IDS as Record<string, { to: string }>;
+  for (const [dead, { to: target }] of Object.entries(retired)) {
     expect(`${dead} is no longer exposed`, exposed.has(dead), false);
     // An alias onto another alias, or onto nothing, would hand the client a dead model again.
     expect(`${dead} points at an exposed model`, exposed.has(target), true);

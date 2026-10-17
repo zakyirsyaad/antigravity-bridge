@@ -19,6 +19,7 @@
  */
 import { Transformer } from "../src/transformer";
 import { SUPPORTED_MODELS } from "../src/constants";
+import { zcodeReasoning } from "../src/zcode-sync";
 
 let failures = 0;
 
@@ -85,7 +86,7 @@ function runTests() {
   console.log(" Reasoning effort on the Anthropic path");
   console.log("=================================================\n");
 
-  console.log("[1/6] A dynamic model: effort picks the tier ...");
+  console.log("[1/8] A dynamic model: effort picks the tier ...");
   expect("no effort -> dynamic, as before", anthropicBudget(DYNAMIC), -1);
   expect("low", anthropicBudget(DYNAMIC, effort("low")), 1000);
   expect("medium", anthropicBudget(DYNAMIC, effort("medium")), 4000);
@@ -93,7 +94,7 @@ function runTests() {
   expect("xhigh", anthropicBudget(DYNAMIC, effort("xhigh")), -1);
   expect("max", anthropicBudget(DYNAMIC, effort("max")), -1);
 
-  console.log("\n[2/6] A fixed-budget model: the default level changes nothing ...");
+  console.log("\n[2/8] A fixed-budget model: the default level changes nothing ...");
   expect("no effort -> declared budget, as before", anthropicBudget(FIXED), 10001);
   expect("high == declared, so an upgrade changes no spend", anthropicBudget(FIXED, effort("high")), 10001);
   expect("low is a quarter", anthropicBudget(FIXED, effort("low")), 2500);
@@ -101,7 +102,7 @@ function runTests() {
   expect("xhigh doubles", anthropicBudget(FIXED, effort("xhigh")), 20002);
   expect("max is four times", anthropicBudget(FIXED, effort("max")), 40004);
 
-  console.log("\n[3/6] Explicit instructions outrank effort ...");
+  console.log("\n[3/8] Explicit instructions outrank effort ...");
   expect(
     "thinking.budget_tokens wins over effort",
     anthropicBudget(DYNAMIC, { output_config: { effort: "low" }, thinking: { type: "enabled", budget_tokens: 7777 } }),
@@ -118,17 +119,17 @@ function runTests() {
     10001
   );
 
-  console.log("\n[4/6] Garbage is ignored rather than guessed at ...");
+  console.log("\n[4/8] Garbage is ignored rather than guessed at ...");
   expect("unknown level", anthropicBudget(FIXED, effort("ludicrous")), 10001);
   expect("non-string level", anthropicBudget(FIXED, effort(42)), 10001);
   expect("empty string", anthropicBudget(FIXED, effort("")), 10001);
   expect("effort in the wrong case still counts", anthropicBudget(DYNAMIC, effort("LOW")), 1000);
   expect("effort without any thinking block", anthropicBudget(DYNAMIC, { output_config: { effort: "low" } }), 1000);
 
-  console.log("\n[5/6] A model that cannot think gets no thinking config ...");
+  console.log("\n[5/8] A model that cannot think gets no thinking config ...");
   expect("effort on a non-thinking model", anthropicBudget(NO_THINKING, effort("max")), undefined);
 
-  console.log("\n[5b/6] A model with no declared budget: only a level above the default turns it on ...");
+  console.log("\n[5b/8] A model with no declared budget: only a level above the default turns it on ...");
   // Claude Code sends "high" on every request; it must not make every lite request reason.
   expect("no effort -> nothing sent", anthropicBudget(UNDECLARED), undefined);
   expect("high (Claude Code's default) -> nothing sent", anthropicBudget(UNDECLARED, effort("high")), undefined);
@@ -138,7 +139,7 @@ function runTests() {
   expect("max -> dynamic", anthropicBudget(UNDECLARED, effort("max")), -1);
   expect("an explicit budget wins", anthropicBudget(UNDECLARED, { output_config: { effort: "high" }, thinking: { type: "enabled", budget_tokens: 2048 } }), 2048);
 
-  console.log("\n[6/6] The OpenAI path is untouched by sharing the helper ...");
+  console.log("\n[6/8] The OpenAI path is untouched by sharing the helper ...");
   expect("dynamic, low", openaiBudget(DYNAMIC, { reasoning_effort: "low" }), 1000);
   expect("dynamic, medium", openaiBudget(DYNAMIC, { reasoning_effort: "medium" }), 4000);
   expect("dynamic, high", openaiBudget(DYNAMIC, { reasoning_effort: "high" }), -1);
@@ -146,6 +147,56 @@ function runTests() {
   expect("fixed, high is still 4x", openaiBudget(FIXED, { reasoning_effort: "high" }), 40004);
   expect("fixed, low is still a quarter", openaiBudget(FIXED, { reasoning_effort: "low" }), 2500);
   expect("none disables thinking", openaiBudget(FIXED, { reasoning_effort: "none" }), 0);
+
+  console.log("\n[7/8] A retired fixed-tier id keeps the tier its name promised, on both paths ...");
+  // gemini-3.6-flash-low declared 1000. Resolving it to the dynamic tiered model at its
+  // own default would have made every step of a tool loop reason without bound.
+  const realWarn = console.warn;
+  console.warn = () => {};
+  const tiers: Array<[string, unknown]> = [
+    ["gemini-3.6-flash-low", 1000],
+    ["gemini-3.5-flash-extra-low", 1000],
+    ["gemini-3.1-pro-low", 1000],
+    ["gemini-3.6-flash-medium", 4000],
+    ["gemini-3.5-flash-low", 4000], // Google's own label for it was "Medium"
+    ["gemini-3.6-flash-high", -1],
+    ["gemini-3-flash-agent", -1],
+  ];
+  for (const [id, wanted] of tiers) {
+    expect(`${id}: anthropic, no effort`, anthropicBudget(id), wanted);
+    expect(`${id}: anthropic, Claude Code's "high" keeps it`, anthropicBudget(id, effort("high")), wanted);
+    expect(`${id}: openai, no effort`, openaiBudget(id), wanted);
+  }
+  // The tier is the alias's default, so effort scales it exactly as it scaled the old
+  // fixed model's declared 1000 — and an explicit budget still wins over all of it.
+  expect("low alias, anthropic max", anthropicBudget("gemini-3.6-flash-low", effort("max")), 4000);
+  expect("low alias, anthropic low", anthropicBudget("gemini-3.6-flash-low", effort("low")), 250);
+  expect("low alias, openai high", openaiBudget("gemini-3.6-flash-low", { reasoning_effort: "high" }), 4000);
+  expect("low alias, openai none", openaiBudget("gemini-3.6-flash-low", { reasoning_effort: "none" }), 0);
+  expect("low alias, explicit budget wins", anthropicBudget("gemini-3.6-flash-low", { thinking: { type: "enabled", budget_tokens: 7777 } }), 7777);
+  expect("low alias, reasoning_tokens wins", openaiBudget("gemini-3.6-flash-low", { reasoning_tokens: 3000 }), 3000);
+  expect("the tier belongs to the alias, not the model it lands on", anthropicBudget("gemini-3.8-flash-tiered"), -1);
+  // A name that says "thinking" asks for it, though the lite model it lands on does not
+  // reason by default; the other two lite aliases keep the lite default.
+  expect("gemini-2.5-flash-thinking reasons (anthropic)", anthropicBudget("gemini-2.5-flash-thinking", effort("high")), -1);
+  expect("gemini-2.5-flash-thinking reasons (openai)", openaiBudget("gemini-2.5-flash-thinking"), -1);
+  expect("gemini-2.5-flash-thinking, effort low", anthropicBudget("gemini-2.5-flash-thinking", effort("low")), 1000);
+  expect("gemini-2.5-flash does not", anthropicBudget("gemini-2.5-flash", effort("high")), undefined);
+  expect("the lite model itself does not", anthropicBudget(UNDECLARED, effort("high")), undefined);
+  console.warn = realWarn;
+
+  console.log("\n[8/8] Every reasoning level ZCode is offered changes what is sent ...");
+  // ZCode speaks the Anthropic protocol, so its variants arrive as output_config.effort.
+  // A level that sends the same thing as another one is a control that does nothing.
+  for (const model of SUPPORTED_MODELS.filter((m) => !m.id.startsWith("test-"))) {
+    const reasoning = zcodeReasoning(model);
+    if (!reasoning) continue;
+    const sent = reasoning.variants.map((v) => anthropicBudget(model.id, effort(v)));
+    expect(`${model.id}: ${reasoning.variants.join("/")} send distinct budgets (${sent.join("/")})`, new Set(sent).size, sent.length);
+    expect(`${model.id}: the default variant is one of them`, reasoning.variants.includes(reasoning.defaultVariant), true);
+  }
+  expect("a model with no declared budget gets no picker", zcodeReasoning(SUPPORTED_MODELS.find((m) => m.id === UNDECLARED)!), undefined);
+  expect("a model that cannot reason gets no picker", zcodeReasoning(SUPPORTED_MODELS.find((m) => m.id === NO_THINKING)!), undefined);
 
   if (failures > 0) {
     throw new Error(`${failures} effort check(s) failed`);

@@ -1,8 +1,36 @@
 import fs from "node:fs";
 import path from "node:path";
-import { ZCODE_CONFIG_PATH, BRIDGE_BASE_URL, SUPPORTED_MODELS } from "./constants";
+import { ZCODE_CONFIG_PATH, BRIDGE_BASE_URL, SUPPORTED_MODELS, ModelDef } from "./constants";
 
 export const ANTIGRAVITY_PROVIDER_KEY = "antigravity-oauth-bridge";
+
+export interface ZCodeReasoning {
+  enabled: boolean;
+  variants: string[];
+  defaultVariant: string;
+}
+
+/**
+ * The reasoning picker ZCode shows for a model, or undefined for none.
+ *
+ * ZCode speaks the Anthropic protocol (`kind: "anthropic"` below), so a variant
+ * reaches the bridge as `output_config.effort`. A picker must only offer levels
+ * that change something. A model that declares no thinking budget (the Flash
+ * Lites) does not reason by default, and on that protocol "low" and "high" both
+ * leave it that way; only "xhigh" / "max" turn reasoning on. Offering low/high
+ * with "high" preselected would show a reasoning control that does nothing, and
+ * offering "max" alone would make every request reason. So such a model gets no
+ * picker, and runs as Google ships it. Reasoning on a lite stays available to a
+ * caller that sends `budget_tokens`.
+ */
+export function zcodeReasoning(model: ModelDef): ZCodeReasoning | undefined {
+  if (!model.supportsThinking || model.thinkingBudget === undefined) return undefined;
+  return {
+    enabled: true,
+    variants: model.family === "claude" ? ["low", "high", "max"] : ["low", "high"],
+    defaultVariant: "high",
+  };
+}
 
 export function syncZCodeConfig(): { success: boolean; configPath: string; error?: string } {
   try {
@@ -51,13 +79,8 @@ export function syncZCodeConfig(): { success: boolean; configPath: string; error
         },
       };
 
-      if (model.supportsThinking) {
-        modelEntry.reasoning = {
-          enabled: true,
-          variants: model.family === "claude" ? ["low", "high", "max"] : ["low", "high"],
-          defaultVariant: "high",
-        };
-      }
+      const reasoning = zcodeReasoning(model);
+      if (reasoning) modelEntry.reasoning = reasoning;
 
       modelsMap[model.id] = modelEntry;
     }

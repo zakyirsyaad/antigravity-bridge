@@ -107,8 +107,9 @@ or an effort level above the protocol's default (`reasoning_effort: "high"`, or 
 `gemini-3.8-flash-tiered` and lets you slide reasoning from low to high — the tier is a *request
 parameter*, not part of the model name. Use `reasoning_effort` (or `thinking.budget_tokens`) to
 choose it. Google used to offer fixed-tier ids too (`gemini-3.6-flash-high`, `gemini-3.5-flash-low`,
-and so on), with the tier in the name; it no longer serves any of them, so those ids now resolve to
-the tiered model and `reasoning_effort` is how you get the tier back.
+and so on), with the tier in the name. It no longer serves any of them, so those ids now resolve to
+the tiered model at the tier their name fixed: `-low` thinks 1,000 tokens, `-medium` 4,000, and `-high`
+stays dynamic, as before. `reasoning_effort` scales from there, and an explicit budget overrides it.
 
 ### Controlling reasoning
 
@@ -154,10 +155,14 @@ be, but prefer the real ids above.
 
 | Old id | Now resolves to |
 | :--- | :--- |
-| `gemini-3.1-pro`, `gemini-3-pro`, `gemini-3.1-pro-high`, `gemini-3.1-pro-low`, `gemini-pro-agent`, `gemini-2.5-pro` | `gemini-3.8-flash-tiered` (no Pro is served) |
+| `gemini-3.1-pro`, `gemini-3-pro`, `gemini-3.1-pro-high`, `gemini-pro-agent`, `gemini-2.5-pro` | `gemini-3.8-flash-tiered` (no Pro is served) |
+| `gemini-3.1-pro-low` | `gemini-3.8-flash-tiered`, 1,000-token reasoning |
 | `gemini-3.8-flash`, `gemini-3.8-flash-high`, `gemini-3.7-flash`, `gemini-3.7-flash-high`, `gemini-3.7-flash-tiered`, `gemini-3.6-flash-tiered` | `gemini-3.8-flash-tiered` |
-| `gemini-3.6-flash-high`, `gemini-3.6-flash-medium`, `gemini-3.6-flash-low`, `gemini-3-flash-agent`, `gemini-3.5-flash-low`, `gemini-3.5-flash-extra-low` | `gemini-3.8-flash-tiered` |
-| `gemini-2.5-flash`, `gemini-2.5-flash-lite`, `gemini-2.5-flash-thinking` | `gemini-3.5-flash-lite` |
+| `gemini-3.6-flash-high`, `gemini-3-flash-agent` | `gemini-3.8-flash-tiered`, dynamic reasoning |
+| `gemini-3.6-flash-medium`, `gemini-3.5-flash-low` (Google's "Medium") | `gemini-3.8-flash-tiered`, 4,000-token reasoning |
+| `gemini-3.6-flash-low`, `gemini-3.5-flash-extra-low` (Google's "Low") | `gemini-3.8-flash-tiered`, 1,000-token reasoning |
+| `gemini-2.5-flash`, `gemini-2.5-flash-lite` | `gemini-3.5-flash-lite` |
+| `gemini-2.5-flash-thinking` | `gemini-3.5-flash-lite`, dynamic reasoning |
 
 Google's catalogue is not proof that a model is served: `npm run bridge:models` reads only the
 catalogue, so it cannot tell. It kept listing `gemini-3.1-pro-high` while answering HTTP 400 to every

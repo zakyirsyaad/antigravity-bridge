@@ -33,8 +33,8 @@ SUPPORTED_MODELS.push({
   minThinkingBudget: 128,
 });
 const PRO_HIGH = "test-fixed-budget";
-/** Declared budget -1: the model sizes its own reasoning. Floor 32. */
-const DYNAMIC = "gemini-3.8-flash-tiered";
+/** Declared budget -1: the model sizes its own reasoning. Floor 128, unlike the tiered model's 32. */
+const DYNAMIC = "gemini-3-flash";
 /** Tier chosen per request rather than baked into the id. */
 const TIERED = "gemini-3.8-flash-tiered";
 /**
@@ -108,11 +108,15 @@ function runTests() {
   const dynNoCap = anthropic(DYNAMIC);
   expect("still gets a default window", dynNoCap.maxOutputTokens, 64000);
   expect("still dynamic", dynNoCap.thinkingConfig?.thinking_budget, -1);
-  // This model's floor is 32, so a 100-token window still has room (50). Only
-  // below twice the floor does thinking actually get switched off. At 100 the room
-  // is pinned rather than left dynamic: see [5b/8].
-  expect("pinned to the room at 100", anthropic(DYNAMIC, { max_tokens: 100 }).thinkingConfig?.thinking_budget, 50);
-  expect("no room -> disabled", anthropic(DYNAMIC, { max_tokens: 50 }).thinkingConfig?.thinking_budget, 0);
+  // This model's floor is 128, so a 300-token window still has room (150). Only
+  // below twice the floor does thinking actually get switched off. The room is
+  // pinned rather than left dynamic: see [5b/8].
+  expect("pinned to the room at 300", anthropic(DYNAMIC, { max_tokens: 300 }).thinkingConfig?.thinking_budget, 150);
+  expect("room under the 128 floor -> disabled", anthropic(DYNAMIC, { max_tokens: 250 }).thinkingConfig?.thinking_budget, 0);
+  // The tiered model's floor is 32, so the same 100-token window that disables
+  // gemini-3-flash still leaves it 50 to think with. The floor is per model.
+  expect("floor 128: 100 tokens -> disabled", anthropic(DYNAMIC, { max_tokens: 100 }).thinkingConfig?.thinking_budget, 0);
+  expect("floor 32: 100 tokens -> pinned to 50", anthropic(TIERED, { max_tokens: 100 }).thinkingConfig?.thinking_budget, 50);
 
   console.log("\n[5b/8] A dynamic model cannot spend a small cap entirely on thinking ...");
   // Forwarding -1 lets the model reason until the window is gone: measured on

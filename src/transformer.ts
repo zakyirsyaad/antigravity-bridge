@@ -17,6 +17,15 @@ export class UnknownModelError extends Error {
   }
 }
 
+/** A reasoning tier, as Google's fixed-tier model names used to carry one. */
+type ReasoningTier = "low" | "medium" | "high";
+
+/** Where a retired id now goes, and the tier its name promised, if it named one. */
+interface RetiredId {
+  to: string;
+  tier?: ReasoningTier;
+}
+
 export class Transformer {
   /** Below this a thinking budget buys nothing, and some models reject it. */
   private static readonly MIN_THINKING_BUDGET = 1024;
@@ -252,51 +261,60 @@ export class Transformer {
    * sends Anthropic model names that have to land somewhere, but it is no
    * longer invisible.
    */
-  private static warnInexactModel(requested: string, resolved: string, reason: string): void {
+  private static warnInexactModel(requested: string, resolved: string, reason: string, detail = ""): void {
     if (this.warnedRetiredIds.has(requested)) return;
     this.warnedRetiredIds.add(requested);
     console.warn(
-      `[Model ${reason}] "${requested}" is not an exact model id; using "${resolved}". ` +
+      `[Model ${reason}] "${requested}" is not an exact model id; using "${resolved}"${detail}. ` +
         `See the model table in README.md, or run \`npm run bridge:models\`.`
     );
   }
 
-  /** Ids that no longer exist, each pointed at the model its name claimed. */
-  private static readonly RETIRED_IDS: Record<string, string> = {
+  /**
+   * Ids that no longer exist, each pointed at the model its name claimed.
+   *
+   * A `tier` is the reasoning the old name promised. It stands in for the target's
+   * declared budget (see `withAliasTier()`), so `gemini-3.6-flash-low` keeps the 1000
+   * it declared instead of becoming unbounded dynamic reasoning on every step of a
+   * tool loop that never set an effort.
+   */
+  private static readonly RETIRED_IDS: Record<string, RetiredId> = {
     // No Gemini Pro is served: gemini-pro-agent, gemini-3.1-pro-low and -high answer 404,
     // and gemini-2.5-pro answers 503 "no capacity" on every account. A pro request still
     // wants the most capable Gemini, so all of them go to the newest flash at its dynamic
     // (highest) tier — named in the warning, because it is not what the client asked for.
-    "gemini-3.1-pro": "gemini-3.8-flash-tiered",
-    "gemini-3-pro": "gemini-3.8-flash-tiered",
-    "gemini-3.1-pro-high": "gemini-3.8-flash-tiered",
-    "gemini-3.1-pro-low": "gemini-3.8-flash-tiered",
-    "gemini-pro-agent": "gemini-3.8-flash-tiered",
-    "gemini-2.5-pro": "gemini-3.8-flash-tiered",
+    // Only the -low name promised less (it declared 1001).
+    "gemini-3.1-pro": { to: "gemini-3.8-flash-tiered" },
+    "gemini-3-pro": { to: "gemini-3.8-flash-tiered" },
+    "gemini-3.1-pro-high": { to: "gemini-3.8-flash-tiered" },
+    "gemini-3.1-pro-low": { to: "gemini-3.8-flash-tiered", tier: "low" },
+    "gemini-pro-agent": { to: "gemini-3.8-flash-tiered" },
+    "gemini-2.5-pro": { to: "gemini-3.8-flash-tiered" },
     // These five all collapsed onto gemini-3-flash. Point each at the newest
     // flash tier that matches the effort its name advertised. The 3.7 and 3.6 tiered
     // ids are gone from Google (404), so they, and the names that led to them, land on 3.8.
-    "gemini-3.8-flash": "gemini-3.8-flash-tiered",
-    "gemini-3.8-flash-high": "gemini-3.8-flash-tiered",
-    "gemini-3.7-flash": "gemini-3.8-flash-tiered",
-    "gemini-3.7-flash-high": "gemini-3.8-flash-tiered",
-    "gemini-3.7-flash-tiered": "gemini-3.8-flash-tiered",
-    "gemini-3.6-flash-tiered": "gemini-3.8-flash-tiered",
+    "gemini-3.8-flash": { to: "gemini-3.8-flash-tiered" },
+    "gemini-3.8-flash-high": { to: "gemini-3.8-flash-tiered" },
+    "gemini-3.7-flash": { to: "gemini-3.8-flash-tiered" },
+    "gemini-3.7-flash-high": { to: "gemini-3.8-flash-tiered" },
+    "gemini-3.7-flash-tiered": { to: "gemini-3.8-flash-tiered" },
+    "gemini-3.6-flash-tiered": { to: "gemini-3.8-flash-tiered" },
     // The fixed 3.6 Flash tiers answer 404, and the 3.5 Flash tiers answer 200 with a
-    // canned "no longer available" sentence instead of a reply. The tiered model takes
-    // its tier per request, so reasoning_effort recovers what the -medium/-low names meant.
-    "gemini-3.6-flash-high": "gemini-3.8-flash-tiered",
-    "gemini-3.6-flash-medium": "gemini-3.8-flash-tiered",
-    "gemini-3.6-flash-low": "gemini-3.8-flash-tiered",
-    "gemini-3-flash-agent": "gemini-3.8-flash-tiered",
-    "gemini-3.5-flash-low": "gemini-3.8-flash-tiered",
-    "gemini-3.5-flash-extra-low": "gemini-3.8-flash-tiered",
+    // canned "no longer available" sentence instead of a reply. Each keeps the tier its
+    // name fixed (Google's 3.5 names are one step off: -low was "Medium", -extra-low "Low").
+    "gemini-3.6-flash-high": { to: "gemini-3.8-flash-tiered", tier: "high" },
+    "gemini-3.6-flash-medium": { to: "gemini-3.8-flash-tiered", tier: "medium" },
+    "gemini-3.6-flash-low": { to: "gemini-3.8-flash-tiered", tier: "low" },
+    "gemini-3-flash-agent": { to: "gemini-3.8-flash-tiered", tier: "high" },
+    "gemini-3.5-flash-low": { to: "gemini-3.8-flash-tiered", tier: "medium" },
+    "gemini-3.5-flash-extra-low": { to: "gemini-3.8-flash-tiered", tier: "low" },
     // Google lists these three with the display name "Gemini 3.5 Flash Lite", and two of
     // them describe themselves with its training cutoff. Exposing them would offer one
-    // model under four names, so they resolve to the one whose id says what it is.
-    "gemini-2.5-flash": "gemini-3.5-flash-lite",
-    "gemini-2.5-flash-lite": "gemini-3.5-flash-lite",
-    "gemini-2.5-flash-thinking": "gemini-3.5-flash-lite",
+    // model under four names, so they resolve to the one whose id says what it is. The
+    // lite model does not reason unless asked; a name that says "thinking" is asking.
+    "gemini-2.5-flash": { to: "gemini-3.5-flash-lite" },
+    "gemini-2.5-flash-lite": { to: "gemini-3.5-flash-lite" },
+    "gemini-2.5-flash-thinking": { to: "gemini-3.5-flash-lite", tier: "high" },
   };
 
   /**
@@ -306,7 +324,7 @@ export class Transformer {
    * ones nobody has looked at yet.
    */
   public static retiredTarget(id: string): string | undefined {
-    return this.RETIRED_IDS[id];
+    return this.RETIRED_IDS[id]?.to;
   }
 
   /**
@@ -325,20 +343,39 @@ export class Transformer {
     return id;
   }
 
+  /**
+   * The model as thinking configuration should see it, given a retired id's tier.
+   *
+   * The tier replaces the declared budget with what the old fixed-tier models
+   * declared (DYNAMIC_TIERS: 1000 / 4000 / dynamic), and everything downstream
+   * treats it as that model's own default: Claude Code's ever-present "high" keeps
+   * it, another effort level scales it, and an explicit budget still wins.
+   */
+  private static withAliasTier(model: ModelDef | undefined, tier?: ReasoningTier): ModelDef | undefined {
+    if (!model || !tier || !model.supportsThinking) return model;
+    return { ...model, thinkingBudget: this.DYNAMIC_TIERS[tier] };
+  }
+
   public static resolveModel(requestedModel: string): string {
+    return this.resolveModelRequest(requestedModel).id;
+  }
+
+  /** resolveModel(), plus the reasoning tier a retired id's name promised. */
+  private static resolveModelRequest(requestedModel: string): { id: string; tier?: ReasoningTier } {
     const raw = (requestedModel || "").toLowerCase().trim();
     const clean = this.stripRoutingPrefix(raw.replace(/^google\//, "").replace(/^antigravity-/, ""));
 
     const exact = SUPPORTED_MODELS.find((m) => m.id === clean || m.name.toLowerCase() === raw);
-    if (exact) return exact.id;
+    if (exact) return { id: exact.id };
 
-    const retired = this.RETIRED_IDS;
-    if (retired[clean]) {
+    const retired = this.RETIRED_IDS[clean];
+    if (retired) {
       // With no GitHub watchers on this project, the software itself is the
       // only thing that will tell an existing user their model changed under
       // them. Silent aliasing would hide that completely.
-      this.warnInexactModel(clean, retired[clean], "deprecated");
-      return retired[clean];
+      const tierNote = retired.tier ? ` at the ${retired.tier} reasoning tier its name promised` : "";
+      this.warnInexactModel(clean, retired.to, "deprecated", tierNote);
+      return { id: retired.to, tier: retired.tier };
     }
 
     // Clients legitimately send names the bridge does not list — Claude Code
@@ -362,7 +399,7 @@ export class Transformer {
 
     if (guess) {
       this.warnInexactModel(clean, guess, "approximated");
-      return guess;
+      return { id: guess };
     }
 
     // Forwarding an unmapped name only bought an opaque "invalid argument" 400
@@ -374,7 +411,7 @@ export class Transformer {
    * Transform Anthropic /v1/messages request to Antigravity Payload
    */
   public static anthropicToAntigravity(body: any): AntigravityPayload {
-    const targetModel = this.resolveModel(body.model);
+    const { id: targetModel, tier: aliasTier } = this.resolveModelRequest(body.model);
     const contents: any[] = [];
 
     // System instruction
@@ -494,7 +531,7 @@ export class Transformer {
     }
 
     // Thinking configuration
-    const model = findModel(targetModel);
+    const model = this.withAliasTier(findModel(targetModel), aliasTier);
     this.raiseToolOutputCap(generationConfig, Array.isArray(body.tools) && body.tools.length > 0, model);
     const isClaude = model?.family === "claude";
 
@@ -556,7 +593,7 @@ export class Transformer {
    * Transform OpenAI /v1/chat/completions request to Antigravity Payload
    */
   public static openaiToAntigravity(body: any): AntigravityPayload {
-    const targetModel = this.resolveModel(body.model);
+    const { id: targetModel, tier: aliasTier } = this.resolveModelRequest(body.model);
     const contents: any[] = [];
     let systemInstruction: any = undefined;
 
@@ -661,7 +698,7 @@ export class Transformer {
       generationConfig.topP = body.top_p;
     }
 
-    const model = findModel(targetModel);
+    const model = this.withAliasTier(findModel(targetModel), aliasTier);
     this.raiseToolOutputCap(generationConfig, Array.isArray(body.tools) && body.tools.length > 0, model);
     const isClaude = model?.family === "claude";
 
