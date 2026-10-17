@@ -97,6 +97,11 @@ async function runTests() {
   // The shape that used to change generation without a word. The flash guess is the
   // newest flash now, so it lands where the caller meant, but it still warns.
   expect("model+reasoning suffix", resolve("gemini-3.8-flash-tiered-high"), "gemini-3.8-flash-tiered");
+  // A suffix on any known id keeps that id; it is not a guess at a different generation.
+  expect("suffix on gemini-3-flash keeps gemini-3-flash", resolve("gemini-3-flash-low"), "gemini-3-flash");
+  expect("suffix on the 3.1 lite keeps the 3.1 lite", resolve("gemini-3.1-flash-lite-high"), "gemini-3.1-flash-lite");
+  expect("suffix behind a prefix", resolve("openrouter/gemini-3-flash-medium"), "gemini-3-flash");
+  expect("suffix on a retired id resolves as retired", resolve("gemini-pro-agent-low"), "gemini-3.8-flash-tiered");
   expect("every guess is a model that is exposed", ["claude-opus-x", "claude-sonnet-x", "x-pro", "x-lite", "gemini-x"].every((id) => exposed.has(resolve(id))), true);
 
   console.log("\n[3b/4] A routing prefix is not part of the model name ...");

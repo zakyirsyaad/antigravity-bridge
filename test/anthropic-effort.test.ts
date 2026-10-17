@@ -220,9 +220,63 @@ function runTests() {
   expect("suffix -low, openai none disables", openaiBudget("gemini-3.8-flash-tiered-low", { reasoning_effort: "none" }), 0);
   console.warn = realWarn;
   const lowWarning = warned.find((w) => w.includes('"gemini-3.8-flash-tiered-low"')) || "";
-  expect("the approximated warning names the tier", lowWarning.includes("approximated") && lowWarning.includes("low reasoning tier"), true);
+  // The base is an exact id, so this is not a guess: the warning says it was suffixed.
+  expect("a suffixed exact id warns as suffixed, naming the tier", lowWarning.includes("[Model suffixed]") && lowWarning.includes("low reasoning tier"), true);
+  const guessWarning = warned.find((w) => w.includes('"gemini-9-flash-extra-low"')) || "";
+  expect("a suffixed guess still warns as approximated, naming the tier", guessWarning.includes("approximated") && guessWarning.includes("low reasoning tier"), true);
   const plainWarning = warned.find((w) => w.includes('"gemini-9-flash"')) || "";
   expect("and says nothing of a tier when there was none", plainWarning !== "" && !plainWarning.includes("reasoning tier"), true);
+
+  console.log("\n[7c/8] A suffix on a known id keeps that model; it is never a guess ...");
+  // Resolving the whole name first and guessing on failure sent gemini-3-flash-low to the
+  // tiered model and gemini-3.1-flash-lite-high to the 3.5 lite: the suffix changed the
+  // model generation, which is the bug the warning exists to prevent.
+  const sent = (id: string, proto: "anthropic" | "openai"): string =>
+    (proto === "anthropic"
+      ? Transformer.anthropicToAntigravity({ model: id, max_tokens: 64000, messages: [{ role: "user", content: "x" }] })
+      : Transformer.openaiToAntigravity({ model: id, max_tokens: 64000, messages: [{ role: "user", content: "x" }] })
+    ).model;
+  const warned2: string[] = [];
+  console.warn = (...a: any[]) => {
+    warned2.push(a.map(String).join(" "));
+  };
+  const keeps: Array<[string, string, unknown]> = [
+    ["gemini-3-flash-low", "gemini-3-flash", 1000],
+    ["gemini-3.1-flash-lite-high", "gemini-3.1-flash-lite", -1],
+    ["gemini-3.5-flash-lite-medium", "gemini-3.5-flash-lite", 4000],
+    ["openrouter/gemini-3-flash-low", "gemini-3-flash", 1000],
+    ["openrouter/google/gemini-3.1-flash-lite-high", "gemini-3.1-flash-lite", -1],
+  ];
+  for (const [id, model, budget] of keeps) {
+    for (const proto of ["anthropic", "openai"] as const) {
+      expect(`${id} -> ${proto} sends ${model}`, sent(id, proto), model);
+    }
+    expect(`${id}: anthropic budget`, anthropicBudget(id, effort("high")), budget);
+    expect(`${id}: openai budget`, openaiBudget(id), budget);
+  }
+  // A retired base resolves as retired, and the appended suffix outranks its own tier.
+  expect("retired base: gemini-3.8-flash-low -> tiered", sent("gemini-3.8-flash-low", "openai"), "gemini-3.8-flash-tiered");
+  expect("retired base: gemini-3.8-flash-low at low", anthropicBudget("gemini-3.8-flash-low", effort("high")), 1000);
+  expect("retired base with no tier: gemini-pro-agent-medium", openaiBudget("gemini-pro-agent-medium"), 4000);
+  expect("the appended suffix outranks a retired id's own (-low then -high)", anthropicBudget("gemini-3.6-flash-low-high", effort("high")), -1);
+  expect("the appended suffix outranks a retired entry's explicit tier", openaiBudget("gemini-3.5-flash-low-low"), 1000);
+  expect("behind a prefix too", openaiBudget("openrouter/gemini-3.6-flash-medium-low"), 1000);
+  // A retired id's tier is read off its own suffix unless its entry says otherwise.
+  expect("gemini-3.6-flash-medium: its own suffix", anthropicBudget("gemini-3.6-flash-medium"), 4000);
+  expect("gemini-3.5-flash-extra-low: the synonym", anthropicBudget("gemini-3.5-flash-extra-low"), 1000);
+  expect("gemini-3.5-flash-low: the entry overrides its suffix (Google's Medium)", anthropicBudget("gemini-3.5-flash-low"), 4000);
+  // Fixed-budget targets ignore a suffix, and say so.
+  expect("claude keeps its model", sent("claude-sonnet-4-6-high", "anthropic"), "claude-sonnet-4-6");
+  expect("claude keeps its budget", anthropicBudget("claude-sonnet-4-6-high", effort("high")), 1024);
+  expect("gpt-oss keeps its model", sent("gpt-oss-120b-medium-high", "openai"), "gpt-oss-120b-medium");
+  expect("gpt-oss keeps its budget", openaiBudget("gpt-oss-120b-medium-high"), 8192);
+  expect("an exact id that ends like a suffix is still exact", openaiBudget("gpt-oss-120b-medium"), 8192);
+  console.warn = realWarn;
+  const suffixedWarning = warned2.find((w) => w.includes('"gemini-3-flash-low"')) || "";
+  expect("the warning says suffixed, not approximated", suffixedWarning.includes("[Model suffixed]") && !suffixedWarning.includes("approximated"), true);
+  expect("and names the model and tier", suffixedWarning.includes('"gemini-3-flash"') && suffixedWarning.includes("low reasoning tier"), true);
+  const ignoredWarning = warned2.find((w) => w.includes('"claude-sonnet-4-6-high"')) || "";
+  expect("a fixed-budget target's warning says the suffix is ignored", ignoredWarning.includes("suffix is ignored"), true);
 
   console.log("\n[8/8] Every reasoning level ZCode is offered changes what is sent ...");
   // ZCode speaks the Anthropic protocol, so its variants arrive as output_config.effort.

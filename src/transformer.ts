@@ -17,10 +17,22 @@ export class UnknownModelError extends Error {
   }
 }
 
-/** A reasoning tier, as Google's fixed-tier model names used to carry one. */
-type ReasoningTier = "low" | "medium" | "high";
+/**
+ * Reasoning tiers, as Google's fixed-tier model names used to carry one. The suffixes
+ * the bridge reads off a model name are derived from this list, so a new tier is one
+ * edit here plus its budget in ALIAS_TIER_BUDGETS (which the type then demands).
+ */
+const REASONING_TIERS = ["low", "medium", "high"] as const;
+type ReasoningTier = (typeof REASONING_TIERS)[number];
 
-/** Where a retired id now goes, and the tier its name promised, if it named one. */
+/** Other words a model name uses for a tier: Google's 3.5 Flash ids called Low "extra-low". */
+const TIER_SYNONYMS: Record<string, ReasoningTier> = { "extra-low": "low" };
+
+/**
+ * Where a retired id now goes. Its tier is the one its own name's suffix spells
+ * (`gemini-3.6-flash-low` -> low); `tier` is set only where the name says something
+ * else or nothing (`gemini-3.5-flash-low` was Google's "Medium").
+ */
 interface RetiredId {
   to: string;
   tier?: ReasoningTier;
@@ -68,16 +80,16 @@ export class Transformer {
   private static readonly ALIAS_TIER_BUDGETS: Record<ReasoningTier, number> = { low: 1000, medium: 4000, high: -1 };
 
   /**
-   * Reasoning suffixes a client appends to a model name (`gemini-3.8-flash-tiered-low`).
-   * Longest first, and whole trailing segments only: `-lite` is a model, not a tier,
-   * and `-extra-low` is Google's own name for its Low tier.
+   * Reasoning suffixes a model name can end in (`gemini-3.8-flash-tiered-low`), from
+   * REASONING_TIERS and TIER_SYNONYMS. Longest first, so `-extra-low` is not read as
+   * `-low`, and whole trailing segments only: `-lite` is a model, not a tier.
    */
   private static readonly TIER_SUFFIXES: Array<[string, ReasoningTier]> = [
-    ["-extra-low", "low"],
-    ["-low", "low"],
-    ["-medium", "medium"],
-    ["-high", "high"],
-  ];
+    ...Object.entries(TIER_SYNONYMS),
+    ...REASONING_TIERS.map((tier): [string, ReasoningTier] => [tier, tier]),
+  ]
+    .map(([word, tier]): [string, ReasoningTier] => [`-${word}`, tier])
+    .sort((a, b) => b[0].length - a[0].length);
 
   /**
    * Effort scales multiply the model's own declared budget, so "high" means high
@@ -294,21 +306,22 @@ export class Transformer {
   /**
    * Ids that no longer exist, each pointed at the model its name claimed.
    *
-   * A `tier` is the reasoning the old name promised. It stands in for the target's
-   * declared budget (see `withAliasTier()`), so `gemini-3.6-flash-low` keeps the 1000
-   * it declared instead of becoming unbounded dynamic reasoning on every step of a
-   * tool loop that never set an effort.
+   * The tier the old name promised stands in for the target's declared budget (see
+   * `withAliasTier()`), so `gemini-3.6-flash-low` keeps the 1000 it declared instead of
+   * becoming unbounded dynamic reasoning on every step of a tool loop that never set an
+   * effort. It is read off the id's own suffix; `tier` is written only where the name
+   * says otherwise or nothing.
    */
   private static readonly RETIRED_IDS: Record<string, RetiredId> = {
     // No Gemini Pro is served: gemini-pro-agent, gemini-3.1-pro-low and -high answer 404,
     // and gemini-2.5-pro answers 503 "no capacity" on every account. A pro request still
     // wants the most capable Gemini, so all of them go to the newest flash at its dynamic
     // (highest) tier — named in the warning, because it is not what the client asked for.
-    // Only the -low name promised less (it declared 1001).
+    // Only the -low name promised less (it declared 1001); its suffix says so.
     "gemini-3.1-pro": { to: "gemini-3.8-flash-tiered" },
     "gemini-3-pro": { to: "gemini-3.8-flash-tiered" },
     "gemini-3.1-pro-high": { to: "gemini-3.8-flash-tiered" },
-    "gemini-3.1-pro-low": { to: "gemini-3.8-flash-tiered", tier: "low" },
+    "gemini-3.1-pro-low": { to: "gemini-3.8-flash-tiered" },
     "gemini-pro-agent": { to: "gemini-3.8-flash-tiered" },
     "gemini-2.5-pro": { to: "gemini-3.8-flash-tiered" },
     // These five all collapsed onto gemini-3-flash. Point each at the newest
@@ -322,13 +335,14 @@ export class Transformer {
     "gemini-3.6-flash-tiered": { to: "gemini-3.8-flash-tiered" },
     // The fixed 3.6 Flash tiers answer 404, and the 3.5 Flash tiers answer 200 with a
     // canned "no longer available" sentence instead of a reply. Each keeps the tier its
-    // name fixed (Google's 3.5 names are one step off: -low was "Medium", -extra-low "Low").
-    "gemini-3.6-flash-high": { to: "gemini-3.8-flash-tiered", tier: "high" },
-    "gemini-3.6-flash-medium": { to: "gemini-3.8-flash-tiered", tier: "medium" },
-    "gemini-3.6-flash-low": { to: "gemini-3.8-flash-tiered", tier: "low" },
+    // name fixed. Google's 3.5 names are one step off — -low was "Medium", -extra-low
+    // "Low" — and "agent" was High, so those three say it explicitly.
+    "gemini-3.6-flash-high": { to: "gemini-3.8-flash-tiered" },
+    "gemini-3.6-flash-medium": { to: "gemini-3.8-flash-tiered" },
+    "gemini-3.6-flash-low": { to: "gemini-3.8-flash-tiered" },
     "gemini-3-flash-agent": { to: "gemini-3.8-flash-tiered", tier: "high" },
     "gemini-3.5-flash-low": { to: "gemini-3.8-flash-tiered", tier: "medium" },
-    "gemini-3.5-flash-extra-low": { to: "gemini-3.8-flash-tiered", tier: "low" },
+    "gemini-3.5-flash-extra-low": { to: "gemini-3.8-flash-tiered" },
     // Google lists these three with the display name "Gemini 3.5 Flash Lite", and two of
     // them describe themselves with its training cutoff. Exposing them would offer one
     // model under four names, so they resolve to the one whose id says what it is. The
@@ -352,16 +366,42 @@ export class Transformer {
    * Drop a routing prefix: `open-design-byok/gemini-3.8-flash-tiered` is the model
    * `gemini-3.8-flash-tiered`, reached through a provider called open-design-byok.
    * OpenCode and OpenRouter-style clients write ids this way. Only a tail that is
-   * an exact id (or a retired one) counts, so this never invents a match — it used
-   * to be guessed from the whole string and landed on a different model generation.
+   * an exact or retired id, possibly with a reasoning suffix, counts, so this never
+   * invents a match — it used to be guessed from the whole string and landed on a
+   * different model generation.
    */
   private static stripRoutingPrefix(id: string): string {
     const parts = id.split("/");
     for (let i = 1; i < parts.length; i++) {
       const tail = parts.slice(i).join("/");
-      if (SUPPORTED_MODELS.some((m) => m.id === tail) || this.RETIRED_IDS[tail]) return tail;
+      if (this.lookupKnown(tail) || this.lookupKnown(this.splitTierSuffix(tail).base)) return tail;
     }
     return id;
+  }
+
+  /**
+   * An exact or retired id, never a guess. A retired id's tier is its entry's, or
+   * else the one its own name's suffix spells.
+   */
+  private static lookupKnown(id: string): { id: string; tier?: ReasoningTier; retired: boolean } | undefined {
+    if (SUPPORTED_MODELS.some((m) => m.id === id)) return { id, retired: false };
+    const retired = this.RETIRED_IDS[id];
+    if (!retired) return undefined;
+    return { id: retired.to, tier: retired.tier ?? this.splitTierSuffix(id).tier, retired: true };
+  }
+
+  /** A name and the tier its recognised trailing suffix names, if any, split apart. */
+  private static splitTierSuffix(name: string): { base: string; tier?: ReasoningTier } {
+    const hit = this.TIER_SUFFIXES.find(([suffix]) => name.length > suffix.length && name.endsWith(suffix));
+    return hit ? { base: name.slice(0, -hit[0].length), tier: hit[1] } : { base: name };
+  }
+
+  /**
+   * A tier only means something to a Gemini target. Claude and GPT-OSS have fixed
+   * budgets, and "-high" would send them -1, which nobody has seen them accept.
+   */
+  private static takesTier(id: string): boolean {
+    return findModel(id)?.family === "gemini";
   }
 
   /**
@@ -378,11 +418,6 @@ export class Transformer {
     return { ...model, thinkingBudget: this.ALIAS_TIER_BUDGETS[tier] };
   }
 
-  /** The tier a recognised trailing suffix names, or undefined. */
-  private static tierSuffix(name: string): ReasoningTier | undefined {
-    return this.TIER_SUFFIXES.find(([suffix]) => name.endsWith(suffix))?.[1];
-  }
-
   private static tierNote(tier?: ReasoningTier): string {
     return tier ? ` at the ${tier} reasoning tier its name promised` : "";
   }
@@ -391,7 +426,14 @@ export class Transformer {
     return this.resolveModelRequest(requestedModel).id;
   }
 
-  /** resolveModel(), plus the reasoning tier a retired id's name promised. */
+  /**
+   * resolveModel(), plus the reasoning tier the requested name promised.
+   *
+   * In order: an exact id; a retired id; a known id with a reasoning suffix
+   * appended (`gemini-3-flash-low` is gemini-3-flash at low, not a guess); then the
+   * nearest-match guess. A suffix the caller appended outranks the tier a retired
+   * base carries: it is the caller's later and more specific word.
+   */
   private static resolveModelRequest(requestedModel: string): { id: string; tier?: ReasoningTier } {
     const raw = (requestedModel || "").toLowerCase().trim();
     const clean = this.stripRoutingPrefix(raw.replace(/^google\//, "").replace(/^antigravity-/, ""));
@@ -399,13 +441,26 @@ export class Transformer {
     const exact = SUPPORTED_MODELS.find((m) => m.id === clean || m.name.toLowerCase() === raw);
     if (exact) return { id: exact.id };
 
-    const retired = this.RETIRED_IDS[clean];
+    const retired = this.lookupKnown(clean);
     if (retired) {
       // With no GitHub watchers on this project, the software itself is the
       // only thing that will tell an existing user their model changed under
       // them. Silent aliasing would hide that completely.
-      this.warnInexactModel(clean, retired.to, "deprecated", this.tierNote(retired.tier));
-      return { id: retired.to, tier: retired.tier };
+      const tier = this.takesTier(retired.id) ? retired.tier : undefined;
+      this.warnInexactModel(clean, retired.id, "deprecated", this.tierNote(tier));
+      return { id: retired.id, tier };
+    }
+
+    // Resolving the whole name first and guessing on failure sent
+    // `gemini-3-flash-low` to the tiered model and `gemini-3.1-flash-lite-high` to
+    // the 3.5 lite: a reasoning suffix silently changed the model generation.
+    const { base, tier: suffixTier } = this.splitTierSuffix(clean);
+    const known = suffixTier ? this.lookupKnown(base) : undefined;
+    if (known) {
+      const tier = this.takesTier(known.id) ? suffixTier : undefined;
+      const note = tier ? this.tierNote(tier) : `; its "-${clean.slice(base.length + 1)}" suffix is ignored, this model's budget is fixed`;
+      this.warnInexactModel(clean, known.id, known.retired ? "deprecated" : "suffixed", note);
+      return { id: known.id, tier };
     }
 
     // Clients legitimately send names the bridge does not list — Claude Code
@@ -428,10 +483,8 @@ export class Transformer {
                 : null;
 
     if (guess) {
-      // A reasoning suffix is still the caller's choice of tier: dropping it sent
-      // `gemini-3.8-flash-tiered-low` to unbounded dynamic reasoning. Gemini guesses
-      // only — a Claude target has a fixed budget, and "-high" would send it -1.
-      const tier = guess.startsWith("gemini-") ? this.tierSuffix(name) : undefined;
+      // A reasoning suffix is still the caller's choice of tier, on a guess too.
+      const tier = this.takesTier(guess) ? this.splitTierSuffix(name).tier : undefined;
       this.warnInexactModel(clean, guess, "approximated", this.tierNote(tier));
       return { id: guess, tier };
     }

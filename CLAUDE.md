@@ -374,8 +374,10 @@ name, never the prefix — it used to guess from the whole string, so that id be
 
 Retired ids are kept as explicit aliases in `resolveModel()` so existing client configs keep working;
 each points at the model its name claimed, which is often not what it used to resolve to. An alias
-whose name fixed a reasoning tier (`gemini-3.6-flash-low`, `gemini-3.5-flash-extra-low`,
-`gemini-2.5-flash-thinking`, ...) carries it in `RETIRED_IDS`. `withAliasTier()` then substitutes that
+whose name fixed a reasoning tier keeps it. The tier is read off the id's own suffix
+(`gemini-3.6-flash-low`, `gemini-3.5-flash-extra-low`); a `RETIRED_IDS` entry spells it out only where
+the name says otherwise or nothing (`gemini-3.5-flash-low` was Google's Medium,
+`gemini-2.5-flash-thinking` asks for high). `withAliasTier()` then substitutes that
 tier's budget (`ALIAS_TIER_BUDGETS`: 1000 / 4000 / dynamic, what the old fixed models declared) for the
 target model's declared one, and every
 effort and explicit-budget rule treats it as the model's own default. Without it, a tool loop configured
@@ -389,10 +391,15 @@ promise should not move with it.
 an id matching nothing throws `UnknownModelError`, which `server.ts` turns into a 400. Approximation
 is deliberate — Claude Code sends Anthropic's own ids and refusing them would break the main use
 case — but a client that appends a reasoning suffix (`gemini-3.8-flash-tiered-high`) once silently
-got a different model generation, so the guess has to be audible. The suffix itself is kept: a
-trailing `-low` / `-medium` / `-high` (or Google's `-extra-low`) on a Gemini guess becomes the same
-tier a retired id carries, and the warning names it. Only a whole trailing segment counts (`-lite` is
-a model), and a Claude guess ignores it, because its budget is fixed and `-high` would send `-1`.
+got a different model generation, so the guess has to be audible. The suffix itself is kept, and it
+is read **before** guessing. The order is: exact id; retired id; a known (exact or retired) id plus a
+trailing `-low` / `-medium` / `-high` / `-extra-low`; and only then the guess. So `gemini-3-flash-low`
+is gemini-3-flash at low, warned as `[Model suffixed]`. Resolving the whole name and guessing on
+failure sent it to the tiered model, and `gemini-3.1-flash-lite-high` to the 3.5 lite, which is exactly
+the generation change the warning exists to catch. A suffix appended to a retired id outranks that
+id's own tier. Only a whole trailing segment counts (`-lite` is a model). Claude and GPT-OSS ignore
+the suffix and the warning says so: their budgets are fixed, and `-high` would send `-1`. The suffixes
+come from `REASONING_TIERS` plus `TIER_SYNONYMS` (`extra-low` -> low), so a new tier is one edit.
 
 OpenAI responses — the non-streaming body and the `include_usage` stream chunk alike, both built by
 `Transformer.openaiUsage()` — report `completion_tokens` **including** reasoning, with

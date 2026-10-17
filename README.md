@@ -110,8 +110,10 @@ choose it. Google used to offer fixed-tier ids too (`gemini-3.6-flash-high`, `ge
 and so on), with the tier in the name. It no longer serves any of them, so those ids now resolve to
 the tiered model at the tier their name fixed: `-low` thinks 1,000 tokens, `-medium` 4,000, and `-high`
 stays dynamic, as before. `reasoning_effort` scales from there, and an explicit budget overrides it.
-A reasoning suffix on a model name (`gemini-3.8-flash-tiered-low`) works the same way: the bridge
-warns that the id is not exact, and keeps the tier.
+A reasoning suffix on a model name works the same way, on any Gemini id: `gemini-3-flash-low` is
+`gemini-3-flash` at the low tier, and `gemini-3.8-flash-tiered-medium` is the tiered model at medium. The
+bridge warns that the id is not exact and keeps both the model and the tier. Claude and GPT-OSS ignore
+the suffix, because their reasoning budgets are fixed.
 
 ### Controlling reasoning
 
