@@ -5,6 +5,7 @@ import { OAuthManager } from "../src/oauth";
 import { syncZCodeConfig } from "../src/zcode-sync";
 import { LaunchAgentService } from "../src/launchagent";
 import { checkModelDrift } from "../src/model-sync";
+import { Transformer } from "../src/transformer";
 import { UsageTracker } from "../src/usage-tracker";
 import { performUpdate, checkForNewerRelease } from "../src/updater";
 import { BRIDGE_DEFAULT_PORT, LAUNCH_AGENT_PLIST_PATH, SUPPORTED_MODELS } from "../src/constants";
@@ -180,15 +181,28 @@ async function main() {
           drift.changed.forEach((c) => console.log(`    ${c.id}  ${c.field}: ours=${c.ours} theirs=${c.theirs}`));
           console.log("");
         }
-        if (drift.unexposed.length) {
+        // A listed id is not a served one, so an id retired on purpose is reported apart:
+        // it is not work to do, and re-adding it would hand clients a dead model again.
+        const retired = drift.unexposed.filter((m) => Transformer.retiredTarget(m.id));
+        const unseen = drift.unexposed.filter((m) => !Transformer.retiredTarget(m.id));
+        if (unseen.length) {
           console.log("+ Thinking-capable models Google offers that this bridge does not expose:");
-          drift.unexposed.forEach((m) =>
+          unseen.forEach((m) =>
             console.log(`    ${m.id.padEnd(30)} budget=${String(m.thinkingBudget).padEnd(7)} ${m.displayName}`)
           );
+          console.log("  Send each one a real request, and read the reply, before exposing it.\n");
+        }
+        if (retired.length) {
+          console.log("· Listed by Google but retired here on purpose (see RETIRED_IDS in src/transformer.ts):");
+          retired.forEach((m) => console.log(`    ${m.id.padEnd(30)} -> ${Transformer.retiredTarget(m.id)}`));
           console.log("");
         }
-        if (!drift.missing.length && !drift.changed.length && !drift.unexposed.length) {
-          console.log("✓ The model table matches Google exactly.\n");
+        if (!drift.missing.length && !drift.changed.length && !unseen.length) {
+          console.log(
+            retired.length
+              ? "✓ Nothing to reconcile: every model Google lists is exposed or retired on purpose.\n"
+              : "✓ The model table matches Google exactly.\n"
+          );
         } else {
           console.log("Edit SUPPORTED_MODELS in src/constants.ts to reconcile.\n");
         }

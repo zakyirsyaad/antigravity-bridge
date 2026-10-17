@@ -84,7 +84,12 @@ export class Transformer {
     const entry = scale[level.trim().toLowerCase()];
     if (!entry) return undefined;
 
-    const declared = model.thinkingBudget ?? -1;
+    // A model that declares no budget (the Flash Lites) does not reason by default.
+    // The default level and below leave it that way — Claude Code's ever-present
+    // "high" must not switch reasoning on for every request — and a level above the
+    // default asks for reasoning, sized by the model.
+    const declared = model.thinkingBudget;
+    if (declared === undefined) return entry.factor > 1 ? this.DYNAMIC_TIERS[entry.tier] : undefined;
     return declared < 0
       ? this.DYNAMIC_TIERS[entry.tier]
       : Math.max(1, Math.round(declared * entry.factor));
@@ -258,12 +263,16 @@ export class Transformer {
 
   /** Ids that no longer exist, each pointed at the model its name claimed. */
   private static readonly RETIRED_IDS: Record<string, string> = {
-    // Was pinned to the Low tier despite the plain name; High is the better default.
-    // Google serves High as gemini-pro-agent: it answers 400 to every request for the
-    // old gemini-3.1-pro-high (checked on all six accounts), so these now point there.
-    "gemini-3.1-pro": "gemini-pro-agent",
-    "gemini-3-pro": "gemini-pro-agent",
-    "gemini-3.1-pro-high": "gemini-pro-agent",
+    // No Gemini Pro is served: gemini-pro-agent, gemini-3.1-pro-low and -high answer 404,
+    // and gemini-2.5-pro answers 503 "no capacity" on every account. A pro request still
+    // wants the most capable Gemini, so all of them go to the newest flash at its dynamic
+    // (highest) tier — named in the warning, because it is not what the client asked for.
+    "gemini-3.1-pro": "gemini-3.8-flash-tiered",
+    "gemini-3-pro": "gemini-3.8-flash-tiered",
+    "gemini-3.1-pro-high": "gemini-3.8-flash-tiered",
+    "gemini-3.1-pro-low": "gemini-3.8-flash-tiered",
+    "gemini-pro-agent": "gemini-3.8-flash-tiered",
+    "gemini-2.5-pro": "gemini-3.8-flash-tiered",
     // These five all collapsed onto gemini-3-flash. Point each at the newest
     // flash tier that matches the effort its name advertised. The 3.7 and 3.6 tiered
     // ids are gone from Google (404), so they, and the names that led to them, land on 3.8.
@@ -273,8 +282,32 @@ export class Transformer {
     "gemini-3.7-flash-high": "gemini-3.8-flash-tiered",
     "gemini-3.7-flash-tiered": "gemini-3.8-flash-tiered",
     "gemini-3.6-flash-tiered": "gemini-3.8-flash-tiered",
-    "gemini-2.5-flash": "gemini-3.1-flash-lite",
+    // The fixed 3.6 Flash tiers answer 404, and the 3.5 Flash tiers answer 200 with a
+    // canned "no longer available" sentence instead of a reply. The tiered model takes
+    // its tier per request, so reasoning_effort recovers what the -medium/-low names meant.
+    "gemini-3.6-flash-high": "gemini-3.8-flash-tiered",
+    "gemini-3.6-flash-medium": "gemini-3.8-flash-tiered",
+    "gemini-3.6-flash-low": "gemini-3.8-flash-tiered",
+    "gemini-3-flash-agent": "gemini-3.8-flash-tiered",
+    "gemini-3.5-flash-low": "gemini-3.8-flash-tiered",
+    "gemini-3.5-flash-extra-low": "gemini-3.8-flash-tiered",
+    // Google lists these three with the display name "Gemini 3.5 Flash Lite", and two of
+    // them describe themselves with its training cutoff. Exposing them would offer one
+    // model under four names, so they resolve to the one whose id says what it is.
+    "gemini-2.5-flash": "gemini-3.5-flash-lite",
+    "gemini-2.5-flash-lite": "gemini-3.5-flash-lite",
+    "gemini-2.5-flash-thinking": "gemini-3.5-flash-lite",
   };
+
+  /**
+   * The model a retired id now resolves to, or undefined if it is not retired.
+   * `bridge:models` uses it to tell ids the catalogue still lists but this bridge
+   * retired on purpose (the 3.5 Flash tiers look healthy there and are not) from
+   * ones nobody has looked at yet.
+   */
+  public static retiredTarget(id: string): string | undefined {
+    return this.RETIRED_IDS[id];
+  }
 
   /**
    * Drop a routing prefix: `open-design-byok/gemini-3.8-flash-tiered` is the model
@@ -320,11 +353,11 @@ export class Transformer {
         : name.includes("claude")
           ? "claude-opus-4-6-thinking"
           : name.includes("pro")
-            ? "gemini-pro-agent"
+            ? "gemini-3.8-flash-tiered" // no Pro is served; see RETIRED_IDS
             : name.includes("lite")
-              ? "gemini-3.1-flash-lite"
+              ? "gemini-3.5-flash-lite"
               : name.includes("flash") || name.includes("gemini")
-                ? "gemini-3.6-flash-high"
+                ? "gemini-3.8-flash-tiered"
                 : null;
 
     if (guess) {
@@ -468,8 +501,9 @@ export class Transformer {
     if (model?.supportsThinking) {
       // Default to Google's own declared budget for this model rather than one
       // global number: the models differ by an order of magnitude, and several
-      // size their reasoning dynamically.
-      let budget = model.thinkingBudget ?? -1;
+      // size their reasoning dynamically. A model that declares none is left to
+      // Google's default (no reasoning) unless something below asks.
+      let budget: number | undefined = model.thinkingBudget;
 
       // Claude Code sends effort on every request, beside an `adaptive` thinking
       // block that carries no token count — so this is the only place its
@@ -484,7 +518,7 @@ export class Transformer {
           budget = body.thinking.budget_tokens;
         }
       }
-      this.applyThinkingConfig(generationConfig, budget, model);
+      if (budget !== undefined) this.applyThinkingConfig(generationConfig, budget, model);
     }
 
     // Tools conversion
@@ -632,8 +666,8 @@ export class Transformer {
     const isClaude = model?.family === "claude";
 
     if (model?.supportsThinking) {
-      const declared = model.thinkingBudget ?? -1;
-      let budget = declared;
+      // Undefined for a model that declares no budget: see the Anthropic path.
+      let budget: number | undefined = model.thinkingBudget;
       const effort = String(body.reasoning_effort || body.extra_body?.reasoning_effort || "").toLowerCase();
       const reasoningTokens = body.reasoning_tokens || body.extra_body?.reasoning_tokens;
 
@@ -649,7 +683,7 @@ export class Transformer {
         if (fromEffort !== undefined) budget = fromEffort;
       }
 
-      this.applyThinkingConfig(generationConfig, budget, model);
+      if (budget !== undefined) this.applyThinkingConfig(generationConfig, budget, model);
     }
 
     let tools: any[] | undefined = undefined;

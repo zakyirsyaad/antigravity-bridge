@@ -1,5 +1,47 @@
 # Changelog
 
+## 2.6.0
+
+### Fixed: eight more model ids Google stopped serving, and no Pro left to offer
+
+On 2026-10-17 `bridge:models` reported five exposed ids gone from Google's catalogue. A real request to
+each confirmed it: `gemini-pro-agent`, `gemini-3.1-pro-low` and the three `gemini-3.6-flash-*` tiers
+answer HTTP 404 "Requested entity was not found". Three more ids were broken without the report
+noticing. The 3.5 Flash tiers (`gemini-3-flash-agent`, `gemini-3.5-flash-low`,
+`gemini-3.5-flash-extra-low`) are still in the catalogue with full metadata, and they answer **HTTP
+200**. The body is one canned sentence: "Gemini 3.5 Flash is no longer available. Please switch to
+Gemini 3.7 Flash in the latest version of Antigravity." There is no finishReason and no usage, and a
+client shows it as the model's answer. `gemini-2.5-pro` is listed but answers 503 "no capacity" on all
+six accounts.
+
+So no Gemini Pro is served. `/v1/models` now lists seven ids, and each one answered a real request,
+with the right content, on both protocols: `claude-opus-4-6-thinking`, `claude-sonnet-4-6`,
+`gemini-3.8-flash-tiered`, `gemini-3-flash`, `gemini-3.5-flash-lite` (new), `gemini-3.1-flash-lite`,
+`gpt-oss-120b-medium`.
+
+- Every removed id is a retired alias, so existing client configs keep working, and the bridge logs a
+  warning naming the model it used. All Pro ids, and the nearest-match guess for any "pro" name, go to
+  `gemini-3.8-flash-tiered`, the most capable Gemini that answers; so do the fixed 3.6 and 3.5 Flash
+  tiers, whose effort `reasoning_effort` now chooses. The nearest-match guess for "flash" used to be
+  `gemini-3.6-flash-high`, one of the dead ids; it is now `gemini-3.8-flash-tiered`. For "lite" it is
+  `gemini-3.5-flash-lite`.
+- `gemini-2.5-flash`, `-2.5-flash-lite` and `-2.5-flash-thinking` are in Google's catalogue under the
+  display name "Gemini 3.5 Flash Lite". They are aliases of `gemini-3.5-flash-lite` rather than three
+  more names for it.
+- Metadata now matches Google: `gemini-3-flash` has a thinking floor of 128, not 32, and
+  `gemini-3.1-flash-lite` can reason (floor 128).
+- A model that declares no thinking budget (both Flash Lites) gets **no** thinking settings by default.
+  With none, those models do not reason; sent `-1`, as the bridge would have sent, they spent about 200
+  thought tokens on a one-line question. An explicit budget is honoured. An effort level turns reasoning
+  on only when it is above the protocol's default (OpenAI `high`, Anthropic `xhigh` / `max`), so Claude
+  Code's "high" on every request changes nothing.
+- `bridge:models` reports catalogue ids that are retired on purpose separately, each with its target,
+  instead of listing them as models to add. The dead 3.5 Flash tiers look healthy in the catalogue.
+- The live suite uses `gemini-3-flash` and `gemini-3.5-flash-lite` where it used two of the dead ids.
+
+**Deployments must be updated** (`npm run bridge:update`, or pull and restart): an older bridge still
+offers these ids, and they fail as before.
+
 ## 2.5.1
 
 ### Fixed: a few seconds of network trouble on the host no longer fail the request

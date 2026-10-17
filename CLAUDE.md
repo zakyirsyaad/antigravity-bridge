@@ -308,10 +308,21 @@ but costs no inference quota.
 **The catalogue can list an id that no longer works, and `bridge:models` cannot see that.**
 `gemini-3.1-pro-high` stayed in `fetchAvailableModels` with full metadata while Google answered HTTP
 400 "Request contains an invalid argument" to every request for it, on all six accounts and every request
-shape (its working name is `gemini-pro-agent`); the 3.7 and 3.6 tiered ids went 404. Every client that
-asked for "pro" got a 400 and nothing in the bridge said why. Only calling a model proves it is served:
-after editing the table, send each id one tiny request (`npm test` does this for the ones it uses).
-`gemini-2.5-pro` currently answers 503 "no capacity" on every account; that is capacity, not a dead id.
+shape; the 3.7 and 3.6 tiered ids went 404. Every client that asked for "pro" got a 400 and nothing in
+the bridge said why. Only calling a model proves it is served: after editing the table, send each id one
+tiny request **and read the reply** (`npm test` does this for the ones it uses). A status code is not
+enough. The 3.5 Flash tiers (`gemini-3-flash-agent`, `gemini-3.5-flash-low`, `-extra-low`) are still in
+the catalogue and answer HTTP 200, but the reply is one canned sentence, "Gemini 3.5 Flash is no longer
+available...", with no `finishReason` and no usage, and a client shows it as the model's answer.
+
+As of 2026-10-17 **no Gemini Pro is served**. `gemini-pro-agent` and `gemini-3.1-pro-low` went 404, along
+with the 3.6 Flash tiers. `gemini-2.5-pro` is listed but answers 503 "no capacity" on every account, as
+it did a table earlier. Every pro id, and the nearest-match guess for "pro", is a retired alias of
+`gemini-3.8-flash-tiered`, so the substitution is logged; re-add 2.5 Pro once a request to it succeeds.
+Google's catalogue still lists the retired 3.5 Flash tiers, `gemini-2.5-pro` and the three `gemini-2.5-flash*`
+ids. The 2.5 Flash ids are labelled "Gemini 3.5 Flash Lite" and alias to `gemini-3.5-flash-lite`.
+`bridge:models` prints every id that `Transformer.retiredTarget()` knows under "retired here on purpose",
+with its target, not as a model to add.
 
 `/v1/models` advertises each model's `context_length` (from `contextLimit`). OpenAI-compatible
 clients size their own prompts from it, and Onyx assumes 32,000 tokens for a model it does not
@@ -335,6 +346,11 @@ Reasoning config is per model, not global:
   the product surfaces.
 - `minThinkingBudget` is the floor; below it the bridge disables thinking rather than sending a
   value the model would reject.
+- **No `thinkingBudget` at all** (the Flash Lites) means Google declares no default, and those models
+  do not reason unless asked: with no `thinkingConfig` they spent 0 thought tokens, against about 200
+  when sent `-1`. The bridge sends nothing by default. An effort level turns reasoning on (dynamic)
+  only when it is above the protocol's default: OpenAI `high`, Anthropic `xhigh` / `max`. Treating
+  absent as `-1`, as the code used to, would have made every lite request reason.
 - `Transformer.applyThinkingConfig()` fits the budget inside the caller's `max_tokens`, holding back
   `BRIDGE_ANSWER_RESERVE_TOKENS` (default 8192, clamped to half the window) for the visible answer.
   Thinking tokens are billed as output and count against that cap.

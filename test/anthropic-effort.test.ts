@@ -45,7 +45,17 @@ SUPPORTED_MODELS.push({
   minThinkingBudget: 128,
 });
 const FIXED = "test-fixed-budget"; // declared budget 10001
-const NO_THINKING = "gemini-3.1-flash-lite";
+// A stand-in too: every model Google serves today can reason.
+SUPPORTED_MODELS.push({
+  id: "test-no-thinking",
+  name: "Test no thinking",
+  family: "gemini",
+  contextLimit: 1048576,
+  outputLimit: 65535,
+  supportsThinking: false,
+});
+const NO_THINKING = "test-no-thinking";
+const UNDECLARED = "gemini-3.5-flash-lite"; // can reason, declares no default budget
 
 /** The thinking_budget that would actually reach Google, or undefined if none. */
 function anthropicBudget(model: string, extra: Record<string, unknown> = {}): unknown {
@@ -117,6 +127,16 @@ function runTests() {
 
   console.log("\n[5/6] A model that cannot think gets no thinking config ...");
   expect("effort on a non-thinking model", anthropicBudget(NO_THINKING, effort("max")), undefined);
+
+  console.log("\n[5b/6] A model with no declared budget: only a level above the default turns it on ...");
+  // Claude Code sends "high" on every request; it must not make every lite request reason.
+  expect("no effort -> nothing sent", anthropicBudget(UNDECLARED), undefined);
+  expect("high (Claude Code's default) -> nothing sent", anthropicBudget(UNDECLARED, effort("high")), undefined);
+  expect("medium -> nothing sent", anthropicBudget(UNDECLARED, effort("medium")), undefined);
+  expect("low -> nothing sent", anthropicBudget(UNDECLARED, effort("low")), undefined);
+  expect("xhigh -> dynamic", anthropicBudget(UNDECLARED, effort("xhigh")), -1);
+  expect("max -> dynamic", anthropicBudget(UNDECLARED, effort("max")), -1);
+  expect("an explicit budget wins", anthropicBudget(UNDECLARED, { output_config: { effort: "high" }, thinking: { type: "enabled", budget_tokens: 2048 } }), 2048);
 
   console.log("\n[6/6] The OpenAI path is untouched by sharing the helper ...");
   expect("dynamic, low", openaiBudget(DYNAMIC, { reasoning_effort: "low" }), 1000);

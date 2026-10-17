@@ -65,9 +65,14 @@ export function getAntigravityHeaders() {
  * `v1internal:fetchAvailableModels`. Re-check it with `npm run bridge:models`,
  * which reports drift rather than letting this table rot silently.
  *
- * Note that Google's ids and display names disagree in places — `gemini-3.5
- * -flash-low` is presented as "Gemini 3.5 Flash (Medium)". That inconsistency
+ * Note that Google's ids and display names disagree in places — the retired
+ * `gemini-3.5-flash-low` was presented as "Gemini 3.5 Flash (Medium)", and
+ * `gemini-2.5-flash` is presented as "Gemini 3.5 Flash Lite". That inconsistency
  * is upstream; reproducing it faithfully beats inventing our own names.
+ *
+ * A listed id is not a served one: `bridge:models` reads the catalogue, and the
+ * catalogue has kept dead ids, with full metadata, for weeks. Send every id you add
+ * or keep one real request, and read the reply — see the 3.5 Flash note below.
  */
 export interface ModelDef {
   /** Sent to Google verbatim. */
@@ -82,6 +87,10 @@ export interface ModelDef {
    * Google's declared default thinking budget. -1 means the model sizes its own
    * reasoning; in that case the bridge forwards -1 rather than pinning a number,
    * because an explicit budget would switch dynamic thinking off.
+   *
+   * Absent means Google declares none, and such a model (the Flash Lites) does not
+   * reason unless asked. The bridge then sends no thinkingConfig by default, and an
+   * effort level only turns reasoning on when it is above the protocol's default.
    */
   thinkingBudget?: number;
   /** Smallest budget the model accepts. Requests below this are raised to it. */
@@ -109,106 +118,21 @@ export const SUPPORTED_MODELS: ModelDef[] = [
     thinkingBudget: 1024,
   },
 
-  // Gemini Pro. Google serves the High tier as `gemini-pro-agent`. The old id
-  // `gemini-3.1-pro-high` is still listed in its catalogue, with metadata, but every
-  // request for it is refused with HTTP 400 "Request contains an invalid argument" on
-  // all six pooled accounts — only calling it shows that, which is why
-  // `bridge:models` cannot flag it. It is a retired alias of this id now.
-  {
-    id: "gemini-pro-agent",
-    name: "Gemini 3.1 Pro (High)",
-    family: "gemini",
-    contextLimit: 1048576,
-    outputLimit: 65536,
-    supportsThinking: true,
-    thinkingBudget: -1,
-    minThinkingBudget: 32,
-  },
-  {
-    id: "gemini-3.1-pro-low",
-    name: "Gemini 3.1 Pro (Low)",
-    family: "gemini",
-    contextLimit: 1048576,
-    outputLimit: 65536,
-    supportsThinking: true,
-    thinkingBudget: 1001,
-    minThinkingBudget: 32,
-  },
-  {
-    id: "gemini-2.5-pro",
-    name: "Gemini 2.5 Pro",
-    family: "gemini",
-    contextLimit: 1048576,
-    outputLimit: 65535,
-    supportsThinking: true,
-    thinkingBudget: 1024,
-    minThinkingBudget: 128,
-  },
-
-  // Gemini 3.6 Flash — the newest family. Google's own default agent model is
-  // gemini-3.6-flash-high.
-  {
-    id: "gemini-3.6-flash-high",
-    name: "Gemini 3.6 Flash (High)",
-    family: "gemini",
-    contextLimit: 1048576,
-    outputLimit: 65536,
-    supportsThinking: true,
-    thinkingBudget: -1,
-    minThinkingBudget: 32,
-  },
-  {
-    id: "gemini-3.6-flash-medium",
-    name: "Gemini 3.6 Flash (Medium)",
-    family: "gemini",
-    contextLimit: 1048576,
-    outputLimit: 65536,
-    supportsThinking: true,
-    thinkingBudget: 4000,
-    minThinkingBudget: 32,
-  },
-  {
-    id: "gemini-3.6-flash-low",
-    name: "Gemini 3.6 Flash (Low)",
-    family: "gemini",
-    contextLimit: 1048576,
-    outputLimit: 65536,
-    supportsThinking: true,
-    thinkingBudget: 1000,
-    minThinkingBudget: 32,
-  },
-
-  // Gemini 3.5 Flash
-  {
-    id: "gemini-3-flash-agent",
-    name: "Gemini 3.5 Flash (High)",
-    family: "gemini",
-    contextLimit: 1048576,
-    outputLimit: 65536,
-    supportsThinking: true,
-    thinkingBudget: -1,
-    minThinkingBudget: 32,
-  },
-  {
-    id: "gemini-3.5-flash-low",
-    name: "Gemini 3.5 Flash (Medium)",
-    family: "gemini",
-    contextLimit: 1048576,
-    outputLimit: 65536,
-    supportsThinking: true,
-    thinkingBudget: 4000,
-    minThinkingBudget: 32,
-  },
-  {
-    id: "gemini-3.5-flash-extra-low",
-    name: "Gemini 3.5 Flash (Low)",
-    family: "gemini",
-    contextLimit: 1048576,
-    outputLimit: 65536,
-    supportsThinking: true,
-    thinkingBudget: 1000,
-    minThinkingBudget: 32,
-  },
+  // No Gemini Pro model is served any more. `gemini-pro-agent` and `gemini-3.1-pro-low`
+  // went 404 "Requested entity was not found" on 2026-10-17 and left the catalogue.
+  // `gemini-2.5-pro` is still listed, but answers 503 "no capacity" on all six pooled
+  // accounts, as it already did when the previous table was written, so a client offered
+  // it gets a failure. Every pro
+  // id is a retired alias of gemini-3.8-flash-tiered now (see Transformer.RETIRED_IDS);
+  // put 2.5 Pro back here once a real request to it succeeds.
+  //
+  // The Gemini 3.6 Flash tiers (high/medium/low) went 404 the same day. The 3.5 Flash
+  // tiers (`gemini-3-flash-agent`, `gemini-3.5-flash-low`, `gemini-3.5-flash-extra-low`)
+  // are worse: still in the catalogue with full metadata, but every request gets HTTP 200
+  // carrying one canned sentence — "Gemini 3.5 Flash is no longer available. Please
+  // switch to Gemini 3.7 Flash..." — with no finishReason and no usage, which a client
+  // shows as the model's answer. Neither `bridge:models` nor a status code reveals that;
+  // only reading the reply does. Both families are retired aliases now.
 
   // Tiered flash models. These carry no displayName upstream because they are
   // not a fixed tier: Antigravity's own model picker maps its "flash" option to
@@ -238,7 +162,23 @@ export const SUPPORTED_MODELS: ModelDef[] = [
     outputLimit: 65536,
     supportsThinking: true,
     thinkingBudget: -1,
-    minThinkingBudget: 32,
+    minThinkingBudget: 128,
+  },
+
+  // Flash Lite. Both can reason but declare no default budget, and with no
+  // thinkingConfig they do not reason at all (measured: 0 thought tokens, against ~200
+  // when sent -1), so the bridge sends none unless the caller asks; see ModelDef.
+  // Google also lists gemini-2.5-flash, -2.5-flash-lite and -2.5-flash-thinking, all
+  // with the display name "Gemini 3.5 Flash Lite" — they are retired aliases of 3.5 Flash
+  // Lite here rather than three more names for it.
+  {
+    id: "gemini-3.5-flash-lite",
+    name: "Gemini 3.5 Flash Lite",
+    family: "gemini",
+    contextLimit: 1048576,
+    outputLimit: 65535,
+    supportsThinking: true,
+    minThinkingBudget: 128,
   },
   {
     id: "gemini-3.1-flash-lite",
@@ -246,7 +186,8 @@ export const SUPPORTED_MODELS: ModelDef[] = [
     family: "gemini",
     contextLimit: 1048576,
     outputLimit: 65535,
-    supportsThinking: false,
+    supportsThinking: true,
+    minThinkingBudget: 128,
   },
 
   // Other providers surfaced through Antigravity

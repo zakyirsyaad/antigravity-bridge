@@ -52,37 +52,52 @@ async function runTests() {
 
   console.log("[1/4] Exact ids pass through untouched ...");
   expect("tiered", resolve("gemini-3.8-flash-tiered"), "gemini-3.8-flash-tiered");
-  expect("pro high is Google's gemini-pro-agent", resolve("gemini-pro-agent"), "gemini-pro-agent");
-  expect("pro low", resolve("gemini-3.1-pro-low"), "gemini-3.1-pro-low");
+  expect("3.5 flash lite", resolve("gemini-3.5-flash-lite"), "gemini-3.5-flash-lite");
+  expect("3.1 flash lite", resolve("gemini-3.1-flash-lite"), "gemini-3.1-flash-lite");
   expect("claude opus", resolve("claude-opus-4-6-thinking"), "claude-opus-4-6-thinking");
-  expect("the display name still resolves", resolve("Gemini 3.1 Pro (High)"), "gemini-pro-agent");
+  expect("the display name still resolves", resolve("Gemini 3.5 Flash Lite"), "gemini-3.5-flash-lite");
 
   console.log("\n[2/4] Retired ids resolve to what their name claimed ...");
   expect("gemini-3.8-flash", resolve("gemini-3.8-flash"), "gemini-3.8-flash-tiered");
-  // Google still lists gemini-3.1-pro-high but answers 400 to every request for it, on
-  // every account; its current name is gemini-pro-agent. These used to resolve to the dead id.
-  expect("gemini-3-pro", resolve("gemini-3-pro"), "gemini-pro-agent");
-  expect("gemini-3.1-pro", resolve("gemini-3.1-pro"), "gemini-pro-agent");
-  expect("the dead gemini-3.1-pro-high", resolve("gemini-3.1-pro-high"), "gemini-pro-agent");
-  // Google answers 404 for these two tiered ids; the newest tiered model is the closest living one.
+  // No Gemini Pro is served: gemini-pro-agent and gemini-3.1-pro-low answer 404, gemini-3.1-pro-high
+  // 400, gemini-2.5-pro 503 "no capacity" on every account. A pro request gets the most capable
+  // Gemini that answers.
+  for (const pro of ["gemini-3-pro", "gemini-3.1-pro", "gemini-3.1-pro-high", "gemini-3.1-pro-low", "gemini-pro-agent", "gemini-2.5-pro"]) {
+    expect(pro, resolve(pro), "gemini-3.8-flash-tiered");
+  }
+  // Google answers 404 for these tiered ids; the newest tiered model is the closest living one.
   expect("gemini-3.7-flash-tiered", resolve("gemini-3.7-flash-tiered"), "gemini-3.8-flash-tiered");
   expect("gemini-3.6-flash-tiered", resolve("gemini-3.6-flash-tiered"), "gemini-3.8-flash-tiered");
   expect("gemini-3.7-flash", resolve("gemini-3.7-flash"), "gemini-3.8-flash-tiered");
   expect("gemini-3.7-flash-high", resolve("gemini-3.7-flash-high"), "gemini-3.8-flash-tiered");
-  expect("a nearest-match for a pro name lands on the living pro", resolve("some-pro-model"), "gemini-pro-agent");
-  const exposed = new Set(SUPPORTED_MODELS.map((m) => m.id));
-  for (const dead of ["gemini-3.1-pro-high", "gemini-3.7-flash-tiered", "gemini-3.6-flash-tiered"]) {
-    expect(`${dead} is no longer exposed`, exposed.has(dead), false);
+  // The fixed 3.6 tiers answer 404; the 3.5 tiers answer 200 with a canned "no longer
+  // available" sentence instead of a reply. reasoning_effort recovers the tier.
+  for (const fixed of ["gemini-3.6-flash-high", "gemini-3.6-flash-medium", "gemini-3.6-flash-low", "gemini-3-flash-agent", "gemini-3.5-flash-low", "gemini-3.5-flash-extra-low"]) {
+    expect(fixed, resolve(fixed), "gemini-3.8-flash-tiered");
   }
-  expect("gemini-pro-agent is exposed", exposed.has("gemini-pro-agent"), true);
-  expect("a model Google serves has not been dropped", exposed.has("gemini-3.8-flash-tiered") && exposed.has("gemini-3.1-pro-low"), true);
+  // Google lists all three under the display name "Gemini 3.5 Flash Lite".
+  for (const lite of ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.5-flash-thinking"]) {
+    expect(lite, resolve(lite), "gemini-3.5-flash-lite");
+  }
+  expect("a nearest-match for a pro name lands on the most capable living Gemini", resolve("some-pro-model"), "gemini-3.8-flash-tiered");
+  expect("a nearest-match for a lite name lands on the newest lite", resolve("gemini-9-flash-lite"), "gemini-3.5-flash-lite");
+  const exposed = new Set(SUPPORTED_MODELS.map((m) => m.id));
+  const retired = (Transformer as any).RETIRED_IDS as Record<string, string>;
+  for (const [dead, target] of Object.entries(retired)) {
+    expect(`${dead} is no longer exposed`, exposed.has(dead), false);
+    // An alias onto another alias, or onto nothing, would hand the client a dead model again.
+    expect(`${dead} points at an exposed model`, exposed.has(target), true);
+  }
+  expect("a model Google serves has not been dropped", exposed.has("gemini-3.8-flash-tiered") && exposed.has("gemini-3-flash"), true);
 
   console.log("\n[3/4] Near-misses still resolve, rather than failing a real client ...");
   // Claude Code sends Anthropic's own ids; refusing them would break the
   // primary use case, so these are approximated — but no longer silently.
   expect("anthropic sonnet id", resolve("claude-sonnet-4-5-20250929"), "claude-sonnet-4-6");
-  // The shape that used to change generation without a word.
-  expect("model+reasoning suffix", resolve("gemini-3.8-flash-tiered-high"), "gemini-3.6-flash-high");
+  // The shape that used to change generation without a word. The flash guess is the
+  // newest flash now, so it lands where the caller meant, but it still warns.
+  expect("model+reasoning suffix", resolve("gemini-3.8-flash-tiered-high"), "gemini-3.8-flash-tiered");
+  expect("every guess is a model that is exposed", ["claude-opus-x", "claude-sonnet-x", "x-pro", "x-lite", "gemini-x"].every((id) => exposed.has(resolve(id))), true);
 
   console.log("\n[3b/4] A routing prefix is not part of the model name ...");
   // OpenCode / OpenRouter-style clients write `provider/model`. The tail is an exact
