@@ -7,7 +7,7 @@
 **Zero-downtime, auto-failover quota pool and dual-protocol gateway (Anthropic & OpenAI) for Claude Code, Hermes Agent, Cursor, Continue, and Custom Agentic Loops.**
 
 [![License: ISC](https://img.shields.io/badge/License-ISC-blue.svg)](https://opensource.org/licenses/ISC)
-[![Node.js Version](https://img.shields.io/badge/node-%3E%3D18.0.0-brightgreen.svg)](https://nodejs.org/)
+[![Node.js Version](https://img.shields.io/badge/node-%3E%3D18.18-brightgreen.svg)](https://nodejs.org/)
 [![Protocol](https://img.shields.io/badge/protocol-Anthropic%20%7C%20OpenAI-purple.svg)](https://docs.anthropic.com/)
 [![UI](https://img.shields.io/badge/design%20system-Google%20Stitch-white.svg)](https://stitch.withgoogle.com/)
 
@@ -21,7 +21,7 @@
 
 **Antigravity Bridge** transforms multiple personal or team Google accounts into a single, high-availability, unified AI inference endpoint. 
 
-When developing with advanced coding agents like **Claude Code**, **Hermes**, or **Cursor**, hitting Google CloudCode's rate limits (`HTTP 429 RESOURCE_EXHAUSTED` / *"Individual quota reached"*) halts your momentum. Antigravity Bridge solves this by pooling multiple Google accounts and providing **automatic, transparent failover**. If your active account hits a rate limit, the bridge instantly routes the request to the next available account in the pool without dropping your session, tool call, or stream.
+When developing with advanced coding agents like **Claude Code**, **Hermes**, or **Cursor**, hitting Google CloudCode's rate limits (`HTTP 429 RESOURCE_EXHAUSTED` / *"Individual quota reached"*) halts your momentum. Antigravity Bridge solves this by pooling multiple Google accounts and providing **automatic, transparent failover**. If your active account hits a rate limit, or Google has no capacity for the model on it, the bridge routes the request to the next available account in the pool before anything is streamed back, so your session and tool loop carry on.
 
 ```mermaid
 flowchart TD
@@ -34,7 +34,7 @@ flowchart TD
 
     subgraph Bridge ["Antigravity Bridge Engine (Port 52130)"]
         GW["Dual Protocol Ingestion\n• Anthropic Adapter\n• OpenAI Adapter"]
-        ROUTER["Pool Router & Cooldown Engine\n• Proactive 429 Filter\n• Transparent Failover\n• In-Memory Quota Cache"]
+        ROUTER["Pool Router & Cooldown Engine\n• Proactive 429 Filter\n• Failover on 429 / 503 / stall\n• In-Memory Quota Cache"]
         DASH["Stitch Web Dashboard\n(OLED Zinc UI)"]
     end
 
@@ -46,14 +46,14 @@ flowchart TD
     end
 
     subgraph Google ["Google CloudCode Upstream"]
-        GAPI["Google CloudCode API\n(Gemini 3.1 Pro / Flash / Claude Opus Thinking)"]
+        GAPI["Google CloudCode API\n(Gemini Flash / Claude Opus & Sonnet / GPT-OSS)"]
     end
 
     C1 & C2 & C3 & C4 --> GW
     GW --> ROUTER
     DASH -.-> ROUTER
     ROUTER -->|Active Route| A1
-    ROUTER -.->|Failover on 429| A2
+    ROUTER -.->|Failover on 429 / 503 / stall| A2
     A1 & A2 & AN --> GAPI
 ```
 
@@ -62,7 +62,7 @@ flowchart TD
 ## ✨ Features
 
 - 🔄 **Unified Multi-Account Quota Pool**: Combine 2, 6, or 20+ Google accounts into a single virtual pool.
-- ⚡ **Transparent 429 Auto-Failover**: When an account reaches its quota limit, requests and streaming chunks automatically roll over to the next available account. Zero dropped prompts or interrupted tasks.
+- ⚡ **Transparent Auto-Failover**: When an account reaches its quota limit (HTTP 429), the request is retried on the next available account and the exhausted one cools down until Google's reset time. A 503 "no capacity" rotates too, without a cooldown, since capacity is per project and not a quota signal. Failover happens before the response starts streaming; a failure after the first chunk reaches the client as an error event.
 - ⏱ **Stall Rotation**: Google occasionally accepts a request and then never answers, in bursts of several minutes on one account. After `BRIDGE_UPSTREAM_TIMEOUT_MS` (60 s) the bridge moves on to another account instead of waiting inside the burst, and rests the stalled one for `BRIDGE_STALL_REST_SECONDS` (300 s). It is not a quota cooldown, so nothing is written to the quota file.
 - 🌐 **Patient Connections**: each of Google's addresses gets `BRIDGE_CONNECT_ATTEMPT_TIMEOUT_MS` (2 s) to connect instead of Node's 250 ms, and a connection that fails quickly is retried after 2 s and then 5 s, so a few seconds of network trouble on the host no longer fail the request.
 - ⏱️ **Dual Rolling Quota Telemetry**: Live extraction and monitoring of Google's internal **5-Hour Rolling Limit %** and **Weekly Cycle Cap %** per account.
@@ -200,7 +200,9 @@ list and the reasoning.
 ## 🚀 Quick Start
 
 ### 1. Prerequisites
-- **Node.js**: v18.0.0 or later (v20+ recommended)
+- **Node.js**: v18.18 or later (v20+ recommended). `start` sets Node's per-address connect timeout
+  (`net.setDefaultAutoSelectFamilyAttemptTimeout`), which older 18.x releases do not have, so the
+  bridge will not boot on them.
 - **Package Manager**: `npm`, `pnpm`, or `bun`
 - A Google account with access to Google Antigravity / CloudCode
 
@@ -243,7 +245,9 @@ npm run bridge:login
 npm run bridge:start
 ```
 
-The server will start on **`http://127.0.0.1:52130`**:
+The server listens on port **52130** (`PORT` changes it) on **every interface** (`0.0.0.0`), so other
+machines on your network can reach it too. Set `BRIDGE_HOST=127.0.0.1` to keep it local, and read
+[Security & Privacy](#-security--privacy) before exposing it. From this machine:
 - 🌐 **Web Dashboard**: `http://127.0.0.1:52130/`
 - 📨 **Anthropic API**: `http://127.0.0.1:52130/v1/messages`
 - 🤖 **OpenAI API**: `http://127.0.0.1:52130/v1/chat/completions`
@@ -294,6 +298,16 @@ Read [CHANGELOG.md](CHANGELOG.md) before a major version jump.
 ---
 
 ## 🤖 Client Integration Guides
+
+The examples below talk to a bridge on the same machine, which needs no key. For a bridge on another
+host, such as a VPS behind a reverse proxy, change two things in every example:
+
+- the base URL: `http://127.0.0.1:52130` becomes your bridge's address, e.g. `https://bridge.example.com`
+  (keep the `/v1` suffix where an example has one);
+- the key: `antigravity-local` becomes that bridge's `BRIDGE_API_KEY`. Without it every request is
+  answered `401`.
+
+The dashboard's setup guide fills in both for the host you open it on.
 
 ### 1. Claude Code & Free Claude Code (FCC)
 
@@ -454,6 +468,28 @@ Open **`http://127.0.0.1:52130`** in your browser to access the management inter
 | :--- | :--- | :--- |
 | `POST` | `/v1/messages` | Anthropic Claude Code, Free Claude Code, Anthropic Python/Node SDK |
 | `POST` | `/v1/chat/completions` | Hermes Agent, Cursor, Continue.dev, OpenAI Python/Node SDK |
+| `GET` | `/v1/models` (also `/models`) | Any OpenAI-compatible client. Lists the exposed models, each with `context_length`, which clients use to size their prompts |
+
+### Error responses
+
+Errors carry `error.type` and `error.message`. A `400` or `503` from Google's side also carries the
+top-level `type: "error"` that the Anthropic SDKs expect. The message says which of these happened:
+
+| Status | `error.type` | What happened | What to do |
+| :--- | :--- | :--- | :--- |
+| `400` | `invalid_request_error` | Google rejected the request itself (a tool schema or parameter it cannot take), or the model id matches nothing. Google's own message is kept | Fix the request; retrying will not help |
+| `401` | `unauthorized` | A non-loopback caller sent no key or the wrong one, or the bridge has no `BRIDGE_API_KEY` set at all | Send the key, or set one on the bridge |
+| `403` | `forbidden` | A web page on another origin called the management API | Use the dashboard on the bridge's own host |
+| `503` | `overloaded_error` | Google has no capacity for the model on every account tried. Not quota: nothing cools down | Retry shortly, or use another model |
+| `503` | `api_error` | Google answered some other 503 (an outage) on every account tried | Retry shortly |
+| `500` | `server_error` / `api_error` | Every account is cooling down after a 429 (*"All accounts in the pool are currently rate limited"*), Google stopped answering (*"Google stopped answering requests for model …"*), or anything else | Read the message: only the first one is quota |
+
+Two exceptions, both from how streaming works:
+
+- On `/v1/chat/completions` with `stream: true`, only a `400` or `503` is sent as a real status. Every
+  other failure before the first chunk comes back as HTTP `200` with a `data: {"error": …}` event, so a
+  `200` on that route does not by itself mean success.
+- Once a stream has started, a failure on either route can only be an in-band error event.
 
 ---
 
@@ -462,21 +498,30 @@ Open **`http://127.0.0.1:52130`** in your browser to access the management inter
 Antigravity Bridge provides a set of CLI shortcuts:
 
 ```bash
+# Server
+npm run bridge:start             # Start the bridge in the foreground
+npm run bridge:update            # Fast-forward to the latest release and install dependencies (see Updating)
+
 # Account & Pool Management
 npm run bridge:accounts          # List all saved Google accounts and active status
 npm run bridge:switch <id/email> # Switch the active account by index or email address
 npm run bridge:login             # Launch interactive browser login for a new account
-npm run bridge:status            # Check token validity and connection status
+npm run bridge:status            # Check token validity and connection status, and whether a newer release exists
 npm run bridge:usage             # View request count, token usage, and reasoning tokens consumed
 npm run bridge:models            # Check the model table against what Google actually serves
+npm run bridge:sync              # Rewrite ZCode's provider config from the model table (also runs on start and login)
 
 # macOS Background Service (LaunchAgent)
 npm run bridge:service:install   # Install & start background launchd daemon (auto-start on boot)
 npm run bridge:service:uninstall # Stop & remove the background launchd service
 
-# Verification Suite
-npm run test:bridge              # Run full end-to-end multi-protocol test suite
+# Verification
+npm run test:<name>              # Offline suites (stream, security, models, capacity, stall, ...): no account, network or quota
+npm test                         # Live end-to-end suite: sends real requests to Google, needs a logged-in account and uses quota
 ```
+
+The offline suites are listed in `package.json`. `npm test` (also `npm run test:bridge`) is the only
+one that talks to Google; run it when you need proof that the models it uses are actually served.
 
 ---
 
@@ -500,6 +545,29 @@ launchctl kickstart -k gui/$(id -u)/com.antigravity.zcode-bridge
 # View live logs
 tail -f ~/.zcode/logs/antigravity-bridge.log
 ```
+
+---
+
+## 🧩 Configuration
+
+Every setting is an environment variable read when the bridge starts. Nothing needs setting for a
+local install.
+
+| Variable | Default | Effect |
+| :--- | :--- | :--- |
+| `PORT` | `52130` | Port the server listens on |
+| `BRIDGE_HOST` | `0.0.0.0` | Interface to bind. `127.0.0.1` keeps the bridge on this machine |
+| `BRIDGE_API_KEY` | *(none)* | Shared secret that non-loopback callers must send. Without it they are refused |
+| `BRIDGE_TRUST_LOCAL` | trusted | `0` requires the key from loopback callers too |
+| `BRIDGE_UPSTREAM_TIMEOUT_MS` | `60000` | How long to wait for Google's first response before treating it as a stall |
+| `BRIDGE_STALL_REST_SECONDS` | `300` | How long a stalled account is skipped (in memory only, not a quota cooldown) |
+| `BRIDGE_CONNECT_ATTEMPT_TIMEOUT_MS` | `2000` | Time each of Google's addresses gets to connect |
+| `BRIDGE_ANSWER_RESERVE_TOKENS` | `8192` | Output tokens held back from thinking for the visible answer |
+| `BRIDGE_TOOL_MIN_OUTPUT_TOKENS` | off | Raises a smaller output cap on requests that carry tools (see [Controlling reasoning](#controlling-reasoning)) |
+| `ANTIGRAVITY_CLIENT_ID` / `ANTIGRAVITY_CLIENT_SECRET` | Antigravity desktop app's | OAuth client used for login and token refresh |
+
+Under pm2, set these when the process is first started (or with `pm2 restart --update-env` from a
+shell that has *all* of them, then `pm2 save`). A plain `pm2 restart` keeps the environment it has.
 
 ---
 
