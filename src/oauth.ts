@@ -24,7 +24,7 @@ export interface PoolEvent {
   message: string;
   fromAccount?: string;
   toAccount?: string;
-  reason?: string;
+  reason?: FailoverReason;
 }
 
 /**
@@ -409,7 +409,7 @@ export class OAuthManager {
         } catch {}
         memoryToken = candidate;
 
-        const why = reason ? `: ${FAILOVER_REASON_TEXT[reason]}${model ? ` (${model})` : ""}` : "";
+        const why = reason ? `: ${FAILOVER_REASON_TEXT[reason]}${model ? ` · ${model}` : ""}` : "";
         this.recordPoolEvent({
           type: "failover",
           message: `Auto-failover switched from ${excludeEmail || "previous"} to ${candidate.email}${why}`,

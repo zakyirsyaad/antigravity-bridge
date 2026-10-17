@@ -1420,6 +1420,32 @@ print(response.choices[0].message.content)</pre>
       return r && new Date(r.resetsAt).getTime() > Date.now() ? r : null;
     }
 
+    /** Whether failover can still pick this account for a family: not cooling, not resting. */
+    function readyFor(acc, key) {
+      return !familyCooldown(acc, key) && !restingWindow(acc);
+    }
+
+    /**
+     * The card's status chip. A quota cooldown on every family outranks a rest (it
+     * lasts longer); a rest outranks plain ready; the active account keeps saying it
+     * is active even while it rests, since it may be the only one left serving.
+     */
+    function statusChip(acc, coolingCount, familyCount, resting) {
+      const restTitle = ' title="Google stopped answering on this account. ' +
+        'The bridge skips it, in memory, until the timer ends. Not a quota cooldown."';
+      if (resting && coolingCount < familyCount) {
+        return acc.isActive
+          ? '<span class="status-chip chip-resting"' + restTitle + '>● Active · Resting</span>'
+          : '<span class="status-chip chip-resting"' + restTitle + '>◌ Resting</span>';
+      }
+      if (acc.isActive) return '<span class="status-chip chip-active">● Active</span>';
+      if (coolingCount === familyCount) return '<span class="status-chip chip-cooling">⏳ Cooling</span>';
+      if (coolingCount > 0) {
+        return '<span class="status-chip chip-cooling">◐ ' + coolingCount + ' of ' + familyCount + ' cooling</span>';
+      }
+      return '<span class="status-chip chip-ready">Ready</span>';
+    }
+
     function renderStitchDashboard(data) {
       document.getElementById("kpiTotalAccounts").textContent = data.totalAccounts;
       document.getElementById("kpiPoolMultiplier").textContent = data.totalAccounts + "x Combined Pool";
@@ -1453,7 +1479,7 @@ print(response.choices[0].message.content)</pre>
       // What the operator actually asks: can anything still serve this family?
       const total = data.totalAccounts || data.accounts.length;
       ["gemini", "claude"].forEach(function(key) {
-        const ready = data.accounts.filter(function(a) { return !familyCooldown(a, key) && !restingWindow(a); }).length;
+        const ready = data.accounts.filter(function(a) { return readyFor(a, key); }).length;
         const el = document.getElementById(key === "gemini" ? "kpiGeminiReady" : "kpiClaudeReady");
         if (!el) return;
         el.textContent = ready + " / " + total;
@@ -1492,19 +1518,7 @@ print(response.choices[0].message.content)</pre>
         // down is a fact to state, not an alarm to raise.
         if (coolingCount === families.length) card.classList.add("cooling-account");
 
-        let chipHtml = "";
-        if (resting && coolingCount < families.length) {
-          chipHtml = '<span class="status-chip chip-resting" title="Google stopped answering on this account. ' +
-            'The bridge skips it, in memory, until the timer ends. Not a quota cooldown.">◌ Resting</span>';
-        } else if (acc.isActive) {
-          chipHtml = '<span class="status-chip chip-active">● Active</span>';
-        } else if (coolingCount === families.length) {
-          chipHtml = '<span class="status-chip chip-cooling">⏳ Cooling</span>';
-        } else if (coolingCount > 0) {
-          chipHtml = '<span class="status-chip chip-cooling">◐ ' + coolingCount + ' of ' + families.length + ' cooling</span>';
-        } else {
-          chipHtml = '<span class="status-chip chip-ready">Ready</span>';
-        }
+        const chipHtml = statusChip(acc, coolingCount, families.length, resting);
 
         const familyHtml = '<div class="family-box">' +
           families.map(function(f) {
@@ -1522,7 +1536,8 @@ print(response.choices[0].message.content)</pre>
               '</span>';
             } else if (resting) {
               state = '<span class="family-state is-resting">Resting · ' +
-                '<span class="cooldown-clock" data-reset="' + resting.resetsAt + '">' +
+                // A rest that runs out is over, not "ready to reset": the next poll redraws it.
+                '<span class="cooldown-clock" data-reset="' + resting.resetsAt + '" data-done="ending">' +
                   formatRestRemaining(resting.remainingMs) +
                 '</span>' +
               '</span>';
@@ -1805,7 +1820,7 @@ print(response.choices[0].message.content)</pre>
         const target = new Date(el.getAttribute("data-reset")).getTime();
         const diff = target - Date.now();
         if (diff <= 0) {
-          el.textContent = "ready to reset";
+          el.textContent = el.getAttribute("data-done") || "ready to reset";
         } else {
           const h = Math.floor(diff / 3600000);
           const m = Math.floor((diff % 3600000) / 60000);

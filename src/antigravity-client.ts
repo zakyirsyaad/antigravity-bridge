@@ -150,7 +150,11 @@ export class AntigravityClient {
         (QuotaTracker.getInstance().isAccountRateLimited(account.email, payload.model) ||
           StallRegistry.isResting(account.email))
       ) {
-        const why = StallRegistry.isResting(account.email) ? "resting" : "cooling_down";
+        // A quota cooldown outlasts a stall rest, so it is the reason to report, as the
+        // dashboard does.
+        const why = QuotaTracker.getInstance().isAccountRateLimited(account.email, payload.model)
+          ? "cooling_down"
+          : "resting";
         const nextAcc = this.oauth.selectNextAvailableAccount(account.email, payload.model, why);
         if (nextAcc) {
           console.log(
@@ -299,7 +303,11 @@ export class AntigravityClient {
         (QuotaTracker.getInstance().isAccountRateLimited(account.email, payload.model) ||
           StallRegistry.isResting(account.email))
       ) {
-        const why = StallRegistry.isResting(account.email) ? "resting" : "cooling_down";
+        // A quota cooldown outlasts a stall rest, so it is the reason to report, as the
+        // dashboard does.
+        const why = QuotaTracker.getInstance().isAccountRateLimited(account.email, payload.model)
+          ? "cooling_down"
+          : "resting";
         const nextAcc = this.oauth.selectNextAvailableAccount(account.email, payload.model, why);
         if (nextAcc) {
           console.log(

@@ -145,7 +145,7 @@ async function runTests() {
     const evt = oauth.getPoolEvents()[0];
     expect(`${reason}: event type`, evt.type, "failover");
     expect(`${reason}: event reason`, evt.reason, reason);
-    expect(`${reason}: message says why`, evt.message.endsWith(`: ${text} (gemini-3-flash)`), true);
+    expect(`${reason}: message says why`, evt.message.endsWith(`: ${text} · gemini-3-flash`), true);
   }
   writeAccounts();
   oauth.selectNextAvailableAccount("a@example.com");
@@ -217,13 +217,58 @@ async function runTests() {
   limited.add("a@example.com");
   await streamAll(client, payload);
   expect("stream: active account cooling -> cooling_down", seen.join(","), "cooling_down");
+  // The streaming path has its own copies of every call site, so each reason is checked there too.
+  firstFails(() => fail(503, "The service is currently unavailable."));
+  await streamAll(client, payload);
+  expect("stream: other 503 -> unavailable", seen.join(","), "unavailable");
+  firstFails((init) => hang(init));
+  await streamAll(client, payload);
+  expect("stream: stall -> stall", seen.join(","), "stall");
+  firstFails(() => ok(streaming));
+  StallRegistry.rest("a@example.com", 300);
+  await streamAll(client, payload);
+  expect("stream: active account resting -> resting", seen.join(","), "resting");
+  // Cooling and resting at once: the cooldown outlasts the rest, so it is the reason,
+  // as the dashboard ranks it.
+  firstFails(() => ok(streaming));
+  limited.add("a@example.com");
+  StallRegistry.rest("a@example.com", 300);
+  await client.generateContent(payload as any);
+  expect("cooling and resting -> cooling_down", seen.join(","), "cooling_down");
+  firstFails(() => ok(streaming));
+  limited.add("a@example.com");
+  StallRegistry.rest("a@example.com", 300);
+  await streamAll(client, payload);
+  expect("stream: cooling and resting -> cooling_down", seen.join(","), "cooling_down");
   delete process.env.BRIDGE_UPSTREAM_TIMEOUT_MS;
 
   console.log("\n[6/6] The dashboard draws a rest, and its failover tooltip names every trigger ...");
   const html = realReadFileSync(path.join(__dirname, "..", "src", "dashboard.html"), "utf-8") as string;
-  expect("it reads the resting field", html.includes("acc.resting"), true);
-  expect("it has a resting chip", html.includes("chip-resting"), true);
-  expect("the ready KPI leaves resting accounts out", html.includes("!familyCooldown(a, key) && !restingWindow(a)"), true);
+  // The page's own functions, run as the browser would: behaviour, not source text.
+  const ui = pageFunctions(html, ["familyCooldown", "restingWindow", "readyFor", "statusChip"]);
+  const soon = new Date(Date.now() + 120_000).toISOString();
+  const gone = new Date(Date.now() - 1_000).toISOString();
+  const restingAcc = { isActive: false, quota: {}, resting: { remainingMs: 120_000, resetsAt: soon } };
+  const coolingAcc = { isActive: false, quota: { fiveHour: { resetsAt: soon } }, resting: null };
+  const readyAcc = { isActive: false, quota: {}, resting: null };
+  expect("a resting account is not ready for Gemini", ui.readyFor(restingAcc, "gemini"), false);
+  expect("nor for Claude", ui.readyFor(restingAcc, "claude"), false);
+  expect("a cooling account is not ready", ui.readyFor(coolingAcc, "gemini"), false);
+  expect("a plain account is ready", ui.readyFor(readyAcc, "gemini"), true);
+  expect(
+    "a rest that is over no longer counts",
+    ui.readyFor({ ...restingAcc, resting: { remainingMs: 0, resetsAt: gone } }, "gemini"),
+    true
+  );
+  const chip = (acc: any, cooling: number) => ui.statusChip(acc, cooling, 3, ui.restingWindow(acc)) as string;
+  expect("resting -> Resting chip", chip(restingAcc, 0).includes("◌ Resting"), true);
+  expect("the resting chip is not amber", chip(restingAcc, 0).includes("chip-cooling"), false);
+  expect("the active account resting says both", chip({ ...restingAcc, isActive: true }, 0).includes("● Active · Resting"), true);
+  expect("resting with one family cooling still reads Resting", chip(restingAcc, 1).includes("Resting"), true);
+  expect("resting and every family cooling reads Cooling", chip(restingAcc, 3).includes("⏳ Cooling"), true);
+  expect("the active account, not resting, reads Active", chip({ ...readyAcc, isActive: true }, 0).includes("● Active</span>"), true);
+  expect("a plain account reads Ready", chip(readyAcc, 0).includes(">Ready<"), true);
+  expect("an ended rest's clock does not say 'ready to reset'", html.includes('data-done="ending"'), true);
   expect("the tooltip no longer says only HTTP 429", html.includes('title="Toggle automatic failover on HTTP 429"'), false);
   expect("the tooltip names a stall", /title="Toggle automatic failover:[^"]*stall"/.test(html), true);
 
@@ -246,6 +291,23 @@ function hang(init: any): Promise<Response> {
       reject(Object.assign(new Error("This operation was aborted"), { name: "AbortError" }))
     );
   });
+}
+/**
+ * Lift named top-level `function` declarations out of the dashboard's inline script
+ * and evaluate them together, so their behaviour can be checked without a browser.
+ */
+function pageFunctions(html: string, names: string[]): Record<string, (...args: any[]) => any> {
+  const sources = names.map((name) => {
+    const start = html.indexOf(`function ${name}(`);
+    if (start < 0) throw new Error(`dashboard.html has no function ${name}()`);
+    let depth = 0;
+    for (let i = html.indexOf("{", start); i < html.length; i++) {
+      if (html[i] === "{") depth++;
+      if (html[i] === "}" && --depth === 0) return html.slice(start, i + 1);
+    }
+    throw new Error(`could not read function ${name}()`);
+  });
+  return new Function(`${sources.join("\n")}\nreturn { ${names.join(", ")} };`)();
 }
 async function streamAll(client: AntigravityClient, payload: any): Promise<void> {
   const stream: any = await client.streamGenerateContent(payload);

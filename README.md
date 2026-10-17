@@ -457,12 +457,19 @@ Open **`http://127.0.0.1:52130`** in your browser to access the management inter
 | Method | Endpoint | Description |
 | :--- | :--- | :--- |
 | `GET` | `/health` | Service status, current active account, and supported models list |
-| `GET` | `/api/pool` | Complete pool state, all accounts with live quota telemetry, and recent events |
+| `GET` | `/api/pool` | Complete pool state, all accounts with live quota telemetry, and recent events (see below) |
 | `POST` | `/api/pool/switch` | Switch active account (`{"email": "user@gmail.com"}`) |
 | `POST` | `/api/pool/toggle` | Toggle auto-failover engine ON/OFF |
 | `POST` | `/api/pool/clear-cooldown` | Manually clear cooldown on an account (`{"email": "user@gmail.com"}`) |
 | `POST` | `/api/pool/delete` | Remove an account from the pool (`{"email": "user@gmail.com"}`) |
 | `GET` | `/api/pool/auth-url` | Generate Google OAuth PKCE authorization URL for browser login |
+
+Each account in `/api/pool` has a `status`:
+- `active` or `ready`: failover can pick it.
+- `cooling_down`: a 429 quota cooldown, with `cooldown.resetsAt`.
+- `resting`: Google stopped answering on it, so failover skips it until `resting.resetsAt`. This is held in memory and is not quota.
+
+A quota cooldown wins when an account has both. The pool also reports `readyCount`, `coolingDownCount` and `restingCount`. Each `failover` event carries a `reason`: `quota`, `no_capacity`, `unavailable`, `stall`, `cooling_down` or `resting`.
 
 ### Inference Endpoints
 
