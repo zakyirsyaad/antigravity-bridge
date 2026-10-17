@@ -16,8 +16,8 @@
  * Google's own message. For the OpenAI stream that means obtaining the upstream
  * stream before committing to `200`, as the Anthropic handler already did.
  *
- * A Google 503 (no capacity) is likewise HTTP 503 `overloaded_error` on the three
- * paths that answer a real status; the OpenAI stream still reports it in-band.
+ * A Google 503 (no capacity, or unavailable) is likewise HTTP 503
+ * `overloaded_error` on all four paths, the OpenAI stream included.
  * Every other failure keeps exactly the behaviour it had, and a failure after
  * streaming has begun cannot become a status code at all.
  *
@@ -228,9 +228,9 @@ async function runTests() {
     expect("Anthropic clients get the Anthropic envelope", replies["Anthropic stream"].json?.type, "error");
 
     console.log("\n[4/6] Google-side capacity is a 503; every other failure keeps the behaviour it had ...");
-    // A 503 used to be a 500 like everything else. It is Google's capacity — not the
-    // caller's mistake, not ours, not quota — so the paths that answer a real status
-    // say 503 `overloaded_error`. The OpenAI stream still reports it in-band.
+    // A 503 used to be a 500 like everything else (and a 200 on the OpenAI stream). It
+    // is Google-side — not the caller's mistake, not ours, not quota — so every path
+    // says 503 `overloaded_error` before streaming begins.
     failure = upstream(503, "No capacity available for model X on the server");
     const openaiPlain503 = await post(OPENAI, false);
     expect("503, OpenAI non-stream: 503", openaiPlain503.status, 503);
@@ -243,10 +243,9 @@ async function runTests() {
     expect("503, Anthropic stream: Anthropic envelope", anthropic503.json?.type, "error");
 
     const openai503 = await post(OPENAI, true);
-    expect("503, OpenAI stream: still commits to 200", openai503.status, 200);
-    expect("503, OpenAI stream: still an event stream", openai503.contentType.includes("text/event-stream"), true);
-    expect("503, OpenAI stream: error is in-band", openai503.text.includes('"error"'), true);
-    expect("503, OpenAI stream: still terminates", openai503.text.trim().endsWith("data: [DONE]"), true);
+    expect("503, OpenAI stream (FCC): 503", openai503.status, 503);
+    expect("503, OpenAI stream (FCC): overloaded_error", openai503.json?.error?.type, "overloaded_error");
+    expect("503, OpenAI stream (FCC): JSON, not an event stream", openai503.contentType.includes("application/json"), true);
 
     failure = upstream(401, "credentials rejected");
     expect("401 is our credentials, not the caller's mistake: still 500", (await post(OPENAI, false)).status, 500);

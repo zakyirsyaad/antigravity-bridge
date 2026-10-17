@@ -9,6 +9,12 @@ import { QuotaTracker } from "./quota-tracker";
 import { MAX_STALL_ROTATIONS, StallRegistry, UpstreamStall, stallRestSeconds, upstreamTimeoutMs } from "./upstream-stall";
 import { describeContentsShape } from "./stream-diagnostics";
 import { networkRetryDelayMs } from "./network";
+import { UpstreamError } from "./upstream-error";
+// Its home is upstream-error.ts; callers and tests have always imported it from here.
+export { UpstreamError };
+import { PoolFailures } from "./pool-failures";
+
+const POOL_RATE_LIMITED = "All accounts in the pool are currently rate limited. Please wait for cooldown to reset.";
 
 export interface AntigravityPayload {
   project?: string;
@@ -25,53 +31,6 @@ export interface AntigravityPayload {
 
 async function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-/**
- * An HTTP error answered by Google, with the status kept as data.
- *
- * It used to exist only inside the message ("... (400): ..."), so deciding what
- * to do about a failure meant searching a string for a number. The message text
- * is unchanged, so the checks that still do that keep working.
- */
-export class UpstreamError extends Error {
-  public readonly status: number;
-
-  constructor(status: number, message: string) {
-    super(message);
-    this.name = "UpstreamError";
-    this.status = status;
-  }
-}
-
-/**
- * The pool ran out on Google-side capacity, not on quota: the last account tried
- * answered 503 "No capacity available for model X on the server".
- *
- * It used to end as "All accounts in the pool are currently rate limited. Please
- * wait for cooldown to reset." — which sent people to the quota file and the
- * dashboard's cooldowns, when a 503 deliberately records no cooldown and there is
- * nothing to wait out. A 503 status, so the server can answer one.
- */
-export function capacityExhaustedError(
-  model: string,
-  capacityHits: number,
-  accountsTried: number,
-  googleMessage: string
-): UpstreamError {
-  const tried =
-    capacityHits >= accountsTried
-      ? accountsTried === 1
-        ? "the account tried"
-        : `all ${accountsTried} accounts tried`
-      : `${capacityHits} of ${accountsTried} accounts tried`;
-  return new UpstreamError(
-    503,
-    `Google has no capacity for model ${model} right now: ${tried} answered HTTP 503 "no capacity". ` +
-      `This is Google-side capacity, not quota — no account was put on cooldown, and there is no ` +
-      `cooldown to wait out. Retry shortly, or use another model.` +
-      (googleMessage ? ` (Google: ${googleMessage})` : "")
-  );
 }
 
 export class AntigravityClient {
@@ -169,10 +128,8 @@ export class AntigravityClient {
     const totalAccounts = Math.max(1, this.oauth.listAccounts().accounts.length);
     let attempts = 0;
     let stallRotations = 0;
-    // What the last account's failure was, so the pool running out can say so.
-    let capacityHits = 0;
-    let lastFailureWasCapacity = false;
-    let capacityMessage = "";
+    // Why each account failed, so the pool running out can say which it was.
+    const failures = new PoolFailures();
 
     while (attempts < totalAccounts) {
       attempts++;
@@ -205,7 +162,8 @@ export class AntigravityClient {
 
       let lastError: any = null;
       let hit429 = false;
-      let hitCapacity = false;
+      let hit503 = false;
+      let message503 = "";
       let stalled = false;
       // Whether this pool has anywhere to go if Google stops answering. When it
       // does, the first timeout gives up; when it does not, retrying in place is
@@ -245,8 +203,8 @@ export class AntigravityClient {
               // so another account is a genuine second chance. Deliberately no
               // record429(): parking a healthy account for hours over a transient
               // server condition is worse than the failure it replaces.
-              hitCapacity = true;
-              capacityMessage = message;
+              hit503 = true;
+              message503 = message;
             }
 
             lastError = new UpstreamError(res.status, `Antigravity ${endpoint} (${res.status}): ${message}`);
@@ -272,14 +230,13 @@ export class AntigravityClient {
             hit429 = true;
           }
           if (e.message?.includes("(503)")) {
-            hitCapacity = true;
+            hit503 = true;
           }
           continue;
         }
       }
 
-      lastFailureWasCapacity = hitCapacity && !hit429;
-      if (lastFailureWasCapacity) capacityHits++;
+      failures.record(currentAccount?.email, { hit429, hit503, message503, stalled });
 
       // Google stopped answering: leave this account for another one, a bounded
       // number of times, rather than spend the request waiting inside the burst.
@@ -291,7 +248,7 @@ export class AntigravityClient {
       }
 
       // If rate limited or starved of capacity, auto-failover to next available account
-      if ((hit429 || hitCapacity) && this.oauth.isAutoFailoverEnabled()) {
+      if ((hit429 || hit503) && this.oauth.isAutoFailoverEnabled()) {
         const nextAccount = this.oauth.selectNextAvailableAccount(currentAccount?.email, payload.model);
         if (nextAccount) {
           console.log(
@@ -303,16 +260,10 @@ export class AntigravityClient {
         }
       }
 
-      if (lastFailureWasCapacity) {
-        throw capacityExhaustedError(payload.model, capacityHits, attempts, capacityMessage);
-      }
-      throw lastError || new Error("All Antigravity endpoints failed.");
+      throw failures.exhaustedError(payload.model) ?? lastError ?? new Error("All Antigravity endpoints failed.");
     }
 
-    if (lastFailureWasCapacity) {
-      throw capacityExhaustedError(payload.model, capacityHits, attempts, capacityMessage);
-    }
-    throw new Error("All accounts in the pool are currently rate limited. Please wait for cooldown to reset.");
+    throw failures.exhaustedError(payload.model) ?? new Error(POOL_RATE_LIMITED);
   }
 
   /**
@@ -324,10 +275,8 @@ export class AntigravityClient {
     const totalAccounts = Math.max(1, this.oauth.listAccounts().accounts.length);
     let attempts = 0;
     let stallRotations = 0;
-    // What the last account's failure was, so the pool running out can say so.
-    let capacityHits = 0;
-    let lastFailureWasCapacity = false;
-    let capacityMessage = "";
+    // Why each account failed, so the pool running out can say which it was.
+    const failures = new PoolFailures();
 
     while (attempts < totalAccounts) {
       attempts++;
@@ -360,7 +309,8 @@ export class AntigravityClient {
 
       let lastError: any = null;
       let hit429 = false;
-      let hitCapacity = false;
+      let hit503 = false;
+      let message503 = "";
       let stalled = false;
       // Whether this pool has anywhere to go if Google stops answering. When it
       // does, the first timeout gives up; when it does not, retrying in place is
@@ -401,8 +351,8 @@ export class AntigravityClient {
               // so another account is a genuine second chance. Deliberately no
               // record429(): parking a healthy account for hours over a transient
               // server condition is worse than the failure it replaces.
-              hitCapacity = true;
-              capacityMessage = message;
+              hit503 = true;
+              message503 = message;
             }
 
             lastError = new UpstreamError(res.status, `Antigravity stream ${endpoint} (${res.status}): ${message}`);
@@ -431,14 +381,13 @@ export class AntigravityClient {
             hit429 = true;
           }
           if (e.message?.includes("(503)")) {
-            hitCapacity = true;
+            hit503 = true;
           }
           continue;
         }
       }
 
-      lastFailureWasCapacity = hitCapacity && !hit429;
-      if (lastFailureWasCapacity) capacityHits++;
+      failures.record(currentAccount?.email, { hit429, hit503, message503, stalled });
 
       if (stalled && poolRotates && stallRotations < MAX_STALL_ROTATIONS) {
         if (this.restAndRotate(currentAccount?.email, payload.model)) {
@@ -447,7 +396,7 @@ export class AntigravityClient {
         }
       }
 
-      if ((hit429 || hitCapacity) && this.oauth.isAutoFailoverEnabled()) {
+      if ((hit429 || hit503) && this.oauth.isAutoFailoverEnabled()) {
         const nextAccount = this.oauth.selectNextAvailableAccount(currentAccount?.email, payload.model);
         if (nextAccount) {
           console.log(
@@ -459,16 +408,10 @@ export class AntigravityClient {
         }
       }
 
-      if (lastFailureWasCapacity) {
-        throw capacityExhaustedError(payload.model, capacityHits, attempts, capacityMessage);
-      }
-      throw lastError || new Error("All Antigravity streaming endpoints failed.");
+      throw failures.exhaustedError(payload.model) ?? lastError ?? new Error("All Antigravity streaming endpoints failed.");
     }
 
-    if (lastFailureWasCapacity) {
-      throw capacityExhaustedError(payload.model, capacityHits, attempts, capacityMessage);
-    }
-    throw new Error("All accounts in the pool are currently rate limited. Please wait for cooldown to reset.");
+    throw failures.exhaustedError(payload.model) ?? new Error(POOL_RATE_LIMITED);
   }
 
   /**

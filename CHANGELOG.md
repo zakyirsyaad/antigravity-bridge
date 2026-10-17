@@ -12,14 +12,20 @@ and a 503 deliberately records no cooldown, so there was nothing to wait for —
 people to the quota file and the dashboard's meters looking for one.
 
 - When the last account tried answered 503, both `generateContent` and `streamGenerateContent` now
-  end with a 503 `UpstreamError` that names the model, says it is Google-side capacity and not
-  quota, counts the accounts that answered 503, and keeps Google's own message. This covers the pool
-  running out, a pool with no other free account, and failover switched off.
-- The bridge answers it as HTTP 503 `overloaded_error` instead of 500 on the OpenAI non-streaming
-  path and both Anthropic paths. The OpenAI stream still commits to `200` and reports it in-band, as
-  every non-400 failure there always has.
+  end with a 503 `UpstreamError` that names the model, says it is Google-side and not quota, counts
+  the accounts that answered 503, and keeps Google's own message. This covers the pool running out, a
+  pool with no other free account, and failover switched off.
+- Only a 503 whose message says "No capacity" is reported as capacity ("use another model"); any
+  other 503 reads "Google answered HTTP 503 (service unavailable)". Both still rotate the pool.
+- Accounts are counted once each, by email. A 503 writes no cooldown, so the pool can come back to
+  an account it already tried while skipping one that is cooling down; counting passes said
+  "all 3 accounts" when two had been tried.
+- The bridge answers it as HTTP 503 `overloaded_error` instead of 500 on all four paths, the OpenAI
+  stream (FCC) included, which used to commit to `200` and report it in-band. A failure after the
+  stream began is still in-band.
 - A run that ends on a 429 keeps the old wording, unchanged.
-- `test:capacity` covers all of this, offline; `test:upstream`'s 503 expectations moved from 500 to 503.
+- `test:capacity` covers all of this, offline; `test:upstream`'s 503 expectations moved from 500 (and
+  the OpenAI stream's from 200) to 503.
 
 ## 2.6.0
 

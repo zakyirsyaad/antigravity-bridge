@@ -33,10 +33,11 @@ function sendInvalidRequest(res: http.ServerResponse, route: string, err: Error)
 }
 
 /**
- * Google had no capacity for the model (HTTP 503) on the account or accounts the
- * pool tried. Not the caller's mistake and not ours, and not quota either, so it
- * is a 503 `overloaded_error` rather than the generic 500: a client that retries
- * on overload does the right thing, and the message says it is Google-side.
+ * Google answered 503 — no capacity for the model, or the service unavailable — on
+ * the account or accounts the pool tried. Not the caller's mistake and not ours,
+ * and not quota either, so it is a 503 `overloaded_error` rather than the generic
+ * 500 on all four paths before streaming begins: a client that retries on overload
+ * does the right thing, and the message says it is Google-side.
  */
 function isUpstreamCapacityError(err: unknown): err is UpstreamError {
   return err instanceof UpstreamError && err.status === 503;
@@ -777,6 +778,12 @@ export class BridgeServer {
       } catch (err: any) {
         if (isUpstreamClientError(err)) {
           sendInvalidRequest(res, "/v1/chat/completions", err);
+          return;
+        }
+        // Google-side capacity is a real 503 here too: FCC, which uses this route,
+        // otherwise saw a success carrying an error.
+        if (isUpstreamCapacityError(err)) {
+          sendCapacityUnavailable(res, "/v1/chat/completions", err);
           return;
         }
         // Any other failure keeps the behaviour it has always had: a 200 that
