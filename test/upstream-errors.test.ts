@@ -263,6 +263,27 @@ async function runTests() {
     expect("pool exhausted, OpenAI stream: still in-band", (await post(OPENAI, true)).status, 200);
     expect("pool exhausted, OpenAI non-stream: still 500", (await post(OPENAI, false)).status, 500);
 
+    // A pool that ran out because Google stopped answering is worded by PoolFailures
+    // too, but it is a 500 as a stall always was, not the 503 kept for capacity, and
+    // it carries no status of Google's, because Google answered nothing.
+    const rotated = new PoolFailures();
+    rotated.record("a@example.com", { hit429: false, hit503: false, message503: "", stalled: true });
+    expect("a rotated stall waited once", String(rotated.exhaustedError("m")?.message).includes("no response within 60s"), true);
+    const stalled = new PoolFailures();
+    stalled.record("a@example.com", { hit429: false, hit503: false, message503: "", stalled: true, stallAttempts: 3 });
+    failure = stalled.exhaustedError("gemini-3.8-flash-tiered");
+    expect("a stall retried in place says all three waits", String(failure?.message).includes("no response to 3 attempts of 60s each"), true);
+    expect("a stall is not an UpstreamError", failure instanceof UpstreamError, false);
+    for (const [label, path, stream] of paths) {
+      if (path === OPENAI && stream) continue;
+      const reply = await post(path, stream);
+      expect(`stall, ${label}: still 500`, reply.status, 500);
+      expect(`stall, ${label}: says Google stopped answering`, String(reply.json?.error?.message).includes("stopped answering"), true);
+    }
+    const stalledStream = await post(OPENAI, true);
+    expect("stall, OpenAI stream: still in-band", stalledStream.status, 200);
+    expect("stall, OpenAI stream: the event says Google stopped answering", stalledStream.text.includes("stopped answering"), true);
+
     console.log("\n[5/6] A failure after streaming has begun cannot become a status, and must not crash ...");
     failure = upstream(400, GOOGLE_400);
     failAfterFirstChunk = true;

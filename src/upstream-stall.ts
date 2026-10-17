@@ -28,14 +28,26 @@ export function stallRestSeconds(): number {
 /** Rotations one request may spend on stalls: three accounts tried, never the whole pool. */
 export const MAX_STALL_ROTATIONS = 2;
 
-/** Google did not answer within the timeout. Surfaces to the caller as a 500, as before. */
+/**
+ * Google did not answer within the timeout. Surfaces to the caller as a 500, as before.
+ *
+ * `timedOutAttempts` is how many attempts on this account waited out the full timeout:
+ * one when the pool rotates at the first, up to three when it retried in place.
+ */
 export class UpstreamStall extends Error {
   public readonly timeoutMs: number;
+  public readonly timedOutAttempts: number;
 
-  constructor(url: string, timeoutMs: number) {
-    super(`No response from Google within ${Math.round(timeoutMs / 1000)}s (${url})`);
+  constructor(url: string, timeoutMs: number, timedOutAttempts: number = 1) {
+    const seconds = Math.round(timeoutMs / 1000);
+    super(
+      timedOutAttempts > 1
+        ? `No response from Google to ${timedOutAttempts} attempts of ${seconds}s each (${url})`
+        : `No response from Google within ${seconds}s (${url})`
+    );
     this.name = "UpstreamStall";
     this.timeoutMs = timeoutMs;
+    this.timedOutAttempts = timedOutAttempts;
   }
 }
 

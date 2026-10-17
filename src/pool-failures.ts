@@ -1,4 +1,5 @@
 import { UpstreamError } from "./upstream-error";
+import { upstreamTimeoutMs } from "./upstream-stall";
 
 /**
  * How one pass over one account ended. Each kind the run can end on gets its own
@@ -18,6 +19,8 @@ export interface AttemptOutcome {
   /** Google's own message for the 503, when there was one. */
   message503: string;
   stalled: boolean;
+  /** For a stall, how many attempts waited out the full timeout (1 when unset). */
+  stallAttempts?: number;
 }
 
 const NO_CAPACITY = /no capacity/i;
@@ -34,6 +37,22 @@ export class PoolExhaustedError extends UpstreamError {
     super(status, message);
     this.name = "PoolExhaustedError";
     this.kind = kind;
+  }
+}
+
+/**
+ * The error a run ends with when Google stopped answering. Deliberately not an
+ * `UpstreamError`: that type means "Google answered with this status", and Google
+ * answered nothing. With no status the server answers its generic 500, as a stall
+ * always was, and code that reads Google's status cannot mistake it for a 500 from
+ * Google.
+ */
+export class PoolStalledError extends Error {
+  public readonly kind = "stall" as const;
+
+  constructor(message: string) {
+    super(message);
+    this.name = "PoolStalledError";
   }
 }
 
@@ -54,24 +73,28 @@ function classify(outcome: AttemptOutcome): FailureKind {
  * people to the quota file for a cooldown no 503 ever writes. The wording now
  * follows the failure that ended the run; a run that ends on a 429 keeps the old one.
  *
+ * A stall reached the same message: Google accepted the request and never answered,
+ * which writes no quota cooldown, and the pool rotated back to an account that had
+ * answered 503 and ran out of passes.
+ *
  * Accounts are counted by email, not by pass: a 503 writes no cooldown, so the
  * selector can come back to an account already tried while skipping a cooling one.
  */
 export class PoolFailures {
   private readonly tried = new Set<string>();
   private readonly byKind = new Map<FailureKind, Set<string>>();
-  private last: { kind: FailureKind; message503: string } | null = null;
+  private last: { kind: FailureKind; message503: string; stallAttempts: number } | null = null;
 
   record(email: string | undefined, outcome: AttemptOutcome): void {
     const account = email || "(active account)";
     const kind = classify(outcome);
     this.tried.add(account);
     this.byKind.set(kind, new Set(this.byKind.get(kind)).add(account));
-    this.last = { kind, message503: outcome.message503 };
+    this.last = { kind, message503: outcome.message503, stallAttempts: outcome.stallAttempts ?? 1 };
   }
 
   /** The error to end the run with, or null to keep the caller's own. */
-  exhaustedError(model: string): PoolExhaustedError | null {
+  exhaustedError(model: string): PoolExhaustedError | PoolStalledError | null {
     if (!this.last) return null;
     const google = this.last.message503 ? ` (Google: ${this.last.message503})` : "";
     switch (this.last.kind) {
@@ -91,6 +114,19 @@ export class PoolFailures {
             `answered it. This is on Google's side, not quota — no account was put on cooldown, and there ` +
             `is no cooldown to wait out. Retry shortly.${google}`
         );
+      case "stall": {
+        // Nothing is said about resting, because a pool that retried in place
+        // rested nothing. A pool that retried in place waited more than once, so
+        // the wait is said as it happened.
+        const seconds = Math.round(upstreamTimeoutMs() / 1000);
+        const attempts = this.last.stallAttempts;
+        const waited = attempts > 1 ? `to ${attempts} attempts of ${seconds}s each` : `within ${seconds}s`;
+        return new PoolStalledError(
+          `Google stopped answering requests for model ${model}: ${this.describe("stall")} gave no ` +
+            `response ${waited} (upstream stall / timeout). This is not quota — no account was put on ` +
+            `cooldown, and there is no cooldown to wait out. Retry in a few minutes.`
+        );
+      }
       default:
         return null;
     }
