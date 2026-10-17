@@ -85,28 +85,35 @@ figure below comes from Google's `fetchAvailableModels`; re-check it any time wi
 | :--- | :--- | :--- | :--- | :--- |
 | `claude-opus-4-6-thinking` | 1,024 | 250K | 64K | Complex refactors, deep reasoning |
 | `claude-sonnet-4-6` | 1,024 | 250K | 64K | High-speed agentic coding, daily pair-programming |
-| `gemini-pro-agent` | dynamic | 1M | 65K | Hardest reasoning — Google's High tier (it was `gemini-3.1-pro-high`, which Google no longer serves) |
-| `gemini-3.1-pro-low` | 1,001 | 1M | 65K | Pro-class answers when reasoning depth is not the bottleneck |
-| `gemini-2.5-pro` | 1,024 | 1M | 65K | Robust general development |
-| `gemini-3.8-flash-tiered` | dynamic | 1M | 65K | **Newest flash — pick low/medium/high per request** |
-| `gemini-3.6-flash-high` | dynamic | 1M | 65K | **Google's own default agent model** |
-| `gemini-3.6-flash-medium` | 4,000 | 1M | 65K | Fast multi-step work |
-| `gemini-3.6-flash-low` | 1,000 | 1M | 65K | High-speed tool loops |
-| `gemini-3-flash-agent` | dynamic | 1M | 65K | Gemini 3.5 Flash, high tier |
-| `gemini-3.5-flash-low` | 4,000 | 1M | 65K | Gemini 3.5 Flash, medium tier |
-| `gemini-3.5-flash-extra-low` | 1,000 | 1M | 65K | Gemini 3.5 Flash, low tier |
+| `gemini-3.8-flash-tiered` | dynamic | 1M | 65K | **Newest and most capable Gemini — pick low/medium/high per request** |
 | `gemini-3-flash` | dynamic | 1M | 65K | General fast generation |
-| `gemini-3.1-flash-lite` | — | 1M | 65K | Ultra-low latency, no reasoning |
+| `gemini-3.5-flash-lite` | off unless asked | 1M | 65K | Ultra-low latency |
+| `gemini-3.1-flash-lite` | off unless asked | 1M | 65K | Ultra-low latency, older generation |
 | `gpt-oss-120b-medium` | 8,192 | 131K | 32K | GPT-OSS 120B via Antigravity |
 
 **"dynamic"** means the model sizes its own reasoning. The bridge forwards that rather than pinning
 a number, since an explicit budget would switch it off.
 
+**"off unless asked"**: the Flash Lites can reason but declare no default budget, and without one they
+do not. The bridge sends them no thinking settings unless you ask for reasoning — an explicit budget,
+or an effort level above the protocol's default (`reasoning_effort: "high"`, or Anthropic's
+`xhigh` / `max`).
+
+**There is no Gemini Pro.** Google stopped serving `gemini-pro-agent` and `gemini-3.1-pro-low`
+(HTTP 404), and `gemini-2.5-pro` answers 503 "no capacity" on every account. Pro ids resolve to
+`gemini-3.8-flash-tiered`, with a warning in the bridge log.
+
 **Tiered vs. fixed tiers.** Antigravity's own model picker maps its "flash" option to
 `gemini-3.8-flash-tiered` and lets you slide reasoning from low to high — the tier is a *request
 parameter*, not part of the model name. Use `reasoning_effort` (or `thinking.budget_tokens`) to
-choose it. The `-high` / `-medium` / `-low` ids are the opposite arrangement: the tier is fixed by
-the name. Both are available; the tiered ids give you one model whose effort you vary per call.
+choose it. Google used to offer fixed-tier ids too (`gemini-3.6-flash-high`, `gemini-3.5-flash-low`,
+and so on), with the tier in the name. It no longer serves any of them, so those ids now resolve to
+the tiered model at the tier their name fixed: `-low` thinks 1,000 tokens, `-medium` 4,000, and `-high`
+stays dynamic, as before. `reasoning_effort` scales from there, and an explicit budget overrides it.
+A reasoning suffix on a model name works the same way, on any Gemini id: `gemini-3-flash-low` is
+`gemini-3-flash` at the low tier, and `gemini-3.8-flash-tiered-medium` is the tiered model at medium. The
+bridge warns that the id is not exact and keeps both the model and the tier. Claude and GPT-OSS ignore
+the suffix, because their reasoning budgets are fixed.
 
 ### Controlling reasoning
 
@@ -152,14 +159,21 @@ be, but prefer the real ids above.
 
 | Old id | Now resolves to |
 | :--- | :--- |
-| `gemini-3.1-pro`, `gemini-3-pro`, `gemini-3.1-pro-high` | `gemini-pro-agent` |
+| `gemini-3.1-pro`, `gemini-3-pro`, `gemini-3.1-pro-high`, `gemini-pro-agent`, `gemini-2.5-pro` | `gemini-3.8-flash-tiered` (no Pro is served) |
+| `gemini-3.1-pro-low` | `gemini-3.8-flash-tiered`, 1,000-token reasoning |
 | `gemini-3.8-flash`, `gemini-3.8-flash-high`, `gemini-3.7-flash`, `gemini-3.7-flash-high`, `gemini-3.7-flash-tiered`, `gemini-3.6-flash-tiered` | `gemini-3.8-flash-tiered` |
-| `gemini-2.5-flash` | `gemini-3.1-flash-lite` |
+| `gemini-3.6-flash-high`, `gemini-3-flash-agent` | `gemini-3.8-flash-tiered`, dynamic reasoning |
+| `gemini-3.6-flash-medium`, `gemini-3.5-flash-low` (Google's "Medium") | `gemini-3.8-flash-tiered`, 4,000-token reasoning |
+| `gemini-3.6-flash-low`, `gemini-3.5-flash-extra-low` (Google's "Low") | `gemini-3.8-flash-tiered`, 1,000-token reasoning |
+| `gemini-2.5-flash`, `gemini-2.5-flash-lite` | `gemini-3.5-flash-lite` |
+| `gemini-2.5-flash-thinking` | `gemini-3.5-flash-lite`, dynamic reasoning |
 
-Google still lists `gemini-3.1-pro-high` in its catalogue, but answers HTTP 400 to every request for it
-(verified on all six pooled accounts), and answers 404 for the 3.7 and 3.6 tiered ids; `npm run
-bridge:models` can only see the catalogue, so it cannot tell. The bridge therefore points those ids at
-the models that answer, and warns once when it does.
+Google's catalogue is not proof that a model is served: `npm run bridge:models` reads only the
+catalogue, so it cannot tell. It kept listing `gemini-3.1-pro-high` while answering HTTP 400 to every
+request for it. It still lists the three 3.5 Flash tiers, which answer HTTP 200 with a single canned
+sentence ("Gemini 3.5 Flash is no longer available...") in place of a reply. It also lists the 2.5
+Flash ids under the display name "Gemini 3.5 Flash Lite". The bridge points every one of these at a
+model that answers, and warns once when it does.
 
 ---
 
@@ -312,13 +326,13 @@ providers:
     api_key: "antigravity-local"
 ```
 
-Run Hermes with Gemini 3.6 Flash (High):
+Run Hermes with Gemini 3.8 Flash (Tiered):
 ```bash
 # One-shot command execution
-hermes --provider antigravity -m gemini-3.6-flash-high -z "Check workspace files and run unit tests"
+hermes --provider antigravity -m gemini-3.8-flash-tiered -z "Check workspace files and run unit tests"
 
 # Interactive TUI mode
-hermes --provider antigravity -m gemini-3.6-flash-high --tui
+hermes --provider antigravity -m gemini-3.8-flash-tiered --tui
 ```
 
 ---
@@ -328,16 +342,16 @@ hermes --provider antigravity -m gemini-3.6-flash-high --tui
 In **Cursor** (`Settings > Models > OpenAI`):
 1. **OpenAI API Key**: `antigravity-local`
 2. **Override OpenAI Base URL**: `http://127.0.0.1:52130/v1`
-3. Add model names: `gemini-3.6-flash-high`, `claude-opus-4-6-thinking`, `gemini-pro-agent`
+3. Add model names: `gemini-3.8-flash-tiered`, `claude-opus-4-6-thinking`, `gemini-3.5-flash-lite`
 
 In **Continue.dev** (`~/.continue/config.json`):
 ```json
 {
   "models": [
     {
-      "title": "Gemini 3.6 Flash High (Antigravity)",
+      "title": "Gemini 3.8 Flash Tiered (Antigravity)",
       "provider": "openai",
-      "model": "gemini-3.6-flash-high",
+      "model": "gemini-3.8-flash-tiered",
       "apiBase": "http://127.0.0.1:52130/v1",
       "apiKey": "antigravity-local"
     }
@@ -360,7 +374,7 @@ client = OpenAI(
 )
 
 response = client.chat.completions.create(
-    model="gemini-3.6-flash-high",
+    model="gemini-3.8-flash-tiered",
     messages=[
         {"role": "system", "content": "You are an expert autonomous assistant."},
         {"role": "user", "content": "What is the capital of Indonesia?"}
@@ -381,7 +395,7 @@ curl -s -X POST http://127.0.0.1:52130/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer antigravity-local" \
   -d '{
-    "model": "gemini-3.6-flash-high",
+    "model": "gemini-3.8-flash-tiered",
     "messages": [{"role": "user", "content": "Hello!"}]
   }'
 ```

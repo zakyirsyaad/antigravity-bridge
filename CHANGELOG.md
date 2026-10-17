@@ -1,5 +1,64 @@
 # Changelog
 
+## 2.6.0
+
+### Fixed: eight more model ids Google stopped serving, and no Pro left to offer
+
+On 2026-10-17 `bridge:models` reported five exposed ids gone from Google's catalogue. A real request to
+each confirmed it: `gemini-pro-agent`, `gemini-3.1-pro-low` and the three `gemini-3.6-flash-*` tiers
+answer HTTP 404 "Requested entity was not found". Three more ids were broken without the report
+noticing. The 3.5 Flash tiers (`gemini-3-flash-agent`, `gemini-3.5-flash-low`,
+`gemini-3.5-flash-extra-low`) are still in the catalogue with full metadata, and they answer **HTTP
+200**. The body is one canned sentence: "Gemini 3.5 Flash is no longer available. Please switch to
+Gemini 3.7 Flash in the latest version of Antigravity." There is no finishReason and no usage, and a
+client shows it as the model's answer. `gemini-2.5-pro` is listed but answers 503 "no capacity" on all
+six accounts.
+
+So no Gemini Pro is served. `/v1/models` now lists seven ids, and each one answered a real request,
+with the right content, on both protocols: `claude-opus-4-6-thinking`, `claude-sonnet-4-6`,
+`gemini-3.8-flash-tiered`, `gemini-3-flash`, `gemini-3.5-flash-lite` (new), `gemini-3.1-flash-lite`,
+`gpt-oss-120b-medium`.
+
+- Every removed id is a retired alias, so existing client configs keep working, and the bridge logs a
+  warning naming the model it used. All Pro ids, and the nearest-match guess for any "pro" name, go to
+  `gemini-3.8-flash-tiered`, the most capable Gemini that answers. So do the fixed 3.6 and 3.5 Flash
+  tiers, but each keeps the reasoning tier its name promised: `-low` / `-extra-low` get 1000,
+  `-medium` / `gemini-3.5-flash-low` get 4000, and `-high` / `gemini-3-flash-agent` stay dynamic. These
+  are the budgets the old models declared, so a tool loop configured with `gemini-3.6-flash-low` does not
+  start reasoning without bound. `gemini-3.1-pro-low` keeps the low tier too. Effort scales that tier as
+  it scaled the old declared budget: Claude Code's "high" keeps it, and an explicit budget still wins.
+  A reasoning suffix on a model name works the same way. It is read before any guess, so a suffix
+  never changes the model: `gemini-3-flash-low` is `gemini-3-flash` at low, and
+  `gemini-3.1-flash-lite-high` is the 3.1 lite at high, with or without a `provider/` prefix. The warning
+  names the tier. A suffix appended to a retired id outranks that id's own tier. Only a trailing `-low`
+  / `-medium` / `-high` / `-extra-low` counts, and only on a Gemini model; Claude and GPT-OSS ignore it,
+  since their budgets are fixed. These budgets are a constant of their own (`ALIAS_TIER_BUDGETS`), not
+  the effort scale's, so retuning effort cannot change what an old id means.
+  The nearest-match guess for "flash" used to be
+  `gemini-3.6-flash-high`, one of the dead ids; it is now `gemini-3.8-flash-tiered`. For "lite" it is
+  `gemini-3.5-flash-lite`.
+- `gemini-2.5-flash`, `-2.5-flash-lite` and `-2.5-flash-thinking` are in Google's catalogue under the
+  display name "Gemini 3.5 Flash Lite". They are aliases of `gemini-3.5-flash-lite` rather than three
+  more names for it. `gemini-2.5-flash-thinking` reasons (dynamic) by default, as its name promises;
+  the lite model itself does not.
+- Metadata now matches Google: `gemini-3-flash` has a thinking floor of 128, not 32, and
+  `gemini-3.1-flash-lite` can reason (floor 128).
+- A model that declares no thinking budget (both Flash Lites) gets **no** thinking settings by default.
+  With none, those models do not reason; sent `-1`, as the bridge would have sent, they spent about 200
+  thought tokens on a one-line question. An explicit budget is honoured. An effort level turns reasoning
+  on only when it is above the protocol's default (OpenAI `high`, Anthropic `xhigh` / `max`), so Claude
+  Code's "high" on every request changes nothing.
+- ZCode's generated config shows no reasoning picker for the Flash Lites. ZCode speaks the Anthropic
+  protocol, where its "low" and "high" both leave a lite with no reasoning, so the picker would have done
+  nothing. Every picker it still shows sends a different budget at each level, and `test:effort` checks
+  that.
+- `bridge:models` reports catalogue ids that are retired on purpose separately, each with its target,
+  instead of listing them as models to add. The dead 3.5 Flash tiers look healthy in the catalogue.
+- The live suite uses `gemini-3-flash` and `gemini-3.5-flash-lite` where it used two of the dead ids.
+
+**Deployments must be updated** (`npm run bridge:update`, or pull and restart): an older bridge still
+offers these ids, and they fail as before.
+
 ## 2.5.1
 
 ### Fixed: a few seconds of network trouble on the host no longer fail the request

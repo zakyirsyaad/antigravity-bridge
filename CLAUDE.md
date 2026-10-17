@@ -78,7 +78,7 @@ Everything else runs offline — no account, no network, no quota — by stubbin
 | `test:capacity` | a 503 rotates the pool without recording a cooldown; 400 still does not rotate |
 | `test:quota` | a 429 cools the model family that earned it, not the whole account |
 | `test:updater` | `update` refuses dirty worktrees and non-git installs, tolerates only npm's own lockfile version rewrite; the release check never throws; the lockfile tracks package.json |
-| `test:effort` | Anthropic `output_config.effort` scales the budget; the default level changes nothing |
+| `test:effort` | Anthropic `output_config.effort` scales the budget; the default level changes nothing; a model with no declared budget reasons only above the default level; a retired fixed-tier id, or a reasoning suffix on a guessed one, keeps its tier on both protocols; every ZCode reasoning variant sends a distinct budget |
 | `test:upstream` | a request Google rejects (400) is a 400 on all four paths, the OpenAI stream included; every other failure keeps its old shape; a failure after streaming began stays in-band |
 | `test:models-context` | every `/v1/models` entry carries `context_length` from `SUPPORTED_MODELS`; the older fields are unchanged; `/models` answers the same |
 | `test:turns` | a history that opens with a model turn gets a user note in front (both protocols, Claude too) and is otherwise untouched; the logged request shape names roles and part kinds and never carries text |
@@ -308,10 +308,21 @@ but costs no inference quota.
 **The catalogue can list an id that no longer works, and `bridge:models` cannot see that.**
 `gemini-3.1-pro-high` stayed in `fetchAvailableModels` with full metadata while Google answered HTTP
 400 "Request contains an invalid argument" to every request for it, on all six accounts and every request
-shape (its working name is `gemini-pro-agent`); the 3.7 and 3.6 tiered ids went 404. Every client that
-asked for "pro" got a 400 and nothing in the bridge said why. Only calling a model proves it is served:
-after editing the table, send each id one tiny request (`npm test` does this for the ones it uses).
-`gemini-2.5-pro` currently answers 503 "no capacity" on every account; that is capacity, not a dead id.
+shape; the 3.7 and 3.6 tiered ids went 404. Every client that asked for "pro" got a 400 and nothing in
+the bridge said why. Only calling a model proves it is served: after editing the table, send each id one
+tiny request **and read the reply** (`npm test` does this for the ones it uses). A status code is not
+enough. The 3.5 Flash tiers (`gemini-3-flash-agent`, `gemini-3.5-flash-low`, `-extra-low`) are still in
+the catalogue and answer HTTP 200, but the reply is one canned sentence, "Gemini 3.5 Flash is no longer
+available...", with no `finishReason` and no usage, and a client shows it as the model's answer.
+
+As of 2026-10-17 **no Gemini Pro is served**. `gemini-pro-agent` and `gemini-3.1-pro-low` went 404, along
+with the 3.6 Flash tiers. `gemini-2.5-pro` is listed but answers 503 "no capacity" on every account, as
+it did a table earlier. Every pro id, and the nearest-match guess for "pro", is a retired alias of
+`gemini-3.8-flash-tiered`, so the substitution is logged; re-add 2.5 Pro once a request to it succeeds.
+Google's catalogue still lists the retired 3.5 Flash tiers, `gemini-2.5-pro` and the three `gemini-2.5-flash*`
+ids. The 2.5 Flash ids are labelled "Gemini 3.5 Flash Lite" and alias to `gemini-3.5-flash-lite`.
+`bridge:models` prints every id that `Transformer.retiredTarget()` knows under "retired here on purpose",
+with its target, not as a model to add.
 
 `/v1/models` advertises each model's `context_length` (from `contextLimit`). OpenAI-compatible
 clients size their own prompts from it, and Onyx assumes 32,000 tokens for a model it does not
@@ -335,6 +346,14 @@ Reasoning config is per model, not global:
   the product surfaces.
 - `minThinkingBudget` is the floor; below it the bridge disables thinking rather than sending a
   value the model would reject.
+- **No `thinkingBudget` at all** (the Flash Lites) means Google declares no default, and those models
+  do not reason unless asked: with no `thinkingConfig` they spent 0 thought tokens, against about 200
+  when sent `-1`. The bridge sends nothing by default. An effort level turns reasoning on (dynamic)
+  only when it is above the protocol's default: OpenAI `high`, Anthropic `xhigh` / `max`. Treating
+  absent as `-1`, as the code used to, would have made every lite request reason. For the same reason
+  `zcodeReasoning()` gives these models **no** ZCode picker: ZCode speaks Anthropic, where its
+  "low" / "high" would both leave them off. `test:effort` asserts that every variant ZCode is offered
+  sends a distinct budget.
 - `Transformer.applyThinkingConfig()` fits the budget inside the caller's `max_tokens`, holding back
   `BRIDGE_ANSWER_RESERVE_TOKENS` (default 8192, clamped to half the window) for the visible answer.
   Thinking tokens are billed as output and count against that cap.
@@ -354,13 +373,33 @@ name, never the prefix — it used to guess from the whole string, so that id be
 `gemini-3.6-flash-high`, an older generation, and `someprovider/...` matched "pro".
 
 Retired ids are kept as explicit aliases in `resolveModel()` so existing client configs keep working;
-each points at the model its name claimed, which is often not what it used to resolve to.
+each points at the model its name claimed, which is often not what it used to resolve to. An alias
+whose name fixed a reasoning tier keeps it. The tier is read off the id's own suffix
+(`gemini-3.6-flash-low`, `gemini-3.5-flash-extra-low`); a `RETIRED_IDS` entry spells it out only where
+the name says otherwise or nothing (`gemini-3.5-flash-low` was Google's Medium,
+`gemini-2.5-flash-thinking` asks for high). `withAliasTier()` then substitutes that
+tier's budget (`ALIAS_TIER_BUDGETS`: 1000 / 4000 / dynamic, what the old fixed models declared) for the
+target model's declared one, and every
+effort and explicit-budget rule treats it as the model's own default. Without it, a tool loop configured
+with a `-low` id and no effort went from 1000 thinking tokens to unbounded dynamic reasoning on every
+step, behind a single warning. The tier lives on the alias, never on the target: the same model
+requested by its own id keeps its own default. `ALIAS_TIER_BUDGETS` holds the same numbers as
+`DYNAMIC_TIERS` but is a separate constant on purpose: the effort scale may be retuned, and an old id's
+promise should not move with it.
 
 **`resolveModel()` never resolves silently.** An inexact match warns once naming what it used, and
 an id matching nothing throws `UnknownModelError`, which `server.ts` turns into a 400. Approximation
 is deliberate — Claude Code sends Anthropic's own ids and refusing them would break the main use
 case — but a client that appends a reasoning suffix (`gemini-3.8-flash-tiered-high`) once silently
-got a different model generation, so the guess has to be audible.
+got a different model generation, so the guess has to be audible. The suffix itself is kept, and it
+is read **before** guessing. The order is: exact id; retired id; a known (exact or retired) id plus a
+trailing `-low` / `-medium` / `-high` / `-extra-low`; and only then the guess. So `gemini-3-flash-low`
+is gemini-3-flash at low, warned as `[Model suffixed]`. Resolving the whole name and guessing on
+failure sent it to the tiered model, and `gemini-3.1-flash-lite-high` to the 3.5 lite, which is exactly
+the generation change the warning exists to catch. A suffix appended to a retired id outranks that
+id's own tier. Only a whole trailing segment counts (`-lite` is a model). Claude and GPT-OSS ignore
+the suffix and the warning says so: their budgets are fixed, and `-high` would send `-1`. The suffixes
+come from `REASONING_TIERS` plus `TIER_SYNONYMS` (`extra-low` -> low), so a new tier is one edit.
 
 OpenAI responses — the non-streaming body and the `include_usage` stream chunk alike, both built by
 `Transformer.openaiUsage()` — report `completion_tokens` **including** reasoning, with

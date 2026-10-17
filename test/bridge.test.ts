@@ -17,8 +17,10 @@ const TEST_PORT = 52131;
 
 /** Exact ids from SUPPORTED_MODELS. Change them only after `npm run bridge:models`. */
 const FLASH = "gemini-3.8-flash-tiered";
-const FLASH_DYNAMIC = "gemini-3.6-flash-high";
-const PRO = "gemini-pro-agent"; // Google's High tier; the old gemini-3.1-pro-high answers 400 to everything
+const FLASH_DYNAMIC = "gemini-3-flash";
+// No Gemini Pro is served any more (404 / 503), so the OpenAI step runs on the model with no
+// declared budget, the one path where the bridge sends no thinkingConfig by default.
+const LITE = "gemini-3.5-flash-lite";
 const CLAUDE = "claude-opus-4-6-thinking";
 
 const HEADERS_ANTHROPIC = {
@@ -77,7 +79,7 @@ async function runTests() {
     }
     const listed = new Map<string, any>(modelsData.data.map((m: any) => [m.id, m]));
     console.log(`✓ Models list passed. Found ${listed.size} models.`);
-    for (const id of [FLASH, FLASH_DYNAMIC, PRO, CLAUDE]) {
+    for (const id of [FLASH, FLASH_DYNAMIC, LITE, CLAUDE]) {
       const entry = listed.get(id);
       if (!entry) fail(`This suite uses "${id}", which the bridge does not list`, [...listed.keys()]);
       if (!(entry.context_length > 0)) fail(`"${id}" advertises no context_length`, entry);
@@ -158,12 +160,12 @@ async function runTests() {
       console.log(`  Final Text Response: ${streamedText.trim()}`);
     }
 
-    // 5. OpenAI chat completions, on a Pro model
-    console.log(`\n[5/7] Testing OpenAI POST /v1/chat/completions (${PRO}) ...`);
+    // 5. OpenAI chat completions, on the lite model (no declared thinking budget)
+    console.log(`\n[5/7] Testing OpenAI POST /v1/chat/completions (${LITE}) ...`);
     const openaiRes = await post(
       "/v1/chat/completions",
       { "Content-Type": "application/json", Authorization: "Bearer test" },
-      { model: PRO, messages: [{ role: "user", content: "Say OPENAI_COMPAT_OK" }], max_tokens: 500 }
+      { model: LITE, messages: [{ role: "user", content: "Say OPENAI_COMPAT_OK" }], max_tokens: 500 }
     );
     const openaiData = (await openaiRes.json()) as any;
     if (!(openaiRes.ok && openaiData.choices?.[0]?.message)) fail("OpenAI chat completions failed", openaiData);

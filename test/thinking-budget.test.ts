@@ -33,12 +33,25 @@ SUPPORTED_MODELS.push({
   minThinkingBudget: 128,
 });
 const PRO_HIGH = "test-fixed-budget";
-/** Declared budget -1: the model sizes its own reasoning. */
-const DYNAMIC = "gemini-3.6-flash-high";
+/** Declared budget -1: the model sizes its own reasoning. Floor 128, unlike the tiered model's 32. */
+const DYNAMIC = "gemini-3-flash";
 /** Tier chosen per request rather than baked into the id. */
 const TIERED = "gemini-3.8-flash-tiered";
-/** No thinking support at all. */
-const PLAIN = "gemini-3.1-flash-lite";
+/**
+ * No thinking support at all. A stand-in: every model Google serves today can reason, and this
+ * suite used to borrow gemini-3.1-flash-lite until Google started declaring that it can.
+ */
+SUPPORTED_MODELS.push({
+  id: "test-no-thinking",
+  name: "Test no thinking",
+  family: "gemini",
+  contextLimit: 1048576,
+  outputLimit: 65535,
+  supportsThinking: false,
+});
+const PLAIN = "test-no-thinking";
+/** Can reason, but declares no default budget: does not reason unless asked. */
+const LITE = "gemini-3.5-flash-lite";
 const MESSAGES = [{ role: "user", content: "hi" }];
 
 let failures = 0;
@@ -84,9 +97,9 @@ function runTests() {
   expect("clamped to room", squeezed.thinkingConfig?.thinking_budget, 6000);
 
   console.log("\n[4/8] Per-model budgets differ, rather than one global number ...");
-  expect("pro-low", anthropic("gemini-3.1-pro-low", { max_tokens: 64000 }).thinkingConfig?.thinking_budget, 1001);
   expect("claude opus", anthropic("claude-opus-4-6-thinking", { max_tokens: 64000 }).thinkingConfig?.thinking_budget, 1024);
-  expect("flash medium", anthropic("gemini-3.6-flash-medium", { max_tokens: 64000 }).thinkingConfig?.thinking_budget, 4000);
+  expect("gpt-oss", anthropic("gpt-oss-120b-medium", { max_tokens: 64000 }).thinkingConfig?.thinking_budget, 8192);
+  expect("fixed stand-in", anthropic(PRO_HIGH, { max_tokens: 64000 }).thinkingConfig?.thinking_budget, 10001);
 
   console.log("\n[5/8] A dynamic model keeps sizing its own reasoning ...");
   const dyn = anthropic(DYNAMIC, { max_tokens: 64000 });
@@ -95,11 +108,15 @@ function runTests() {
   const dynNoCap = anthropic(DYNAMIC);
   expect("still gets a default window", dynNoCap.maxOutputTokens, 64000);
   expect("still dynamic", dynNoCap.thinkingConfig?.thinking_budget, -1);
-  // This model's floor is 32, so a 100-token window still has room (50). Only
-  // below twice the floor does thinking actually get switched off. At 100 the room
-  // is pinned rather than left dynamic: see [5b/8].
-  expect("pinned to the room at 100", anthropic(DYNAMIC, { max_tokens: 100 }).thinkingConfig?.thinking_budget, 50);
-  expect("no room -> disabled", anthropic(DYNAMIC, { max_tokens: 50 }).thinkingConfig?.thinking_budget, 0);
+  // This model's floor is 128, so a 300-token window still has room (150). Only
+  // below twice the floor does thinking actually get switched off. The room is
+  // pinned rather than left dynamic: see [5b/8].
+  expect("pinned to the room at 300", anthropic(DYNAMIC, { max_tokens: 300 }).thinkingConfig?.thinking_budget, 150);
+  expect("room under the 128 floor -> disabled", anthropic(DYNAMIC, { max_tokens: 250 }).thinkingConfig?.thinking_budget, 0);
+  // The tiered model's floor is 32, so the same 100-token window that disables
+  // gemini-3-flash still leaves it 50 to think with. The floor is per model.
+  expect("floor 128: 100 tokens -> disabled", anthropic(DYNAMIC, { max_tokens: 100 }).thinkingConfig?.thinking_budget, 0);
+  expect("floor 32: 100 tokens -> pinned to 50", anthropic(TIERED, { max_tokens: 100 }).thinkingConfig?.thinking_budget, 50);
 
   console.log("\n[5b/8] A dynamic model cannot spend a small cap entirely on thinking ...");
   // Forwarding -1 lets the model reason until the window is gone: measured on
@@ -187,6 +204,22 @@ function runTests() {
   const plain = anthropic(PLAIN, { max_tokens: 100 });
   expect("maxOutputTokens", plain.maxOutputTokens, 100);
   expect("no thinkingConfig emitted", plain.thinkingConfig, undefined);
+  expect("not even when asked", anthropic(PLAIN, { max_tokens: 64000, thinking: { budget_tokens: 4000 } }).thinkingConfig, undefined);
+
+  console.log("\n[++] A model with no declared budget is left to Google's default unless asked ...");
+  // The Flash Lites can reason, but with no thinkingConfig they do not (0 thought tokens,
+  // against ~200 when sent -1). Defaulting them to -1 would make every lite request reason.
+  expect("anthropic: nothing sent by default", anthropic(LITE, { max_tokens: 64000 }).thinkingConfig, undefined);
+  expect("openai: nothing sent by default", openai(LITE, { max_tokens: 64000 }).thinkingConfig, undefined);
+  expect("no cap, no budget: the cap is not inflated either", anthropic(LITE).maxOutputTokens, undefined);
+  expect("openai medium (its default level) changes nothing", openai(LITE, { max_tokens: 64000, reasoning_effort: "medium" }).thinkingConfig, undefined);
+  expect("openai low changes nothing", openai(LITE, { max_tokens: 64000, reasoning_effort: "low" }).thinkingConfig, undefined);
+  expect("openai high asks for dynamic reasoning", openai(LITE, { max_tokens: 64000, reasoning_effort: "high" }).thinkingConfig?.thinking_budget, -1);
+  expect("an explicit budget is honoured", anthropic(LITE, { max_tokens: 64000, thinking: { budget_tokens: 2048 } }).thinkingConfig?.thinking_budget, 2048);
+  expect("reasoning_tokens is honoured", openai(LITE, { max_tokens: 64000, reasoning_tokens: 3000 }).thinkingConfig?.thinking_budget, 3000);
+  expect("an explicit budget still fits the cap", anthropic(LITE, { max_tokens: 2000, thinking: { budget_tokens: 4000 } }).thinkingConfig?.thinking_budget, 1000);
+  expect("below the 128 floor -> disabled", anthropic(LITE, { max_tokens: 200, thinking: { budget_tokens: 4000 } }).thinkingConfig?.thinking_budget, 0);
+  expect("disabled is sent as disabled", anthropic(LITE, { max_tokens: 64000, thinking: { type: "disabled" } }).thinkingConfig?.thinking_budget, 0);
 
   if (failures > 0) {
     throw new Error(`${failures} thinking-budget check(s) failed`);
