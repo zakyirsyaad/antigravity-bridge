@@ -5,16 +5,21 @@
  * `/api/pool` reported it as plain "ready", so the dashboard drew it green and the
  * "Ready for Gemini" figure counted an account failover would not pick. It is now a
  * status of its own, "resting", with the time it ends. It is not a cooldown: the
- * account is not out of quota, and a real quota cooldown still wins over it.
+ * account is not out of quota, and a real quota cooldown still wins the one-word status.
  *
  * And a failover event used to read only "switched from A to B", so a 429, a 503
  * and a stall all looked the same in the activity stream. Every failover now says
  * why, and the client passes that reason from each place it moves the pool.
  *
+ * The dashboard half runs the page's own inline script against a bare-bones DOM, so what
+ * it draws for a rest, how that clock counts down, and what it says when the clock runs out
+ * are checked as behaviour, not as source text.
+ *
  * Stubbed throughout — no disk, network, credential or quota.
  */
 import fs from "node:fs";
 import path from "node:path";
+import vm from "node:vm";
 import { AntigravityClient } from "../src/antigravity-client";
 import { OAuthManager } from "../src/oauth";
 import { QuotaTracker } from "../src/quota-tracker";
@@ -105,6 +110,30 @@ async function runTests() {
   expect("restingCount counts it", status.restingCount, 1);
   expect("coolingDownCount does not", status.coolingDownCount, 0);
 
+  // BRIDGE_STALL_REST_SECONDS has no upper bound, and a rest too far out for a Date to hold must
+  // not take /api/pool down with a RangeError from toISOString(). 1e308 overflows to Infinity.
+  for (const seconds of ["1e13", "1e308"]) {
+    reset();
+    process.env.BRIDGE_STALL_REST_SECONDS = seconds;
+    let tooLong: any = null;
+    let tooLongError: string | null = null;
+    try {
+      StallRegistry.rest("b@example.com");
+      tooLong = oauth.getPoolStatus();
+    } catch (e: any) {
+      tooLongError = e.message;
+    } finally {
+      delete process.env.BRIDGE_STALL_REST_SECONDS;
+    }
+    expect(`a rest of ${seconds} s does not break /api/pool`, tooLongError, null);
+    expect(`${seconds} s: the account still reads resting`, tooLong && byEmail(tooLong, "b@example.com").status, "resting");
+    expect(
+      `${seconds} s: with a finite time left, so the JSON keeps a number`,
+      tooLong && Number.isFinite(byEmail(tooLong, "b@example.com").resting.remainingMs),
+      true
+    );
+  }
+
   console.log("\n[2/6] A quota cooldown wins over a rest, and the active account can rest too ...");
   reset();
   cooling.add("c@example.com");
@@ -153,22 +182,40 @@ async function runTests() {
   expect("no reason: the old message", bare.message, "Auto-failover switched from a@example.com to b@example.com");
   expect("no reason: no reason field", bare.reason, undefined);
 
-  console.log("\n[5/6] The client passes the reason from every place it moves the pool ...");
+  console.log("\n[5/6] The client passes the reason, and the request's model, from every place it moves the pool ...");
   const seen: Array<string | undefined> = [];
+  // Cooldowns are per model family, so each call that judges or moves the pool must carry the
+  // request's model: one that drops it asks about every family at once (CLAUDE.md: load-bearing).
+  // A stub handed any other model leaves a mark in `seen`, which fails the scenario that made the call.
+  const wantModel = (who: string, model: unknown) => {
+    if (model !== payload.model) seen.push(`${who}(${String(model)})`);
+  };
   let current: any = ACCTS[0];
   let streaming = false;
   let respond: (init: any) => Promise<Response> | Response = () => ok(streaming);
   (OAuthManager.prototype as any).loadSavedAccount = () => current;
   (OAuthManager.prototype as any).getValidAccessToken = async () => "token";
   (OAuthManager.prototype as any).isAutoFailoverEnabled = () => true;
-  (OAuthManager.prototype as any).selectNextAvailableAccount = (_email: string, _model: string, reason?: string) => {
+  (OAuthManager.prototype as any).selectNextAvailableAccount = (_email: string, model: string, reason?: string) => {
+    wantModel("selectNextAvailableAccount", model);
     seen.push(reason);
     current = ACCTS[(ACCTS.indexOf(current) + 1) % ACCTS.length];
     return current;
   };
   let limited = new Set<string>();
-  (QuotaTracker.prototype as any).isAccountRateLimited = (email: string) => limited.has(email);
-  (QuotaTracker.prototype as any).record429 = () => {};
+  // How often the client asked whether an account is limited, and which cooldowns run out right
+  // after the first answer that says so (the quota file is re-read on every ask).
+  let asks = 0;
+  let endsAfterFirstAsk = new Set<string>();
+  (QuotaTracker.prototype as any).isAccountRateLimited = (email: string, model?: string) => {
+    wantModel("isAccountRateLimited", model);
+    asks++;
+    const answer = limited.has(email);
+    if (answer && endsAfterFirstAsk.has(email)) limited.delete(email);
+    return answer;
+  };
+  (QuotaTracker.prototype as any).record429 = (_email: string, _message: string, model?: string) =>
+    wantModel("record429", model);
   let calls = 0;
   (globalThis as any).fetch = async (url: string, init: any) => {
     streaming = String(url).includes("streamGenerateContent");
@@ -182,64 +229,52 @@ async function runTests() {
     seen.length = 0;
     current = ACCTS[0];
     limited = new Set();
+    endsAfterFirstAsk = new Set();
+    asks = 0;
     StallRegistry.clear();
     respond = (init) => (calls++ === 0 ? failure(init) : ok(streaming));
   };
 
-  firstFails(() => fail(429, "Individual quota reached. Resets in 1h0m0s."));
-  await client.generateContent(payload as any);
-  expect("429 -> quota", seen.join(","), "quota");
-  firstFails(() => fail(503, "No capacity available for model gemini-3-flash on the server"));
-  await client.generateContent(payload as any);
-  expect("503 no capacity -> no_capacity", seen.join(","), "no_capacity");
-  firstFails(() => fail(503, "The service is currently unavailable."));
-  await client.generateContent(payload as any);
-  expect("other 503 -> unavailable", seen.join(","), "unavailable");
-  firstFails((init) => hang(init));
-  await client.generateContent(payload as any);
-  expect("stall -> stall", seen.join(","), "stall");
-  firstFails(() => fail(429, "Individual quota reached. Resets in 1h0m0s."));
-  await streamAll(client, payload);
-  expect("stream: 429 -> quota", seen.join(","), "quota");
-  firstFails(() => fail(503, "No capacity available for model gemini-3-flash on the server"));
-  await streamAll(client, payload);
-  expect("stream: 503 no capacity -> no_capacity", seen.join(","), "no_capacity");
-
-  firstFails(() => ok(streaming));
-  StallRegistry.rest("a@example.com", 300);
-  await client.generateContent(payload as any);
-  expect("active account resting -> resting", seen.join(","), "resting");
-  firstFails(() => ok(streaming));
-  limited.add("a@example.com");
-  await client.generateContent(payload as any);
-  expect("active account cooling -> cooling_down", seen.join(","), "cooling_down");
-  firstFails(() => ok(streaming));
-  limited.add("a@example.com");
-  await streamAll(client, payload);
-  expect("stream: active account cooling -> cooling_down", seen.join(","), "cooling_down");
-  // The streaming path has its own copies of every call site, so each reason is checked there too.
-  firstFails(() => fail(503, "The service is currently unavailable."));
-  await streamAll(client, payload);
-  expect("stream: other 503 -> unavailable", seen.join(","), "unavailable");
-  firstFails((init) => hang(init));
-  await streamAll(client, payload);
-  expect("stream: stall -> stall", seen.join(","), "stall");
-  firstFails(() => ok(streaming));
-  StallRegistry.rest("a@example.com", 300);
-  await streamAll(client, payload);
-  expect("stream: active account resting -> resting", seen.join(","), "resting");
-  // Cooling and resting at once: the cooldown outlasts the rest, so it is the reason,
-  // as the dashboard ranks it.
-  firstFails(() => ok(streaming));
-  limited.add("a@example.com");
-  StallRegistry.rest("a@example.com", 300);
-  await client.generateContent(payload as any);
-  expect("cooling and resting -> cooling_down", seen.join(","), "cooling_down");
-  firstFails(() => ok(streaming));
-  limited.add("a@example.com");
-  StallRegistry.rest("a@example.com", 300);
-  await streamAll(client, payload);
-  expect("stream: cooling and resting -> cooling_down", seen.join(","), "cooling_down");
+  // Every scenario runs on both entry points: each path has its own copy of every call site.
+  const restA = () => StallRegistry.rest("a@example.com", 300);
+  const limitA = () => limited.add("a@example.com");
+  const scenarios: Array<[string, string, (init: any) => Promise<Response> | Response, (() => void)?]> = [
+    ["429 -> quota", "quota", () => fail(429, "Individual quota reached. Resets in 1h0m0s.")],
+    ["503 no capacity -> no_capacity", "no_capacity", () => fail(503, "No capacity available for model gemini-3-flash on the server")],
+    ["other 503 -> unavailable", "unavailable", () => fail(503, "The service is currently unavailable.")],
+    ["stall -> stall", "stall", (init) => hang(init)],
+    ["active account resting -> resting", "resting", () => ok(streaming), restA],
+    ["active account cooling -> cooling_down", "cooling_down", () => ok(streaming), limitA],
+    // Cooling on the request's family and resting at once: the family's own cooldown is the more
+    // specific reason, and the card draws that row as cooling too.
+    ["cooling and resting -> cooling_down", "cooling_down", () => ok(streaming), () => (limitA(), restA())],
+    // The answer that moved the pool is the reason: a cooldown that runs out right after the client
+    // read it still names the cooldown, not a rest that never happened.
+    [
+      "a cooldown that ends between two reads -> cooling_down",
+      "cooling_down",
+      () => ok(streaming),
+      () => (limitA(), endsAfterFirstAsk.add("a@example.com")),
+    ],
+  ];
+  const entryPoints: Array<[string, () => Promise<unknown>]> = [
+    ["", () => client.generateContent(payload as any)],
+    ["stream: ", () => streamAll(client, payload)],
+  ];
+  for (const [label, wanted, first, arrange] of scenarios) {
+    for (const [prefix, call] of entryPoints) {
+      firstFails(first);
+      arrange?.();
+      await call();
+      expect(prefix + label, seen.join(","), wanted);
+    }
+  }
+  for (const [prefix, call] of entryPoints) {
+    firstFails(() => ok(streaming));
+    limitA();
+    await call();
+    expect(`${prefix}the proactive check asks the quota file once, for the move and for the reason`, asks, 1);
+  }
   delete process.env.BRIDGE_UPSTREAM_TIMEOUT_MS;
 
   console.log("\n[6/6] The dashboard draws a rest, and its failover tooltip names every trigger ...");
@@ -268,9 +303,101 @@ async function runTests() {
   expect("resting and every family cooling reads Cooling", chip(restingAcc, 3).includes("⏳ Cooling"), true);
   expect("the active account, not resting, reads Active", chip({ ...readyAcc, isActive: true }, 0).includes("● Active</span>"), true);
   expect("a plain account reads Ready", chip(readyAcc, 0).includes(">Ready<"), true);
-  expect("an ended rest's clock does not say 'ready to reset'", html.includes('data-done="ending"'), true);
-  expect("the tooltip no longer says only HTTP 429", html.includes('title="Toggle automatic failover on HTTP 429"'), false);
-  expect("the tooltip names a stall", /title="Toggle automatic failover:[^"]*stall"/.test(html), true);
+
+  // A rest is judged by what the bridge says is left, not by this browser's idea of the time: a viewer
+  // whose clock runs ahead of the bridge's must still see a rest that is running.
+  const realNow = Date.now;
+  const withClockAhead = <T>(ms: number, run: () => T): T => {
+    Date.now = () => realNow() + ms;
+    try {
+      return run();
+    } finally {
+      Date.now = realNow;
+    }
+  };
+  expect(
+    "a rest is still live for a viewer whose clock runs 5 min ahead",
+    withClockAhead(300_000, () => ui.readyFor(restingAcc, "gemini")),
+    false
+  );
+
+  // What the whole page draws from one /api/pool answer, and what its once-a-second ticker then
+  // does to the clocks it drew: the page's own script, against a bare-bones DOM.
+  const page = runDashboard(html);
+  const poolOf = (accounts: any[]) => ({ totalAccounts: accounts.length, autoFailoverEnabled: true, recentEvents: [], accounts });
+  const claudeCooling = {
+    families: { claude: { fiveHour: { resetsAt: new Date(Date.now() + 3_600_000).toISOString(), resetMessage: "Resets in 1h0m0s" } } },
+  };
+  const [restCard, bothCard, readyCard] = page.draw(
+    poolOf([
+      { ...restingAcc, email: "rest@example.com", status: "resting" },
+      // The API ranks any cooldown above a rest for its one-word status; the card works per family.
+      { ...restingAcc, email: "both@example.com", status: "cooling_down", quota: claudeCooling },
+      { ...readyAcc, email: "ready@example.com", status: "ready" },
+    ])
+  );
+  const rows = (card: string): string[] => card.match(/<div class="family-row">.*?<\/div>/g) ?? [];
+  const said = (card: string) => rows(card).map((row) => row.replace(/<[^>]*>/g, "")).join(" | ");
+  expect("a resting account's rows say Resting, with the countdown", said(restCard), "GeminiResting · 2m 0s | ClaudeResting · 2m 0s | GPT-OSSResting · 2m 0s");
+  expect("their dots are drawn resting", rows(restCard).every((row) => row.includes("family-dot is-resting")), true);
+  expect("a cooldown on one family outranks the rest on that row", said(bothCard), "GeminiResting · 2m 0s | ClaudeCooling · 1h0m0s | GPT-OSSResting · 2m 0s");
+  expect("and its dot is the cooling one", rows(bothCard)[1].includes("family-dot is-cooling"), true);
+  expect("a plain account's rows still say Ready", said(readyCard), "GeminiReady | ClaudeReady | GPT-OSSReady");
+  expect("the card chip says Resting", restCard.includes("◌ Resting"), true);
+  expect("a cooldown on one family does not hide the rest from the card chip", bothCard.includes("chip-resting"), true);
+  expect("Ready for Gemini leaves both resting accounts out", page.text("kpiGeminiReady"), "1 / 3");
+  expect("a rest is not a quota cooldown: no Clear Cooldown button", restCard.includes("Clear Cooldown"), false);
+  expect("a real cooldown still has one", bothCard.includes("Clear Cooldown"), true);
+  const restClockAt = new Date(rows(restCard)[0].match(/data-reset="([^"]*)"/)?.[1] ?? "").getTime();
+  expect("a rest's clock counts down to about two minutes from now", Math.abs(restClockAt - (Date.now() + 120_000)) < 2_000, true);
+  const chipTag = restCard.match(/<span class="status-chip chip-resting"[^>]*>/)?.[0] ?? "";
+  expect("the Resting tooltip says the skip depends on auto-failover", chipTag.includes("auto-failover"), true);
+
+  // The same rest drawn by a browser whose clock runs 5 min ahead still counts the bridge's own 2 min.
+  const [skewedCard] = withClockAhead(300_000, () =>
+    page.draw(poolOf([{ ...restingAcc, email: "rest@example.com", status: "resting" }]))
+  );
+  const skewedClock = clockOf(rows(skewedCard)[0]);
+  withClockAhead(300_000, () => page.tick([skewedClock]));
+  expect("a fast viewer clock still counts the rest's own 2 min", /^(2m 0s|1m 59s)$/.test(skewedClock.textContent), true);
+
+  // A rest of an hour or more reads the same on the first paint and on the ticker that follows it.
+  const [longCard] = page.draw(
+    poolOf([
+      {
+        ...restingAcc,
+        email: "long@example.com",
+        status: "resting",
+        resting: { remainingMs: 7_198_500, resetsAt: new Date(Date.now() + 7_198_500).toISOString() },
+      },
+    ])
+  );
+  expect("a rest of two hours reads hours on the first paint", said(longCard), "GeminiResting · 1h 59m | ClaudeResting · 1h 59m | GPT-OSSResting · 1h 59m");
+  const longClock = clockOf(rows(longCard)[0]);
+  page.tick([longClock]);
+  expect("and the ticker agrees with it", longClock.textContent, "1h 59m");
+
+  // A drawn clock as the browser holds it once its time is up: the markup's own data-done, the instant in the past.
+  const endedRest = clockOf(rows(restCard)[0], gone);
+  const endedCooldown = clockOf(rows(bothCard)[1], gone);
+  page.tick([endedRest, endedCooldown]);
+  expect("a rest that ran out between polls reads 'ending'", endedRest.textContent, "ending");
+  expect("a cooldown that ran out still reads 'ready to reset'", endedCooldown.textContent, "ready to reset");
+
+  // Resting is neutral in every theme, so its rules must not borrow a theme's accent tokens.
+  const ruleBody = (selector: string): string =>
+    html.match(new RegExp(`${selector.replace(/\./g, "\\.")}\\s*\\{([^}]*)\\}`))?.[1] ?? "";
+  for (const selector of [".chip-resting", ".family-dot.is-resting"]) {
+    const body = ruleBody(selector);
+    expect(`${selector} draws from fixed colours, not a theme's tokens`, body.length > 0 && !/var\(--(border-active|text-muted)\)/.test(body), true);
+  }
+
+  // The tooltip is markup, so it is read as markup, but it has to name every trigger, not just end well.
+  const failoverTag = html.match(/<[^>]*id="toggleFailoverBtn"[^>]*>/)?.[0] ?? "";
+  const failoverTitle = failoverTag.match(/title="([^"]*)"/)?.[1] ?? "";
+  for (const trigger of ["429", "503", "stall"]) {
+    expect(`the failover tooltip names ${trigger}`, failoverTitle.includes(trigger), true);
+  }
 
   if (failures > 0) {
     throw new Error(`${failures} pool status check(s) failed`);
@@ -308,6 +435,78 @@ function pageFunctions(html: string, names: string[]): Record<string, (...args: 
     throw new Error(`could not read function ${name}()`);
   });
   return new Function(`${sources.join("\n")}\nreturn { ${names.join(", ")} };`)();
+}
+/**
+ * A clock element as the browser holds it, taken from the markup's own attributes. The
+ * instant can be moved to simulate time passing.
+ */
+function clockOf(row: string, resetsAt?: string) {
+  const attrs: Record<string, string | undefined> = {
+    "data-reset": resetsAt ?? row.match(/data-reset="([^"]*)"/)?.[1],
+    "data-done": row.match(/data-done="([^"]*)"/)?.[1],
+  };
+  return { textContent: "", getAttribute: (name: string) => attrs[name] ?? null };
+}
+/**
+ * Run the dashboard's whole inline script against a bare-bones DOM and hand back what it
+ * draws. Nothing is fetched (`fetch` never answers) and the page's timers are captured,
+ * not started, so the once-a-second clock ticker can be run by hand. A DOM call the script
+ * gains later throws here: extend the stub below rather than skipping the page.
+ */
+function runDashboard(html: string) {
+  const script = html.slice(html.indexOf("<script>") + "<script>".length, html.lastIndexOf("</script>"));
+  const byId = new Map<string, any>();
+  const timers: Array<{ run: () => void; everyMs: number }> = [];
+  let clocks: any[] = [];
+  const stub = (): any => ({
+    children: [] as any[],
+    classList: { add() {}, remove() {}, toggle() {} },
+    appendChild(child: any) {
+      this.children.push(child);
+    },
+    addEventListener() {},
+    setAttribute() {},
+  });
+  // The page reads the clock through the Date it is handed, so a test can move that clock (a browser
+  // that disagrees with the bridge) without moving its own.
+  class PageDate extends Date {
+    static now(): number {
+      return Date.now();
+    }
+  }
+  const sandbox: any = {
+    Date: PageDate,
+    document: {
+      getElementById: (id: string) => {
+        if (!byId.has(id)) byId.set(id, stub());
+        return byId.get(id);
+      },
+      createElement: stub,
+      querySelectorAll: () => clocks,
+      documentElement: stub(),
+    },
+    window: { location: { origin: "https://bridge.example", hostname: "bridge.example", port: "" } },
+    localStorage: { getItem: () => null, setItem() {} },
+    fetch: () => new Promise(() => {}),
+    setInterval: (run: () => void, everyMs: number) => timers.push({ run, everyMs }),
+    console,
+  };
+  vm.runInNewContext(script, sandbox);
+  return {
+    /** Draw a pool answer; returns each account card's HTML. */
+    draw: (data: unknown): string[] => {
+      const container = sandbox.document.getElementById("accountsContainer");
+      container.children = [];
+      sandbox.renderStitchDashboard(data);
+      return container.children.map((card: any) => card.innerHTML as string);
+    },
+    text: (id: string): string => byId.get(id).textContent,
+    /** Run the one-second ticker over these clock elements. */
+    tick: (elements: any[]) => {
+      clocks = elements;
+      timers.find((t) => t.everyMs === 1000)!.run();
+    },
+  };
 }
 async function streamAll(client: AntigravityClient, payload: any): Promise<void> {
   const stream: any = await client.streamGenerateContent(payload);

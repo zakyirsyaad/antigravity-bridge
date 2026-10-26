@@ -26,10 +26,21 @@ export interface AttemptOutcome {
 
 const NO_CAPACITY = /no capacity/i;
 
+/**
+ * The failover event's name for each way an attempt can end; `null` is one the pool does not move
+ * on. A `Record` over `FailureKind`, so a kind added there without a reason here fails to compile.
+ */
+const REASON_OF_KIND: Record<FailureKind, FailoverReason | null> = {
+  quota: "quota",
+  capacity: "no_capacity",
+  unavailable: "unavailable",
+  stall: "stall",
+  other: null,
+};
+
 /** Why a 429 or 503 moved the pool on, for the failover event the dashboard shows. */
 export function rotationReason(hit429: boolean, message503: string): FailoverReason {
-  if (hit429) return "quota";
-  return NO_CAPACITY.test(message503) ? "no_capacity" : "unavailable";
+  return REASON_OF_KIND[classify({ hit429, hit503: !hit429, message503, stalled: false })] ?? "unavailable";
 }
 
 /**

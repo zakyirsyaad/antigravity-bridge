@@ -86,7 +86,8 @@ Antigravity Bridge is a mission-critical AI inference gateway connecting local d
   - `meter-healthy` (`linear-gradient(90deg, #a1a1aa, #ffffff)`): High-contrast monochrome quota fill.
   - `accent-amber` (`#f59e0b`): Rate-limit cooldown state (HTTP 429) and warning countdown.
   - **Resting** (an account skipped for a few minutes after a stall) is monochrome on purpose: a hollow
-    zinc ring and a dashed chip. It is not quota, so it must not borrow amber.
+    zinc ring and a dashed chip. It is not quota, so it must not borrow amber. The zinc is fixed, not a
+    theme token, so Resting reads the same in every theme.
   - `accent-rose` (`#f43f5e`): Total exhaustion and fatal status alerts.
 
 ## 3. Typography

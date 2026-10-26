@@ -48,6 +48,9 @@ export interface RestingWindow {
   resetsAt: string;
 }
 
+/** The one word `/api/pool` gives an account. A quota cooldown on any family wins over a rest. */
+export type PoolAccountStatus = "active" | "ready" | "cooling_down" | "resting";
+
 export interface AccountToken {
   name?: string;
   email?: string;
@@ -440,7 +443,7 @@ export class OAuthManager {
       email: string;
       name?: string;
       isActive: boolean;
-      status: "active" | "ready" | "cooling_down" | "resting";
+      status: PoolAccountStatus;
       cooldown: { remainingMs: number; resetMessage: string; resetsAt: string } | null;
       resting: RestingWindow | null;
       quota: any;
@@ -458,11 +461,13 @@ export class OAuthManager {
       const cooldown = tracker.getAccountCooldownRemaining(email);
       // A stall rest is skipped by failover just like a cooldown, but it is not
       // quota, so it is its own status rather than another kind of "cooling".
-      const restEnd = acc.email ? StallRegistry.restEndsAt(acc.email, now) : null;
+      const restEnd = StallRegistry.restEndsAt(acc.email, now);
       const resting: RestingWindow | null =
         restEnd === null ? null : { remainingMs: restEnd - now, resetsAt: new Date(restEnd).toISOString() };
 
-      const status: "active" | "ready" | "cooling_down" | "resting" = cooldown
+      // One word per account: a quota cooldown on ANY family wins, and the rest stays in `resting`.
+      // The dashboard works per family and draws Resting unless every family is cooling.
+      const status: PoolAccountStatus = cooldown
         ? "cooling_down"
         : resting
           ? "resting"
@@ -481,7 +486,7 @@ export class OAuthManager {
       };
     });
 
-    const count = (s: string) => accountList.filter((a) => a.status === s).length;
+    const count = (s: PoolAccountStatus) => accountList.filter((a) => a.status === s).length;
 
     return {
       autoFailoverEnabled: this.autoFailoverEnabled,
