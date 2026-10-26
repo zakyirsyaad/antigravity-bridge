@@ -8,8 +8,10 @@
   `BRIDGE_STALL_REST_SECONDS` (300 s), in memory, but `/api/pool` called it `ready`. The dashboard
   drew it green, and "Ready for Gemini / Claude" counted an account that failover would not pick.
   `/api/pool` now reports such an account as `status: "resting"` with `resting: { remainingMs, resetsAt }`,
-  plus a pool-level `restingCount`. `readyCount` leaves it out. A quota cooldown still wins, since it
-  outlasts the rest. The card shows a monochrome "Resting" chip and a live countdown on each family row.
+  plus a pool-level `restingCount`. `readyCount` leaves it out. A quota cooldown on any family still
+  wins the one-word `status` (the `resting` object is still sent, and `restingCount` leaves that account
+  out); the card works per family and draws Resting unless every family is cooling. The card shows a
+  monochrome "Resting" chip and a live countdown on each family row.
   It is deliberately not amber: amber means a 429 cooldown, and a rest is not quota.
   The active account says both ("● Active · Resting"). A rest that runs out between polls reads
   "ending" rather than "ready to reset".
@@ -17,13 +19,27 @@
   a 503 and a stall alike. Each failover event now carries a `reason` (`quota`, `no_capacity`,
   `unavailable`, `stall`, `cooling_down`, `resting`), and its message ends with that reason and the
   model, e.g. `: 503 no capacity · gemini-3-flash`. The client passes the reason from every place it
-  moves the pool, on both the streaming and the non-streaming path. An account that is both cooling
-  and resting is reported as cooling, as the dashboard shows it. The server log now tells a
-  generic 503 apart from "no capacity" too.
+  moves the pool, on both the streaming and the non-streaming path. A failover off an account that is
+  both cooling and resting says cooling when the requested model's family is cooling, and resting
+  otherwise (a Claude-only cooldown does not stop a Gemini request, so the rest is its only reason),
+  as the dashboard's family rows show it. The server log now tells a generic 503 apart from
+  "no capacity" too.
 - The Auto-Failover toggle's tooltip said "on HTTP 429". It now names all three triggers: a 429, a 503,
   and a stall.
-- New offline suite `test:pool` guards the new fields and every reason on both paths. It runs the
-  dashboard's own `readyFor()` / `statusChip()` helpers rather than matching its source text.
+- **A fast viewer clock no longer hides a rest.** The dashboard decided a rest was still running by
+  comparing the server's `resetsAt` with the browser's clock, so a viewer whose clock ran ahead by about
+  the rest's remaining time saw a resting account drawn Ready. It now reads the server's `remainingMs`
+  and anchors the clock at receipt. A rest of an hour or more reads `1h 59m` on the first paint as well
+  as on the ticker (it read `119m 58s` until the next second).
+- The Resting chip and ring use fixed zinc, not theme tokens, so they are neutral in every theme (Claude
+  Studio drew the dashed border amber-brown). Its tooltip says "With auto-failover on": the bridge keeps
+  serving from a resting account when failover is off or no other account is usable.
+- `BRIDGE_STALL_REST_SECONDS` is capped at one year. A value past about 8.6e12 made `/api/pool` answer
+  500 for as long as the account rested, because the rest's end no longer fits in a `Date`.
+- A proactive switch reads the quota file once, so the answer that moved the pool is also its reason.
+- New offline suite `test:pool` guards the new fields and every reason on both paths, and the model each
+  call passes. It runs the dashboard's own inline script against a stub DOM rather than matching its
+  source text: the rows and clocks a rest draws, the ticker's "ending", and the tooltip's three triggers.
 
 ## 2.6.2
 
