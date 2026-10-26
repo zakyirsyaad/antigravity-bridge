@@ -26,6 +26,7 @@ const QUOTA_PATH = path.join(USER_HOME, ".zcode", "antigravity-quota.json");
 const realExistsSync = fs.existsSync;
 const realReadFileSync = fs.readFileSync;
 const realWriteFileSync = fs.writeFileSync;
+const realChmodSync = fs.chmodSync;
 
 let quotaContent = '{"perAccount":{}}';
 let accountsContent = JSON.stringify({
@@ -56,6 +57,8 @@ const isAccounts = (p: unknown) => String(p) === ACCOUNTS_STORAGE_PATH;
   }
   return (realWriteFileSync as any)(p, data, ...rest);
 };
+// A write to the accounts file tightens its mode first; left alone, that would reach the real file.
+(fs as any).chmodSync = (p: any, ...rest: any[]) => (isAccounts(p) ? undefined : (realChmodSync as any)(p, ...rest));
 
 const CLAUDE = "claude-sonnet-4-6";
 const GEMINI = "gemini-3.8-flash-tiered";

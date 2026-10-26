@@ -12,7 +12,7 @@
  * shape.
  *
  * fs is patched to intercept the accounts path only, so the real
- * ~/.zcode/antigravity-accounts.json is never read or written.
+ * ~/.zcode/antigravity-accounts.json is never read, written or chmod'ed.
  */
 import fs from "node:fs";
 import { OAuthManager } from "../src/oauth";
@@ -21,6 +21,7 @@ import { ACCOUNTS_STORAGE_PATH } from "../src/constants";
 const realExistsSync = fs.existsSync;
 const realReadFileSync = fs.readFileSync;
 const realWriteFileSync = fs.writeFileSync;
+const realChmodSync = fs.chmodSync;
 
 /** What the fake accounts file currently contains. */
 let storageContent = "{}";
@@ -41,6 +42,9 @@ function isAccountsPath(p: unknown): boolean {
   }
   return (realWriteFileSync as any)(p, data, ...rest);
 };
+// A write tightens the file's mode first; left alone, that would reach the real file.
+(fs as any).chmodSync = (p: any, ...rest: any[]) =>
+  isAccountsPath(p) ? undefined : (realChmodSync as any)(p, ...rest);
 
 let failures = 0;
 
@@ -122,6 +126,7 @@ function runTests() {
     (fs as any).existsSync = realExistsSync;
     (fs as any).readFileSync = realReadFileSync;
     (fs as any).writeFileSync = realWriteFileSync;
+    (fs as any).chmodSync = realChmodSync;
     console.log("✓ fs restored.");
   }
 }
