@@ -86,9 +86,12 @@ Everything else runs offline — no account, no network, no quota — by stubbin
 | `test:pool` | `/api/pool` reports an account resting after a stall as `resting` (with when it ends), leaves it out of `readyCount`, and lets a quota cooldown win over it; every failover event carries a `reason` and says it, and the client passes one from each place it moves the pool, on both paths; the dashboard reads the field and its failover tooltip names 429, 503 and stalls |
 | `test:network` | `start()` sets Node's per-address connect timeout (2 s, configurable; a value Node would reject falls back instead of stopping the boot); a quick connect failure is retried after 2 s then 5 s on the same account, and the retry line names the cause code; a retry after a timeout keeps the old short pause |
 | `test:stream-end` | a stream that ends empty, non-STOP or without a finish reason leaves one `[Stream End]` warning (with the `maxOut`/`think` that were sent) on both routes; a healthy one stays silent; a `MAX_TOKENS` turn closes as `max_tokens` / `length` (a complete tool call still wins); everything else the client receives is unchanged |
+| `test:accounts-mode` | the accounts file is created `0600` whatever the umask; an existing file has group and other access taken away before the write by each of the five writers, and the owner's bits are kept (`0400` stays `0400`); a directory the bridge creates for it is `0700` and one that exists is left alone; a failed write is still swallowed in failover and thrown elsewhere, and a failed `chmod` writes nothing and logs the path and the code; nothing but `writeStorage()` writes the file; no token reaches the console. Runs the real `OAuthManager` against a temporary `$HOME`, not stubbed `fs` |
 
 When stubbing, keep side effects off the real `~/.zcode` files and off `launchctl` — several suites
-assert that explicitly, and that is deliberate.
+assert that explicitly, and that is deliberate. A suite that stubs `fs` for the accounts path stubs
+`chmodSync` for it too: `OAuthManager.writeStorage()` tightens the file's mode before it writes, and an
+un-stubbed `chmodSync` reaches the real file (four suites did, until 2.6.4).
 
 ### Build vs. run
 
@@ -318,6 +321,21 @@ write JSON on every call rather than caching. State lives outside the repo under
 Because these are files, two bridge processes (e.g. a manual `npm run dev` alongside the installed
 LaunchAgent) will fight over the active account and quota state. `~/.gemini/jetski-standalone-oauth-token`
 is read as a fallback single-account source when no accounts file exists.
+
+**The accounts file is `0600`, and every write goes through `OAuthManager.writeStorage()`.** It holds
+refresh tokens, which never expire. There used to be five hand-written
+`fs.writeFileSync(ACCOUNTS_STORAGE_PATH, …)` calls with no `mode`, so under the usual umask the file was
+`0644` and any other local user could read it; do not add a sixth (`test:accounts-mode` greps for one).
+`writeFileSync`'s `mode` applies only when the call *creates* the file, so for an existing one the helper
+first takes group and other access off it — *before* the write, so new tokens never land in a file others
+can read — and leaves the owner's own bits alone (a `0400` file stays `0400`). If it cannot, it writes
+nothing and logs the path and the error code, never data: the failure then travels like a failed write
+(thrown from `switch` and `delete`, warned by `saveAccount`, swallowed by failover and the quota refresh).
+`~/.zcode` is made `0700` only when `saveAccount()` is what creates it; a directory that already exists is
+never touched, since it may be ZCode's. (The usage counters, `syncZCodeConfig()` and the LaunchAgent's log
+directory also create `~/.zcode` when it is missing, with the default mode, so a `start` before the first
+`login` leaves it that way; the file inside is `0600` either way.) `antigravity-quota.json` and
+`antigravity-usage.json` hold nothing sensitive and keep the default mode.
 
 ### Models
 

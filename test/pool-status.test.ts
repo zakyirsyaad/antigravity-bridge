@@ -25,6 +25,7 @@ const QUOTA_PATH = path.join(USER_HOME, ".zcode", "antigravity-quota.json");
 const realExistsSync = fs.existsSync;
 const realReadFileSync = fs.readFileSync;
 const realWriteFileSync = fs.writeFileSync;
+const realChmodSync = fs.chmodSync;
 let accountsContent = "{}";
 const isAccounts = (p: unknown) => String(p) === ACCOUNTS_STORAGE_PATH;
 const isQuota = (p: unknown) => String(p) === QUOTA_PATH;
@@ -42,6 +43,8 @@ const isQuota = (p: unknown) => String(p) === QUOTA_PATH;
   if (isQuota(p)) return;
   return (realWriteFileSync as any)(p, data, ...rest);
 };
+// A write to the accounts file tightens its mode first; left alone, that would reach the real file.
+(fs as any).chmodSync = (p: any, ...rest: any[]) => (isAccounts(p) ? undefined : (realChmodSync as any)(p, ...rest));
 
 const SECRET = "refresh-token-that-must-never-leave";
 const ACCTS = ["a", "b", "c"].map((n) => ({

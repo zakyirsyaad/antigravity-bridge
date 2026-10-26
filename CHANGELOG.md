@@ -1,5 +1,46 @@
 # Changelog
 
+## 2.6.4
+
+### Fixed: the accounts file was readable by every user on the machine
+
+`~/.zcode/antigravity-accounts.json` holds every pooled account's access token and refresh token, and a
+refresh token does not expire. The bridge wrote it with `fs.writeFileSync` and no mode, so under the
+usual umask (022) it came out `-rw-r--r--` and any other local user could read it. Found on a file the
+bridge had just created: one account, a refresh token, `0644`, in a `0755` directory.
+
+- **The file is created `0600`.** Five places wrote it, each with its own copy of the call: login and
+  every token refresh (`saveAccount`), `switch`, `delete`, failover (`selectNextAvailableAccount`) and the
+  quota refresh of a non-active account. They now share one private `OAuthManager.writeStorage()`, so the
+  mode no longer depends on which of them wrote last.
+- **An existing file has group and other access taken away on its next write.** `writeFileSync`'s `mode`
+  applies only when the call *creates* the file, so a `0644` file left by an earlier release would have
+  stayed `0644` for ever. The helper takes that access off first, before the new tokens go in, and leaves
+  the owner's own bits alone (a file its owner made read-only stays read-only). The next write is any
+  token refresh, switch or failover, so a bridge that is idle after the upgrade keeps the old mode until
+  then; `chmod 600 ~/.zcode/antigravity-accounts.json` does it at once.
+- **`~/.zcode` is created `0700` when `saveAccount()` is what creates it.** A directory that already
+  exists is left as it is: the bridge did not make it, and it may be ZCode's. The usage counters, the
+  ZCode config sync and the LaunchAgent's log directory also create `~/.zcode` when it is missing, with
+  the default mode; the file inside is `0600` either way.
+- Nothing else about the write changed: same JSON, same two-space layout, and a failed write is still
+  swallowed in failover and still thrown from `switch` and `delete`. The one new way to fail: if group
+  and other access cannot be taken away (a file owned by someone else, a filesystem that refuses
+  `chmod`), nothing is written and the log says which file and why, with the error code and never any
+  data. The quota and usage files hold nothing sensitive and keep their mode.
+- New offline suite `test:accounts-mode` runs the real `OAuthManager` against a temporary `$HOME`, with
+  the umask pinned so a permissive environment cannot hide the bug. It checks a fresh file and
+  directory, all five writers on a `0644` file, that the access is taken away *before* the write and the
+  owner's bits are kept, that a failed write or a failed `chmod` behaves as described, that no second
+  place writes the file, and that no token reaches the console.
+- Four suites that stub `fs` for the accounts path (`test:storage`, `test:quota`, `test:pool`,
+  `test:stall`) now stub `chmodSync` for it too. Without that, running any of them against a real
+  `$HOME` would have changed the mode of the real accounts file as a side effect.
+
+This stops new exposure; it does not undo old exposure. A refresh token another user could read before
+this release stays valid until it is revoked. On a machine other people can log in to, revoke the app's
+access in the Google account's security settings and run `npm run bridge:login` again.
+
 ## 2.6.3
 
 ### Fixed: the dashboard showed a resting account as ready, and every failover looked the same

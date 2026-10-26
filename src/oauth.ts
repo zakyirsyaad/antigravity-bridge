@@ -98,6 +98,11 @@ function generatePKCE() {
   return { verifier, challenge };
 }
 
+/** The accounts file holds refresh tokens, which never expire: its owner only. */
+const ACCOUNTS_FILE_MODE = 0o600;
+/** For a directory the bridge creates to hold it; one that already exists is never touched. */
+const ACCOUNTS_DIR_MODE = 0o700;
+
 let memoryToken: AccountToken | null = null;
 
 export class OAuthManager {
@@ -138,6 +143,36 @@ export class OAuthManager {
     } catch {
       return { accounts: [], activeAccountIndex: 0 };
     }
+  }
+
+  /**
+   * Write the accounts file. Every write goes through here.
+   *
+   * It holds access and refresh tokens, so no other user may read it: it is created 0600. `mode`
+   * only applies when writeFileSync creates the file, so one that already exists — a 0644 file
+   * from before this was enforced — has group and other access taken away first, and new tokens
+   * never land in a file others can read. The owner's own bits are left alone: whoever made the
+   * file read-only meant it. If that cannot be done, nothing is written and the log says why
+   * (the path and the error code, never the data): better to write nothing than to put tokens
+   * into a file that cannot be locked down.
+   */
+  private writeStorage(storage: AccountsStorage): void {
+    try {
+      const { mode } = fs.statSync(ACCOUNTS_STORAGE_PATH);
+      if (mode & 0o077) fs.chmodSync(ACCOUNTS_STORAGE_PATH, mode & 0o700);
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT") {
+        console.warn(
+          `Not writing ${ACCOUNTS_STORAGE_PATH}: cannot take group and other access off it (${code ?? "unknown error"}).`
+        );
+        throw e;
+      }
+    }
+    fs.writeFileSync(ACCOUNTS_STORAGE_PATH, JSON.stringify(storage, null, 2), {
+      encoding: "utf-8",
+      mode: ACCOUNTS_FILE_MODE,
+    });
   }
 
   /**
@@ -201,7 +236,7 @@ export class OAuthManager {
     try {
       const dirname = require("node:path").dirname(ACCOUNTS_STORAGE_PATH);
       if (!fs.existsSync(dirname)) {
-        fs.mkdirSync(dirname, { recursive: true });
+        fs.mkdirSync(dirname, { recursive: true, mode: ACCOUNTS_DIR_MODE });
       }
 
       const storage: AccountsStorage = fs.existsSync(ACCOUNTS_STORAGE_PATH)
@@ -220,7 +255,7 @@ export class OAuthManager {
         storage.activeAccountIndex = storage.accounts.length - 1;
       }
 
-      fs.writeFileSync(ACCOUNTS_STORAGE_PATH, JSON.stringify(storage, null, 2), "utf-8");
+      this.writeStorage(storage);
     } catch (e) {
       console.warn("Failed to persist accounts to storage file:", e);
     }
@@ -281,7 +316,7 @@ export class OAuthManager {
     }
 
     storage.activeAccountIndex = targetIndex;
-    fs.writeFileSync(ACCOUNTS_STORAGE_PATH, JSON.stringify(storage, null, 2), "utf-8");
+    this.writeStorage(storage);
     memoryToken = storage.accounts[targetIndex];
     this.recordPoolEvent({
       type: "switch",
@@ -314,7 +349,7 @@ export class OAuthManager {
     if (storage.activeAccountIndex >= storage.accounts.length) {
       storage.activeAccountIndex = Math.max(0, storage.accounts.length - 1);
     }
-    fs.writeFileSync(ACCOUNTS_STORAGE_PATH, JSON.stringify(storage, null, 2), "utf-8");
+    this.writeStorage(storage);
     memoryToken = storage.accounts[storage.activeAccountIndex] || null;
 
     this.recordPoolEvent({
@@ -405,7 +440,7 @@ export class OAuthManager {
       if (!isLimited) {
         storage.activeAccountIndex = candidateIdx;
         try {
-          fs.writeFileSync(ACCOUNTS_STORAGE_PATH, JSON.stringify(storage, null, 2), "utf-8");
+          this.writeStorage(storage);
         } catch {}
         memoryToken = candidate;
 
@@ -656,7 +691,7 @@ export class OAuthManager {
       const index = storage.accounts.findIndex((account) => account.refreshToken === updated.refreshToken);
       if (index >= 0) {
         storage.accounts[index] = updated;
-        fs.writeFileSync(ACCOUNTS_STORAGE_PATH, JSON.stringify(storage, null, 2));
+        this.writeStorage(storage);
       }
     } catch {
       // Keep quota refresh usable even when account metadata cannot be persisted.
