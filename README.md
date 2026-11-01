@@ -469,7 +469,7 @@ Each account in `/api/pool` has a `status`:
 - `cooling_down`: a 429 quota cooldown, with `cooldown.resetsAt`.
 - `resting`: Google stopped answering on it, so failover skips it until `resting.resetsAt`. This is held in memory and is not quota.
 
-A quota cooldown wins when an account has both. The pool also reports `readyCount`, `coolingDownCount` and `restingCount`. Each `failover` event carries a `reason`: `quota`, `no_capacity`, `unavailable`, `stall`, `cooling_down` or `resting`.
+`status` has one value per account: a quota cooldown on any model family wins over a rest, and the rest stays in `resting` (and out of `restingCount`). The dashboard works per family, so it also reads each account's `quota` and `resting`. The pool also reports `readyCount`, `coolingDownCount` and `restingCount`. Each `failover` event carries a `reason`: `quota`, `no_capacity`, `unavailable`, `stall`, `cooling_down` or `resting`.
 
 ### Inference Endpoints
 
@@ -569,7 +569,7 @@ local install.
 | `BRIDGE_API_KEY` | *(none)* | Shared secret that non-loopback callers must send. Without it they are refused |
 | `BRIDGE_TRUST_LOCAL` | trusted | `0` requires the key from loopback callers too |
 | `BRIDGE_UPSTREAM_TIMEOUT_MS` | `60000` | How long to wait for Google's first response before treating it as a stall |
-| `BRIDGE_STALL_REST_SECONDS` | `300` | How long a stalled account is skipped (in memory only, not a quota cooldown) |
+| `BRIDGE_STALL_REST_SECONDS` | `300` | How long a stalled account is skipped (in memory only, not a quota cooldown); at most one year |
 | `BRIDGE_CONNECT_ATTEMPT_TIMEOUT_MS` | `2000` | Time each of Google's addresses gets to connect |
 | `BRIDGE_ANSWER_RESERVE_TOKENS` | `8192` | Output tokens held back from thinking for the visible answer |
 | `BRIDGE_TOOL_MIN_OUTPUT_TOKENS` | off | Raises a smaller output cap on requests that carry tools (see [Controlling reasoning](#controlling-reasoning)) |

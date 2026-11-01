@@ -631,11 +631,13 @@
     }
 
     /* Resting after a stall: skipped for a few minutes, in memory, and not quota.
-       Monochrome on purpose — amber means a 429 cooldown, and this is not one. */
+       Monochrome on purpose — amber means a 429 cooldown, and this is not one. The
+       zinc is fixed, not a theme token: the themes tint --border-active and
+       --text-muted, and Resting must read the same in every one of them. */
     .chip-resting {
       background: transparent;
       color: var(--text-main);
-      border: 1px dashed var(--border-active);
+      border: 1px dashed rgba(255, 255, 255, 0.35);
     }
 
     /* Live Quota Meters Container */
@@ -671,7 +673,7 @@
     }
     .family-dot.is-resting {
       background: transparent;
-      box-shadow: inset 0 0 0 1.5px var(--text-muted);
+      box-shadow: inset 0 0 0 1.5px #a1a1aa;
     }
     .family-name {
       min-width: 72px;
@@ -687,10 +689,6 @@
     }
     .family-state.is-resting {
       color: var(--text-main);
-    }
-    /* The clock is amber for a cooldown; a rest's clock stays monochrome. */
-    .family-state.is-resting .cooldown-clock {
-      color: inherit;
     }
     .group-label {
       font-size: 0.6875rem;
@@ -786,10 +784,10 @@
       font-size: 0.75rem;
     }
 
+    /* The clock takes its colour from the .family-state it sits in: amber for a cooldown, plain for a rest. */
     .cooldown-clock {
       font-family: 'JetBrains Mono', monospace;
       font-weight: 700;
-      color: var(--amber);
       font-variant-numeric: tabular-nums;
     }
 
@@ -1389,14 +1387,20 @@ print(response.choices[0].message.content)</pre>
       { key: "openai", label: "GPT-OSS" }
     ];
 
-    /** The live cooldown window for one family, or null when it is selectable. */
-    /** First paint of a rest's countdown; the ticker takes over from the next second. */
-    function formatRestRemaining(ms) {
-      const m = Math.floor(ms / 60000);
+    /**
+     * A countdown as the ticker writes it. A rest's first paint uses it too, so the
+     * two never read differently for a rest of an hour or more.
+     */
+    function formatCountdown(ms) {
+      const h = Math.floor(ms / 3600000);
+      const m = Math.floor((ms % 3600000) / 60000);
       const sec = Math.floor((ms % 60000) / 1000);
-      return m > 0 ? m + "m " + sec + "s" : sec + "s";
+      // The label beside this clock already says "Cooling", and seconds
+      // ticking on a window measured in days is noise, not information.
+      return h > 0 ? h + "h " + m + "m" : (m > 0 ? m + "m " + sec + "s" : sec + "s");
     }
 
+    /** The live cooldown window for one family, or null when it is selectable. */
     function familyCooldown(acc, key) {
       const q = acc.quota || {};
       const now = Date.now();
@@ -1413,11 +1417,13 @@ print(response.choices[0].message.content)</pre>
     /**
      * The account's rest after a stall, or null. Account-wide and in memory only:
      * Google stopped answering on it, so failover skips it for a few minutes. Not
-     * quota, which is why it is not drawn as a cooldown.
+     * quota, which is why it is not drawn as a cooldown. Whether it still runs is the
+     * bridge's own reading of what is left (remainingMs), not this browser's clock set
+     * against the bridge's: a fast clock would otherwise hide a rest that is running.
      */
     function restingWindow(acc) {
       const r = acc.resting;
-      return r && new Date(r.resetsAt).getTime() > Date.now() ? r : null;
+      return r && r.remainingMs > 0 ? r : null;
     }
 
     /** Whether failover can still pick this account for a family: not cooling, not resting. */
@@ -1426,13 +1432,15 @@ print(response.choices[0].message.content)</pre>
     }
 
     /**
-     * The card's status chip. A quota cooldown on every family outranks a rest (it
-     * lasts longer); a rest outranks plain ready; the active account keeps saying it
-     * is active even while it rests, since it may be the only one left serving.
+     * The card's status chip. A quota cooldown on every family outranks a rest (the
+     * account is wholly cooling, so the rest adds nothing to say); a rest outranks
+     * plain ready, even with some families cooling (the rows say which); the active
+     * account keeps saying it is active even while it rests, since it may be the only
+     * one left serving.
      */
     function statusChip(acc, coolingCount, familyCount, resting) {
       const restTitle = ' title="Google stopped answering on this account. ' +
-        'The bridge skips it, in memory, until the timer ends. Not a quota cooldown."';
+        'With auto-failover on, the bridge avoids it, in memory, until the timer ends. Not a quota cooldown."';
       if (resting && coolingCount < familyCount) {
         return acc.isActive
           ? '<span class="status-chip chip-resting"' + restTitle + '>● Active · Resting</span>'
@@ -1523,7 +1531,8 @@ print(response.choices[0].message.content)</pre>
         const familyHtml = '<div class="family-box">' +
           families.map(function(f) {
             const cooling = Boolean(f.window);
-            // A quota cooldown outlasts a stall rest, so it is the fact to show.
+            // This family's own quota cooldown is the fact to show on its row; a rest covers
+            // every family, so it fills the rows that are not cooling.
             const dot = cooling ? "is-cooling" : resting ? "is-resting" : "is-ready";
             let state = '<span class="family-state">Ready</span>';
             if (cooling) {
@@ -1537,8 +1546,11 @@ print(response.choices[0].message.content)</pre>
             } else if (resting) {
               state = '<span class="family-state is-resting">Resting · ' +
                 // A rest that runs out is over, not "ready to reset": the next poll redraws it.
-                '<span class="cooldown-clock" data-reset="' + resting.resetsAt + '" data-done="ending">' +
-                  formatRestRemaining(resting.remainingMs) +
+                // Its end is anchored to this browser's clock now, from the bridge's own remainingMs,
+                // so a viewer whose clock differs from the bridge's still counts the right time.
+                '<span class="cooldown-clock" data-reset="' +
+                  new Date(Date.now() + resting.remainingMs).toISOString() + '" data-done="ending">' +
+                  formatCountdown(resting.remainingMs) +
                 '</span>' +
               '</span>';
             }
@@ -1822,12 +1834,7 @@ print(response.choices[0].message.content)</pre>
         if (diff <= 0) {
           el.textContent = el.getAttribute("data-done") || "ready to reset";
         } else {
-          const h = Math.floor(diff / 3600000);
-          const m = Math.floor((diff % 3600000) / 60000);
-          const sec = Math.floor((diff % 60000) / 1000);
-          // The label beside this node already says "Cooling", and seconds
-          // ticking on a window measured in days is noise, not information.
-          el.textContent = h > 0 ? h + "h " + m + "m" : (m > 0 ? m + "m " + sec + "s" : sec + "s");
+          el.textContent = formatCountdown(diff);
         }
       });
     }, 1000);

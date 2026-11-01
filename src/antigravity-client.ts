@@ -129,6 +129,28 @@ export class AntigravityClient {
   }
 
   /**
+   * Before a request goes out, move off the active account when it is cooling down for this model's
+   * family or resting after a stall. The quota file is read once: the answer that decides the move
+   * is also the reason it gives. When both hold, the family's own cooldown is the more specific
+   * reason (a rest covers every family).
+   */
+  private skipUnavailableActive(model: string): void {
+    const account = this.oauth.loadSavedAccount();
+    if (!this.oauth.isAutoFailoverEnabled() || !account?.email) return;
+    const why = QuotaTracker.getInstance().isAccountRateLimited(account.email, model)
+      ? "cooling_down"
+      : StallRegistry.isResting(account.email)
+        ? "resting"
+        : null;
+    if (!why) return;
+    const nextAcc = this.oauth.selectNextAvailableAccount(account.email, model, why);
+    if (!nextAcc) return;
+    console.log(
+      `[AutoPool] Active account ${account.email} is ${why === "resting" ? "resting after a stall" : "cooling down"}. Switched to ${nextAcc.email}`
+    );
+  }
+
+  /**
    * Execute non-streaming generateContent with multi-account auto-failover
    */
   public async generateContent(payload: AntigravityPayload): Promise<any> {
@@ -143,26 +165,7 @@ export class AntigravityClient {
 
       // Proactive check: if current account is in cooldown, or resting after a
       // stall, switch proactively
-      let account = this.oauth.loadSavedAccount();
-      if (
-        this.oauth.isAutoFailoverEnabled() &&
-        account?.email &&
-        (QuotaTracker.getInstance().isAccountRateLimited(account.email, payload.model) ||
-          StallRegistry.isResting(account.email))
-      ) {
-        // A quota cooldown outlasts a stall rest, so it is the reason to report, as the
-        // dashboard does.
-        const why = QuotaTracker.getInstance().isAccountRateLimited(account.email, payload.model)
-          ? "cooling_down"
-          : "resting";
-        const nextAcc = this.oauth.selectNextAvailableAccount(account.email, payload.model, why);
-        if (nextAcc) {
-          console.log(
-            `[AutoPool] Active account ${account.email} is ${why === "resting" ? "resting after a stall" : "cooling down"}. Switched to ${nextAcc.email}`
-          );
-          account = nextAcc;
-        }
-      }
+      this.skipUnavailableActive(payload.model);
 
       const accessToken = await this.oauth.getValidAccessToken();
       const currentAccount = this.oauth.loadSavedAccount();
@@ -296,26 +299,7 @@ export class AntigravityClient {
 
       // Proactive check: if current account is in cooldown, or resting after a
       // stall, switch proactively
-      let account = this.oauth.loadSavedAccount();
-      if (
-        this.oauth.isAutoFailoverEnabled() &&
-        account?.email &&
-        (QuotaTracker.getInstance().isAccountRateLimited(account.email, payload.model) ||
-          StallRegistry.isResting(account.email))
-      ) {
-        // A quota cooldown outlasts a stall rest, so it is the reason to report, as the
-        // dashboard does.
-        const why = QuotaTracker.getInstance().isAccountRateLimited(account.email, payload.model)
-          ? "cooling_down"
-          : "resting";
-        const nextAcc = this.oauth.selectNextAvailableAccount(account.email, payload.model, why);
-        if (nextAcc) {
-          console.log(
-            `[AutoPool] Active account ${account.email} is ${why === "resting" ? "resting after a stall" : "cooling down"}. Switched to ${nextAcc.email}`
-          );
-          account = nextAcc;
-        }
-      }
+      this.skipUnavailableActive(payload.model);
 
       const accessToken = await this.oauth.getValidAccessToken();
       const currentAccount = this.oauth.loadSavedAccount();
