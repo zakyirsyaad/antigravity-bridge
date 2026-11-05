@@ -490,22 +490,47 @@ export class BridgeServer {
 
           // Models List (OpenAI format)
           if (pathname === "/v1/models" || pathname === "/models") {
+            const data: any[] = SUPPORTED_MODELS.map((m) => ({
+              id: m.id,
+              object: "model",
+              created: 1786800000,
+              owned_by: "google-antigravity",
+              permission: [],
+              root: m.id,
+              parent: null,
+              // What an OpenAI-compatible client sizes its prompt from. Without
+              // it Onyx assumes 32k and refuses a 54k prompt before it is sent.
+              context_length: m.contextLimit,
+            }));
+
+            // If a hybrid account with Gemini Web cookies is connected, expose
+            // the exclusive web models so client apps can pick them from dropdowns
+            const hybridAccount = this.oauth.findAccountWithWebCookies();
+            if (hybridAccount) {
+              const webModels = [
+                { id: "gemini-argon-4", context: 1048576, desc: "Gemini Argon (Web Reasoning Model)" },
+                { id: "gemini-auto", context: 1048576, desc: "Gemini Auto (Default Web Model)" },
+                { id: "gemini-advanced", context: 1048576, desc: "Gemini Advanced (Pro Web Model)" },
+              ];
+              for (const wm of webModels) {
+                data.push({
+                  id: wm.id,
+                  object: "model",
+                  created: 1786800000,
+                  owned_by: "google-gemini-web",
+                  permission: [],
+                  root: wm.id,
+                  parent: null,
+                  context_length: wm.context,
+                });
+              }
+            }
+
             res.writeHead(200, { "Content-Type": "application/json" });
             res.end(
               JSON.stringify({
                 object: "list",
-                data: SUPPORTED_MODELS.map((m) => ({
-                  id: m.id,
-                  object: "model",
-                  created: 1786800000,
-                  owned_by: "google-antigravity",
-                  permission: [],
-                  root: m.id,
-                  parent: null,
-                  // What an OpenAI-compatible client sizes its prompt from. Without
-                  // it Onyx assumes 32k and refuses a 54k prompt before it is sent.
-                  context_length: m.contextLimit,
-                })),
+                data,
               })
             );
             return;
