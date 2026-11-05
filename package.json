@@ -46,6 +46,7 @@
     "test:turns": "tsx test/turn-order.test.ts",
     "test:network": "tsx test/network-retry.test.ts",
     "test:accounts-mode": "tsx test/accounts-file-mode.test.ts",
+    "test:json-repair": "tsx test/json-repair.test.ts",
     "test:accounts-push": "tsx test/accounts-push.test.ts",
     "build": "tsc"
   },
