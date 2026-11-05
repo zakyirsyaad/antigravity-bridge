@@ -1071,6 +1071,14 @@
         <div class="toggle-led" id="failoverLed"></div>
         <span id="failoverStatusText">Auto-Failover: ON</span>
       </div>
+      <button type="button" class="btn btn-secondary" onclick="openPushModal()" title="Add or update account directly via refresh token">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+          <polyline points="17 8 12 3 7 8"></polyline>
+          <line x1="12" y1="3" x2="12" y2="15"></line>
+        </svg>
+        <span>Push Token</span>
+      </button>
       <a href="/api/pool/auth-url" class="btn btn-primary" target="_blank">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
           <line x1="12" y1="5" x2="12" y2="19"></line>
@@ -1279,6 +1287,40 @@ print(response.choices[0].message.content)</pre>
       </div>
     </section>
   </main>
+
+  <!-- Push Token Modal -->
+  <div id="pushModal" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.75); backdrop-filter: blur(4px); z-index: 1000; align-items: center; justify-content: center;">
+    <div style="background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); width: 90%; max-width: 480px; padding: 24px; box-shadow: var(--shadow-lg);">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+        <h3 style="margin: 0; font-size: 1.1rem; font-weight: 600; color: var(--text-primary); display: flex; align-items: center; gap: 8px;">
+          <span>🔑</span> Push Account Refresh Token
+        </h3>
+        <button type="button" onclick="closePushModal()" style="background: transparent; border: none; color: var(--text-muted); cursor: pointer; font-size: 1.2rem; padding: 4px;">&times;</button>
+      </div>
+
+      <p style="font-size: 0.82rem; color: var(--text-secondary); margin-bottom: 16px; line-height: 1.45;">
+        Add or update an account in the pool directly by providing its Google OAuth refresh token. Tokens are stored locally with strict <code>0600</code> permissions.
+      </p>
+
+      <div style="display: flex; flex-direction: column; gap: 12px; margin-bottom: 16px;">
+        <div>
+          <label style="display: block; font-size: 0.78rem; font-weight: 500; color: var(--text-muted); margin-bottom: 4px;">Refresh Token (required)</label>
+          <input type="password" id="pushRefreshToken" placeholder="1//0..." style="width: 100%; box-sizing: border-box; background: var(--surface-subtle); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 8px 12px; color: var(--text-primary); font-family: var(--font-mono); font-size: 0.85rem;" />
+        </div>
+        <div>
+          <label style="display: block; font-size: 0.78rem; font-weight: 500; color: var(--text-muted); margin-bottom: 4px;">Email (optional)</label>
+          <input type="email" id="pushEmail" placeholder="user@gmail.com" style="width: 100%; box-sizing: border-box; background: var(--surface-subtle); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 8px 12px; color: var(--text-primary); font-family: var(--font-sans); font-size: 0.85rem;" />
+        </div>
+      </div>
+
+      <div id="pushErrorMsg" style="display: none; font-size: 0.8rem; margin-bottom: 16px;"></div>
+
+      <div style="display: flex; justify-content: flex-end; gap: 8px;">
+        <button type="button" class="btn btn-secondary" onclick="closePushModal()">Cancel</button>
+        <button type="button" id="pushSubmitBtn" class="btn btn-primary" onclick="submitPushAccount()">Add to Pool</button>
+      </div>
+    </div>
+  </div>
 
   <script>
     let poolCache = null;
@@ -1824,6 +1866,74 @@ print(response.choices[0].message.content)</pre>
           alert("Copied to clipboard!");
         }
       });
+    }
+
+    function openPushModal() {
+      const modal = document.getElementById("pushModal");
+      if (modal) modal.style.display = "flex";
+      const tokenInput = document.getElementById("pushRefreshToken");
+      if (tokenInput) tokenInput.focus();
+    }
+
+    function closePushModal() {
+      const modal = document.getElementById("pushModal");
+      if (modal) modal.style.display = "none";
+      const errEl = document.getElementById("pushErrorMsg");
+      if (errEl) {
+        errEl.textContent = "";
+        errEl.style.display = "none";
+      }
+    }
+
+    async function submitPushAccount() {
+      const tokenInput = document.getElementById("pushRefreshToken");
+      const emailInput = document.getElementById("pushEmail");
+      const errEl = document.getElementById("pushErrorMsg");
+      const btn = document.getElementById("pushSubmitBtn");
+
+      const refreshToken = tokenInput ? tokenInput.value.trim() : "";
+      const email = emailInput ? emailInput.value.trim() : "";
+
+      if (!refreshToken) {
+        if (errEl) {
+          errEl.textContent = "Refresh token is required.";
+          errEl.style.display = "block";
+        }
+        return;
+      }
+
+      if (btn) btn.disabled = true;
+      if (errEl) {
+        errEl.textContent = "Validating token with Google...";
+        errEl.style.display = "block";
+        errEl.style.color = "var(--text-muted)";
+      }
+
+      try {
+        const res = await apiFetch("/api/accounts/push", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ refreshToken: refreshToken, email: email }),
+        });
+
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data.error || "Failed to add account");
+        }
+
+        if (tokenInput) tokenInput.value = "";
+        if (emailInput) emailInput.value = "";
+        closePushModal();
+        fetchPoolStatus();
+      } catch (err) {
+        if (errEl) {
+          errEl.textContent = err.message;
+          errEl.style.display = "block";
+          errEl.style.color = "var(--rose)";
+        }
+      } finally {
+        if (btn) btn.disabled = false;
+      }
     }
 
     // Smooth real-time countdown updates
