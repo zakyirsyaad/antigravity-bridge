@@ -11,6 +11,7 @@ import { QuotaService } from "./quota-service";
 import { QuotaTracker } from "./quota-tracker";
 import { getDashboardHtml } from "./dashboard-html";
 import { applyConnectAttemptTimeout } from "./network";
+import { parseOrRepairJson } from "./json-repair";
 
 /**
  * Google rejected the request itself (HTTP 400): a tool schema it cannot take, a
@@ -362,6 +363,33 @@ export class BridgeServer {
             return;
           }
 
+          // Pool API: Push Account Credential directly (no browser popup needed)
+          if ((pathname === "/api/accounts/push" || pathname === "/api/pool/push") && req.method === "POST") {
+            const body = await this.parseBody(req);
+            const refreshToken = body.refreshToken || body.refresh_token;
+            if (!refreshToken || typeof refreshToken !== "string") {
+              res.writeHead(400, { "Content-Type": "application/json" });
+              res.end(JSON.stringify({ error: "refreshToken is required" }));
+              return;
+            }
+
+            try {
+              const summary = await this.oauth.pushAccount({
+                refreshToken,
+                accessToken: body.accessToken || body.access_token,
+                email: body.email,
+                name: body.name,
+                projectId: body.projectId || body.project_id,
+              });
+              res.writeHead(200, { "Content-Type": "application/json" });
+              res.end(JSON.stringify({ status: "ok", account: summary }));
+            } catch (err: any) {
+              res.writeHead(400, { "Content-Type": "application/json" });
+              res.end(JSON.stringify({ error: err.message || "Failed to push account" }));
+            }
+            return;
+          }
+
           // Pool API: Add Google Account via OAuth
           if (pathname === "/api/pool/auth-url" && req.method === "GET") {
             const authUrl = this.oauth.getWebOAuthUrl();
@@ -635,6 +663,7 @@ export class BridgeServer {
               currentBlockType = null;
               sawToolUse = true;
               const toolUseId = `call_${crypto.randomBytes(8).toString("hex")}`;
+              const cleanArgs = parseOrRepairJson(part.functionCall.args, {});
               res.write(
                 `event: content_block_start\ndata: ${JSON.stringify({
                   type: "content_block_start",
@@ -653,7 +682,7 @@ export class BridgeServer {
                   index: currentBlockIndex,
                   delta: {
                     type: "input_json_delta",
-                    partial_json: JSON.stringify(part.functionCall.args || {}),
+                    partial_json: JSON.stringify(cleanArgs),
                   },
                 })}\n\n`
               );
@@ -866,6 +895,7 @@ export class BridgeServer {
               outputTokens += Math.ceil(text.length / 4);
             } else if (part.functionCall) {
               const toolCallId = part.functionCall.id || `call_${crypto.randomBytes(8).toString("hex")}`;
+              const cleanArgs = parseOrRepairJson(part.functionCall.args, {});
               res.write(
                 `data: ${JSON.stringify({
                   id: cmplId,
@@ -883,7 +913,7 @@ export class BridgeServer {
                             type: "function",
                             function: {
                               name: part.functionCall.name,
-                              arguments: JSON.stringify(part.functionCall.args || {}),
+                              arguments: JSON.stringify(cleanArgs),
                             },
                           },
                         ],
@@ -957,7 +987,7 @@ export class BridgeServer {
       }
     } else {
       const resp = await this.client.generateContent(payload);
-      const formatted = Transformer.antigravityToOpenAI(resp, requestedModel);
+      const formatted = Transformer.antigravityToOpenAI(resp, requestedModel, body?.response_format);
       // The tracker keeps visible output and reasoning in separate columns, while
       // the response's completion_tokens now includes the reasoning — so take it
       // back out, or bridge:usage would count every thought twice.
