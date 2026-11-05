@@ -259,7 +259,13 @@ export class OAuthManager {
       );
 
       if (existingIdx >= 0) {
-        storage.accounts[existingIdx] = token;
+        const existing = storage.accounts[existingIdx];
+        storage.accounts[existingIdx] = {
+          ...existing,
+          ...token,
+          webCookies: token.webCookies !== undefined ? token.webCookies : existing.webCookies,
+          webLinkedAt: token.webLinkedAt !== undefined ? token.webLinkedAt : existing.webLinkedAt,
+        };
         storage.activeAccountIndex = existingIdx;
       } else {
         storage.accounts.push(token);
@@ -747,6 +753,8 @@ export class OAuthManager {
       refreshToken: refreshToken,
       expiresAt: expiresAt,
       projectId: owner?.projectId || DEFAULT_PROJECT_ID,
+      webCookies: owner?.webCookies,
+      webLinkedAt: owner?.webLinkedAt,
     };
 
     this.saveAccount(updated);

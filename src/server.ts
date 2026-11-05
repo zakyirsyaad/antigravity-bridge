@@ -639,16 +639,21 @@ export class BridgeServer {
               },
             })}\n\n`
           );
+          let started = false;
+          let totalChars = 0;
           for await (const chunk of stream) {
             const text = chunk.response?.candidates?.[0]?.content?.parts?.[0]?.text || "";
             if (text) {
-              res.write(
-                `event: content_block_start\ndata: ${JSON.stringify({
-                  type: "content_block_start",
-                  index: 0,
-                  content_block: { type: "text", text: "" },
-                })}\n\n`
-              );
+              if (!started) {
+                res.write(
+                  `event: content_block_start\ndata: ${JSON.stringify({
+                    type: "content_block_start",
+                    index: 0,
+                    content_block: { type: "text", text: "" },
+                  })}\n\n`
+                );
+                started = true;
+              }
               res.write(
                 `event: content_block_delta\ndata: ${JSON.stringify({
                   type: "content_block_delta",
@@ -656,27 +661,41 @@ export class BridgeServer {
                   delta: { type: "text_delta", text },
                 })}\n\n`
               );
-              res.write(
-                `event: content_block_stop\ndata: ${JSON.stringify({
-                  type: "content_block_stop",
-                  index: 0,
-                })}\n\n`
-              );
+              totalChars += text.length;
             }
           }
+          if (started) {
+            res.write(
+              `event: content_block_stop\ndata: ${JSON.stringify({
+                type: "content_block_stop",
+                index: 0,
+              })}\n\n`
+            );
+          }
+          const estimatedTokens = Math.max(1, Math.ceil(totalChars / 4));
           res.write(
             `event: message_delta\ndata: ${JSON.stringify({
               type: "message_delta",
               delta: { stop_reason: "end_turn", stop_sequence: null },
-              usage: { output_tokens: 10 },
+              usage: { output_tokens: estimatedTokens },
             })}\n\n`
           );
           res.write(`event: message_stop\ndata: {"type":"message_stop"}\n\n`);
           res.end();
           return;
         } catch (err: any) {
-          res.writeHead(500, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: { message: err.message || "Gemini Web stream failed" } }));
+          if (res.headersSent) {
+            res.write(
+              `event: error\ndata: ${JSON.stringify({
+                type: "error",
+                error: { type: "api_error", message: err.message || "Gemini Web stream failed" },
+              })}\n\n`
+            );
+            res.end();
+          } else {
+            res.writeHead(500, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: { message: err.message || "Gemini Web stream failed" } }));
+          }
           return;
         }
       } else {

@@ -134,7 +134,24 @@ async function runTests() {
     console.log("\n[4/5] Model routing check helper ...");
     expect("detects gemini-argon-4 as web model", GeminiWebClient.isGeminiWebModel("gemini-argon-4"), true);
     expect("detects gemini-auto as web model", GeminiWebClient.isGeminiWebModel("gemini-auto"), true);
+    expect("detects prefixed google/gemini-auto as web model", GeminiWebClient.isGeminiWebModel("google/gemini-auto"), true);
     expect("detects claude-opus as non-web model", GeminiWebClient.isGeminiWebModel("claude-opus-4-6-thinking"), false);
+
+    console.log("\n[5/5] Token refresh preserves webCookies and webLinkedAt ...");
+    const accBefore = mockStorage.accounts[0];
+    expect("accBefore has webCookies", Boolean(accBefore.webCookies), true);
+    // Simulate saveAccount with refreshed OAuth token without webCookies
+    oauth.saveAccount({
+      email: accBefore.email,
+      name: accBefore.name,
+      accessToken: "new-access-token",
+      refreshToken: accBefore.refreshToken,
+      expiresAt: Date.now() + 3600000,
+      projectId: accBefore.projectId,
+    });
+    const accAfter = mockStorage.accounts[0];
+    expect("preserves webCookies across token refresh", Boolean(accAfter.webCookies), true);
+    expect("accessToken updated", accAfter.accessToken, "new-access-token");
 
   } finally {
     await server.stop();
