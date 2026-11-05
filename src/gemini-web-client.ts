@@ -177,13 +177,19 @@ export class GeminiWebClient {
    * Helper extracting SNlM0e, buildLabel, and sessionID from HTML
    */
   public static extractSessionParameters(html: string, cookieHeader: string): GeminiWebSession {
-    // 1. Extract SNlM0e (support varied JSON / JS quotes and whitespace)
+    // 1. Extract action token (SNlM0e or new WIZ_global_data action token thykhd)
     let at = "";
     const atMatch = html.match(/"SNlM0e"\s*:\s*"([^"]+)"/) || html.match(/\[\s*"SNlM0e"\s*,\s*"([^"]+)"\s*\]/);
     if (atMatch) {
       at = atMatch[1];
     } else {
-      throw new Error("Failed to extract SNlM0e session token from Gemini Web HTML (check your cookie session)");
+      // Fallback to WIZ_global_data action token (Google Gemini 2026 update: thykhd or uS02ke)
+      const wizMatch = html.match(/"thykhd"\s*:\s*"([^"]+)"/) || html.match(/"uS02ke"\s*:\s*"([^"]+)"/);
+      if (wizMatch) {
+        at = wizMatch[1];
+      } else {
+        throw new Error("Failed to extract action session token from Gemini Web HTML (check your cookie session)");
+      }
     }
 
     // 2. Extract buildLabel (cfb2h)
