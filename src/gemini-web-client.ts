@@ -45,8 +45,17 @@ export class GeminiWebClient {
   }
 
   public setCredentials(creds: GeminiWebCredentials): void {
+    if (
+      this.credentials &&
+      this.credentials.rawCookies === creds.rawCookies &&
+      this.credentials.psid === creds.psid &&
+      this.credentials.psidts === creds.psidts &&
+      this.credentials.authUser === creds.authUser
+    ) {
+      return; // Credentials unchanged; preserve cached session
+    }
     this.credentials = creds;
-    this.session = null; // Invalidate cached session
+    this.session = null; // Invalidate cached session only when credentials change
   }
 
   public hasCredentials(): boolean {
@@ -153,6 +162,27 @@ export class GeminiWebClient {
       cookies: cookieHeader,
       expiresAt: Date.now() + 6 * 3600 * 1000, // 6 hour TTL
     };
+  }
+
+  /**
+   * Checks whether a requested model name targets the Gemini Web engine.
+   * Strips routing prefixes (e.g. google/, antigravity-, antigravity/) before testing.
+   */
+  public static isGeminiWebModel(modelName: string): boolean {
+    if (!modelName || typeof modelName !== "string") return false;
+    const clean = modelName
+      .trim()
+      .toLowerCase()
+      .replace(/^(google|antigravity)\//, "")
+      .replace(/^antigravity-/, "");
+
+    return (
+      clean.startsWith("gemini-argon") ||
+      clean === "gemini-auto" ||
+      clean === "gemini-advanced" ||
+      clean.startsWith("gemini-web-") ||
+      clean.includes("argon")
+    );
   }
 
   /**

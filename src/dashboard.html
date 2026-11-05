@@ -1322,6 +1322,44 @@ print(response.choices[0].message.content)</pre>
     </div>
   </div>
 
+  <!-- Link Gemini Web Cookies Modal -->
+  <div id="linkWebModal" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.75); backdrop-filter: blur(4px); z-index: 1000; align-items: center; justify-content: center;">
+    <div style="background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); width: 90%; max-width: 520px; padding: 24px; box-shadow: var(--shadow-lg);">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">
+        <h3 style="margin: 0; font-size: 1.1rem; font-weight: 600; color: var(--text-primary); display: flex; align-items: center; gap: 8px;">
+          <span>🔗</span> Link Gemini Web (Argon 4 & Web Models)
+        </h3>
+        <button type="button" onclick="closeLinkWebModal()" style="background: transparent; border: none; color: var(--text-muted); cursor: pointer; font-size: 1.2rem; padding: 4px;">&times;</button>
+      </div>
+
+      <p style="font-size: 0.82rem; color: var(--text-secondary); margin-bottom: 12px; line-height: 1.45;">
+        Upgrade this account into a <strong>Hybrid Account</strong> by linking its browser session cookie. This enables access to <strong>Gemini Argon 4</strong>, <code>gemini-auto</code>, and web-exclusive models.
+      </p>
+
+      <div style="background: var(--surface-subtle); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 10px 12px; font-size: 0.76rem; color: var(--text-muted); margin-bottom: 14px; line-height: 1.4;">
+        💡 <strong>How to get cookies:</strong> Open <a href="https://gemini.google.com" target="_blank" style="color: var(--emerald);">gemini.google.com</a> in browser &rarr; Press <code>F12</code> &rarr; Go to <strong>Application</strong> &rarr; <strong>Cookies</strong> &rarr; Copy <code>__Secure-1PSID</code> (or paste the entire Cookie header).
+      </div>
+
+      <div style="display: flex; flex-direction: column; gap: 12px; margin-bottom: 16px;">
+        <div>
+          <label style="display: block; font-size: 0.78rem; font-weight: 500; color: var(--text-muted); margin-bottom: 4px;">Target Account</label>
+          <input type="text" id="linkWebEmail" readonly style="width: 100%; box-sizing: border-box; background: var(--surface-subtle); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 8px 12px; color: var(--text-muted); font-family: var(--font-mono); font-size: 0.85rem; cursor: not-allowed;" />
+        </div>
+        <div>
+          <label style="display: block; font-size: 0.78rem; font-weight: 500; color: var(--text-muted); margin-bottom: 4px;">Cookies or __Secure-1PSID (required)</label>
+          <textarea id="linkWebCookies" rows="3" placeholder="__Secure-1PSID=... or paste entire cookie header" style="width: 100%; box-sizing: border-box; background: var(--surface-subtle); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 8px 12px; color: var(--text-primary); font-family: var(--font-mono); font-size: 0.82rem; resize: vertical;"></textarea>
+        </div>
+      </div>
+
+      <div id="linkWebErrorMsg" style="display: none; font-size: 0.8rem; margin-bottom: 16px;"></div>
+
+      <div style="display: flex; justify-content: flex-end; gap: 8px;">
+        <button type="button" class="btn btn-secondary" onclick="closeLinkWebModal()">Cancel</button>
+        <button type="button" id="linkWebSubmitBtn" class="btn btn-primary" onclick="submitLinkWebCookies()">Link Gemini Web</button>
+      </div>
+    </div>
+  </div>
+
   <script>
     let poolCache = null;
 
@@ -1648,6 +1686,10 @@ print(response.choices[0].message.content)</pre>
         '</div>';
 
 
+        const webBadge = acc.hasWebCookies
+          ? '<span class="tier-chip" style="background: rgba(16, 185, 129, 0.15); color: var(--emerald); border-color: rgba(16, 185, 129, 0.3);" title="Gemini Web (Argon 4 / Web Models) is linked">● Web Linked</span>'
+          : '<span class="tier-chip" style="opacity: 0.5; color: var(--text-muted);" title="Gemini Web cookies not linked">○ Web Unlinked</span>';
+
         card.innerHTML = '<div class="card-top">' +
           '<div class="card-identity">' +
             '<div class="avatar">' + initial + '</div>' +
@@ -1655,6 +1697,7 @@ print(response.choices[0].message.content)</pre>
               '<div class="acc-email" title="' + acc.email + '">' + acc.email + '</div>' +
               '<div class="acc-badges">' +
                 '<span class="tier-chip">' + tierName + '</span>' +
+                webBadge +
               '</div>' +
             '</div>' +
           '</div>' +
@@ -1663,11 +1706,12 @@ print(response.choices[0].message.content)</pre>
         familyHtml +
         metersHtml +
         '<div class="card-footer">' +
-          (acc.isActive ? 
-            '<button class="btn btn-sm btn-action" disabled style="opacity: 0.6; cursor: default;">● Currently Active</button>' : 
+          (acc.isActive ?
+            '<button class="btn btn-sm btn-action" disabled style="opacity: 0.6; cursor: default;">● Currently Active</button>' :
             '<button class="btn btn-sm btn-primary btn-action" onclick="switchAccount(\'' + acc.email + '\')">Set Active</button>'
           ) +
-          (acc.status === "cooling_down" ? 
+          '<button class="btn btn-sm btn-secondary" onclick="openLinkWebModal(\'' + acc.email + '\')" title="Link Gemini Web session cookies to access Gemini Argon 4 and web models">🔗 Link Web</button>' +
+          (acc.status === "cooling_down" ?
             '<button class="btn btn-sm" onclick="clearCooldown(\'' + acc.email + '\')">Clear Cooldown</button>' : ''
           ) +
           '<button class="btn btn-sm btn-icon-danger" onclick="deleteAccount(\'' + acc.email + '\')" title="Remove account from pool">✕</button>' +
@@ -1924,6 +1968,84 @@ print(response.choices[0].message.content)</pre>
         if (tokenInput) tokenInput.value = "";
         if (emailInput) emailInput.value = "";
         closePushModal();
+        fetchPoolStatus();
+      } catch (err) {
+        if (errEl) {
+          errEl.textContent = err.message;
+          errEl.style.display = "block";
+          errEl.style.color = "var(--rose)";
+        }
+      } finally {
+        if (btn) btn.disabled = false;
+      }
+    }
+
+    function openLinkWebModal(email) {
+      const modal = document.getElementById("linkWebModal");
+      if (modal) modal.style.display = "flex";
+      const emailInput = document.getElementById("linkWebEmail");
+      if (emailInput) emailInput.value = email || "";
+      const cookieInput = document.getElementById("linkWebCookies");
+      if (cookieInput) {
+        cookieInput.value = "";
+        cookieInput.focus();
+      }
+      const errEl = document.getElementById("linkWebErrorMsg");
+      if (errEl) {
+        errEl.textContent = "";
+        errEl.style.display = "none";
+      }
+    }
+
+    function closeLinkWebModal() {
+      const modal = document.getElementById("linkWebModal");
+      if (modal) modal.style.display = "none";
+      const errEl = document.getElementById("linkWebErrorMsg");
+      if (errEl) {
+        errEl.textContent = "";
+        errEl.style.display = "none";
+      }
+    }
+
+    async function submitLinkWebCookies() {
+      const emailInput = document.getElementById("linkWebEmail");
+      const cookieInput = document.getElementById("linkWebCookies");
+      const errEl = document.getElementById("linkWebErrorMsg");
+      const btn = document.getElementById("linkWebSubmitBtn");
+
+      const email = emailInput ? emailInput.value.trim() : "";
+      const cookies = cookieInput ? cookieInput.value.trim() : "";
+
+      if (!cookies) {
+        if (errEl) {
+          errEl.textContent = "Cookie or __Secure-1PSID value is required.";
+          errEl.style.display = "block";
+          errEl.style.color = "var(--rose)";
+        }
+        return;
+      }
+
+      if (btn) btn.disabled = true;
+      if (errEl) {
+        errEl.textContent = "Linking cookies to account...";
+        errEl.style.display = "block";
+        errEl.style.color = "var(--text-muted)";
+      }
+
+      try {
+        const res = await apiFetch("/api/accounts/link-web", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: email, cookies: cookies }),
+        });
+
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data.error || "Failed to link cookies");
+        }
+
+        if (cookieInput) cookieInput.value = "";
+        closeLinkWebModal();
         fetchPoolStatus();
       } catch (err) {
         if (errEl) {

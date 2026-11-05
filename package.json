@@ -50,6 +50,7 @@
     "test:accounts-push": "tsx test/accounts-push.test.ts",
     "test:gemini-web": "tsx test/gemini-web-fallback.test.ts",
     "test:images": "tsx test/images-generations.test.ts",
+    "test:hybrid": "tsx test/hybrid-accounts.test.ts",
     "build": "tsc"
   },
   "keywords": [

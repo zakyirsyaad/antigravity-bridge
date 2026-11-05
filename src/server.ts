@@ -12,6 +12,7 @@ import { QuotaTracker } from "./quota-tracker";
 import { getDashboardHtml } from "./dashboard-html";
 import { applyConnectAttemptTimeout } from "./network";
 import { parseOrRepairJson } from "./json-repair";
+import { GeminiWebClient } from "./gemini-web-client";
 
 /**
  * Google rejected the request itself (HTTP 400): a tool schema it cannot take, a
@@ -390,6 +391,35 @@ export class BridgeServer {
             return;
           }
 
+          // Pool API: Link Gemini Web session cookies to an existing account
+          if (pathname === "/api/accounts/link-web" && req.method === "POST") {
+            const body = await this.parseBody(req);
+            const email = (body.email || "").trim();
+            const cookies = (body.cookies || "").trim();
+
+            if (!email) {
+              res.writeHead(400, { "Content-Type": "application/json" });
+              res.end(JSON.stringify({ error: "Email is required" }));
+              return;
+            }
+            if (!cookies) {
+              res.writeHead(400, { "Content-Type": "application/json" });
+              res.end(JSON.stringify({ error: "Cookies are required (must include __Secure-1PSID)" }));
+              return;
+            }
+
+            const success = this.oauth.linkWebCookies(email, cookies);
+            if (!success) {
+              res.writeHead(400, { "Content-Type": "application/json" });
+              res.end(JSON.stringify({ error: "Failed to link cookies: account not found or invalid cookie format" }));
+              return;
+            }
+
+            res.writeHead(200, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ status: "ok", email, hasWebCookies: true }));
+            return;
+          }
+
           // Pool API: Add Google Account via OAuth
           if (pathname === "/api/pool/auth-url" && req.method === "GET") {
             const authUrl = this.oauth.getWebOAuthUrl();
@@ -563,6 +593,125 @@ export class BridgeServer {
     const requestedModel = body.model || "claude-opus-4-6-thinking";
     const payload = Transformer.anthropicToAntigravity(body);
     const msgId = `msg_${crypto.randomBytes(12).toString("hex")}`;
+
+    // Dedicated routing for Gemini Web models (e.g. Gemini Argon 4, Gemini Auto)
+    if (GeminiWebClient.isGeminiWebModel(requestedModel)) {
+      const hybridAcc = this.oauth.findAccountWithWebCookies();
+      const geminiWeb = GeminiWebClient.getInstance();
+      if (hybridAcc?.webCookies) {
+        geminiWeb.setCredentials({ rawCookies: hybridAcc.webCookies });
+      }
+
+      if (!geminiWeb.hasCredentials()) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            type: "error",
+            error: {
+              type: "invalid_request_error",
+              message: `Model "${requestedModel}" requires a linked Gemini Web session. Please link cookies to your account in the dashboard.`,
+            },
+          })
+        );
+        return;
+      }
+
+      if (body.stream) {
+        try {
+          const stream = geminiWeb.streamGenerateContent(payload.request);
+          res.writeHead(200, {
+            "Content-Type": "text/event-stream; charset=utf-8",
+            "Cache-Control": "no-cache",
+            Connection: "keep-alive",
+          });
+          res.write(
+            `event: message_start\ndata: ${JSON.stringify({
+              type: "message_start",
+              message: {
+                id: msgId,
+                type: "message",
+                role: "assistant",
+                content: [],
+                model: requestedModel,
+                stop_reason: null,
+                stop_sequence: null,
+                usage: { input_tokens: 0, output_tokens: 0 },
+              },
+            })}\n\n`
+          );
+          let started = false;
+          let totalChars = 0;
+          for await (const chunk of stream) {
+            const text = chunk.response?.candidates?.[0]?.content?.parts?.[0]?.text || "";
+            if (text) {
+              if (!started) {
+                res.write(
+                  `event: content_block_start\ndata: ${JSON.stringify({
+                    type: "content_block_start",
+                    index: 0,
+                    content_block: { type: "text", text: "" },
+                  })}\n\n`
+                );
+                started = true;
+              }
+              res.write(
+                `event: content_block_delta\ndata: ${JSON.stringify({
+                  type: "content_block_delta",
+                  index: 0,
+                  delta: { type: "text_delta", text },
+                })}\n\n`
+              );
+              totalChars += text.length;
+            }
+          }
+          if (started) {
+            res.write(
+              `event: content_block_stop\ndata: ${JSON.stringify({
+                type: "content_block_stop",
+                index: 0,
+              })}\n\n`
+            );
+          }
+          const estimatedTokens = Math.max(1, Math.ceil(totalChars / 4));
+          res.write(
+            `event: message_delta\ndata: ${JSON.stringify({
+              type: "message_delta",
+              delta: { stop_reason: "end_turn", stop_sequence: null },
+              usage: { output_tokens: estimatedTokens },
+            })}\n\n`
+          );
+          res.write(`event: message_stop\ndata: {"type":"message_stop"}\n\n`);
+          res.end();
+          return;
+        } catch (err: any) {
+          if (res.headersSent) {
+            res.write(
+              `event: error\ndata: ${JSON.stringify({
+                type: "error",
+                error: { type: "api_error", message: err.message || "Gemini Web stream failed" },
+              })}\n\n`
+            );
+            res.end();
+          } else {
+            res.writeHead(500, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: { message: err.message || "Gemini Web stream failed" } }));
+          }
+          return;
+        }
+      } else {
+        try {
+          const resp = await geminiWeb.generateContent(payload.request);
+          const formatted = Transformer.antigravityToAnthropic(resp, requestedModel);
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify(formatted));
+          return;
+        } catch (err: any) {
+          res.writeHead(500, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: { message: err.message || "Gemini Web request failed" } }));
+          return;
+        }
+      }
+    }
 
     if (body.stream) {
       try {
@@ -808,6 +957,76 @@ export class BridgeServer {
     const payload = Transformer.openaiToAntigravity(body);
     const cmplId = `chatcmpl-${crypto.randomBytes(12).toString("hex")}`;
     const created = Math.floor(Date.now() / 1000);
+
+    // Dedicated routing for Gemini Web models (e.g. Gemini Argon 4, Gemini Auto)
+    if (GeminiWebClient.isGeminiWebModel(requestedModel)) {
+      const hybridAcc = this.oauth.findAccountWithWebCookies();
+      const geminiWeb = GeminiWebClient.getInstance();
+      if (hybridAcc?.webCookies) {
+        geminiWeb.setCredentials({ rawCookies: hybridAcc.webCookies });
+      }
+
+      if (!geminiWeb.hasCredentials()) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            error: {
+              message: `Model "${requestedModel}" requires a linked Gemini Web session. Please link cookies to your account in the dashboard.`,
+              type: "invalid_request_error",
+            },
+          })
+        );
+        return;
+      }
+
+      if (body.stream) {
+        this.beginOpenAIStream(res);
+        try {
+          const stream = geminiWeb.streamGenerateContent(payload.request);
+          for await (const chunk of stream) {
+            const text = chunk.response?.candidates?.[0]?.content?.parts?.[0]?.text || "";
+            if (text) {
+              res.write(
+                `data: ${JSON.stringify({
+                  id: cmplId,
+                  object: "chat.completion.chunk",
+                  created,
+                  model: requestedModel,
+                  choices: [{ index: 0, delta: { content: text }, finish_reason: null }],
+                })}\n\n`
+              );
+            }
+          }
+          res.write(
+            `data: ${JSON.stringify({
+              id: cmplId,
+              object: "chat.completion.chunk",
+              created,
+              model: requestedModel,
+              choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+            })}\n\n`
+          );
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
+        } catch (err: any) {
+          this.endOpenAIStreamWithError(res, err);
+          return;
+        }
+      } else {
+        try {
+          const resp = await geminiWeb.generateContent(payload.request);
+          const formatted = Transformer.antigravityToOpenAI(resp, requestedModel, body?.response_format);
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify(formatted));
+          return;
+        } catch (err: any) {
+          res.writeHead(500, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: { message: err.message || "Gemini Web request failed", type: "api_error" } }));
+          return;
+        }
+      }
+    }
 
     if (body.stream) {
       // Obtain the upstream stream BEFORE committing to 200. This handler used to

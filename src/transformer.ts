@@ -439,6 +439,18 @@ export class Transformer {
     const raw = (requestedModel || "").toLowerCase().trim();
     const clean = this.stripRoutingPrefix(raw.replace(/^google\//, "").replace(/^antigravity-/, ""));
 
+    // Gemini Web models (e.g. gemini-argon-4, gemini-auto, gemini-advanced, gemini-web-*)
+    // pass through directly to be routed to the Gemini Web engine.
+    if (
+      clean.startsWith("gemini-argon") ||
+      clean === "gemini-auto" ||
+      clean === "gemini-advanced" ||
+      clean.startsWith("gemini-web-") ||
+      clean.includes("argon")
+    ) {
+      return { id: clean };
+    }
+
     const exact = SUPPORTED_MODELS.find((m) => m.id === clean || m.name.toLowerCase() === raw);
     if (exact) return { id: exact.id };
 

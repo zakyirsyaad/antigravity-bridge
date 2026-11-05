@@ -58,6 +58,8 @@ export interface AccountToken {
   refreshToken: string;
   expiresAt: number; // timestamp in ms
   projectId?: string;
+  webCookies?: string; // __Secure-1PSID / __Secure-1PSIDTS cookies for Gemini Web
+  webLinkedAt?: number;
 }
 
 export interface AccountsStorage {
@@ -76,11 +78,17 @@ export interface PublicAccountSummary {
   email?: string;
   name?: string;
   projectId?: string;
+  hasWebCookies?: boolean;
 }
 
 export function toPublicAccountSummary(account: AccountToken | null): PublicAccountSummary | null {
   if (!account) return null;
-  return { email: account.email, name: account.name, projectId: account.projectId };
+  return {
+    email: account.email,
+    name: account.name,
+    projectId: account.projectId,
+    hasWebCookies: Boolean(account.webCookies && account.webCookies.includes("__Secure-1PSID")),
+  };
 }
 
 function base64URLEncode(str: Buffer): string {
@@ -251,7 +259,13 @@ export class OAuthManager {
       );
 
       if (existingIdx >= 0) {
-        storage.accounts[existingIdx] = token;
+        const existing = storage.accounts[existingIdx];
+        storage.accounts[existingIdx] = {
+          ...existing,
+          ...token,
+          webCookies: token.webCookies !== undefined ? token.webCookies : existing.webCookies,
+          webLinkedAt: token.webLinkedAt !== undefined ? token.webLinkedAt : existing.webLinkedAt,
+        };
         storage.activeAccountIndex = existingIdx;
       } else {
         storage.accounts.push(token);
@@ -335,6 +349,67 @@ export class OAuthManager {
       name: token.name,
       projectId: token.projectId,
     };
+  }
+
+  /**
+   * Links or updates Gemini Web session cookies on an existing account.
+   * Flexibly handles either full raw cookie header string or raw __Secure-1PSID value.
+   */
+  public linkWebCookies(email: string, rawCookies: string): boolean {
+    const targetEmail = (email || "").trim().toLowerCase();
+    if (!targetEmail) return false;
+
+    let cookies = (rawCookies || "").trim();
+    if (!cookies) return false;
+
+    // Option A: If string doesn't contain '=', assume it's the raw __Secure-1PSID token value
+    if (!cookies.includes("=")) {
+      cookies = `__Secure-1PSID=${cookies}`;
+    }
+
+    if (!cookies.includes("__Secure-1PSID")) {
+      return false;
+    }
+
+    try {
+      const storage = this.readStorage();
+      const idx = storage.accounts.findIndex(
+        (a) => (a.email || "").toLowerCase() === targetEmail
+      );
+      if (idx === -1) {
+        return false;
+      }
+
+      storage.accounts[idx].webCookies = cookies;
+      storage.accounts[idx].webLinkedAt = Date.now();
+      this.writeStorage(storage);
+
+      this.recordPoolEvent({
+        type: "info",
+        message: `Linked Gemini Web session cookies to ${targetEmail}`,
+        toAccount: targetEmail,
+      });
+
+      return true;
+    } catch (err: any) {
+      console.warn("Failed to link web cookies:", err);
+      return false;
+    }
+  }
+
+  /**
+   * Finds the first account in the pool that has Gemini Web cookies linked.
+   */
+  public findAccountWithWebCookies(): AccountToken | null {
+    const list = this.listAccounts();
+    const active = list.accounts[list.activeIndex];
+    if (active && active.webCookies && active.webCookies.includes("__Secure-1PSID")) {
+      return active;
+    }
+    const found = list.accounts.find(
+      (a) => a.webCookies && a.webCookies.includes("__Secure-1PSID")
+    );
+    return found || null;
   }
 
   /**
@@ -588,6 +663,7 @@ export class OAuthManager {
         name: acc.name,
         isActive,
         status,
+        hasWebCookies: Boolean(acc.webCookies && acc.webCookies.includes("__Secure-1PSID")),
         cooldown,
         resting,
         quota: tracker.getQuotaForAccount(email),
@@ -677,6 +753,8 @@ export class OAuthManager {
       refreshToken: refreshToken,
       expiresAt: expiresAt,
       projectId: owner?.projectId || DEFAULT_PROJECT_ID,
+      webCookies: owner?.webCookies,
+      webLinkedAt: owner?.webLinkedAt,
     };
 
     this.saveAccount(updated);
