@@ -49,6 +49,7 @@
     "test:json-repair": "tsx test/json-repair.test.ts",
     "test:accounts-push": "tsx test/accounts-push.test.ts",
     "test:gemini-web": "tsx test/gemini-web-fallback.test.ts",
+    "test:images": "tsx test/images-generations.test.ts",
     "build": "tsc"
   },
   "keywords": [
