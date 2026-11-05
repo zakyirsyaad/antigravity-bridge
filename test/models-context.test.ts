@@ -28,6 +28,7 @@ const TEST_PORT = 52145;
 (OAuthManager.prototype as any).getValidAccessToken = async () => "token";
 (OAuthManager.prototype as any).isAutoFailoverEnabled = () => false;
 (OAuthManager.prototype as any).selectNextAvailableAccount = () => null;
+(OAuthManager.prototype as any).findAccountWithWebCookies = () => null;
 (QuotaTracker.prototype as any).isAccountRateLimited = () => false;
 (QuotaTracker.prototype as any).record429 = () => {};
 (UsageTracker.prototype as any).recordUsage = () => {};

@@ -131,11 +131,23 @@ async function runTests() {
       "Hello from Gemini Argon 4"
     );
 
-    console.log("\n[4/5] Model routing check helper ...");
+    console.log("\n[4/5] Model routing check helper & /v1/models listing ...");
     expect("detects gemini-argon-4 as web model", GeminiWebClient.isGeminiWebModel("gemini-argon-4"), true);
     expect("detects gemini-auto as web model", GeminiWebClient.isGeminiWebModel("gemini-auto"), true);
     expect("detects prefixed google/gemini-auto as web model", GeminiWebClient.isGeminiWebModel("google/gemini-auto"), true);
     expect("detects claude-opus as non-web model", GeminiWebClient.isGeminiWebModel("claude-opus-4-6-thinking"), false);
+
+    // Verify /v1/models lists gemini-argon-4 when hybrid account is linked
+    const modelsRes = await new Promise<{ data: any[] }>((resolve) => {
+      http.get(`${BASE_URL}/v1/models`, (res) => {
+        let raw = "";
+        res.on("data", (c) => (raw += c));
+        res.on("end", () => resolve(JSON.parse(raw)));
+      });
+    });
+    const argonInList = modelsRes.data?.find((m: any) => m.id === "gemini-argon-4");
+    expect("/v1/models exposes gemini-argon-4", Boolean(argonInList), true);
+    expect("gemini-argon-4 owned_by", argonInList?.owned_by, "google-gemini-web");
 
     console.log("\n[5/5] Token refresh preserves webCookies and webLinkedAt ...");
     const accBefore = mockStorage.accounts[0];
