@@ -139,28 +139,38 @@ export class GeminiWebClient {
       throw new Error("Gemini Web fallback credentials missing (set GEMINI_WEB_COOKIES or GEMINI_PSID)");
     }
 
+    // Attempt root /app, /u/0/app, and /u/1/app in order to handle Google multi-login accounts
     const authUser = this.credentials?.authUser || "0";
-    const initUrl = authUser !== "0"
-      ? `https://gemini.google.com/u/${authUser}/app`
-      : "https://gemini.google.com/app";
+    const candidateUrls = [
+      authUser !== "0" ? `https://gemini.google.com/u/${authUser}/app` : "https://gemini.google.com/app",
+      "https://gemini.google.com/u/0/app",
+      "https://gemini.google.com/u/1/app",
+    ];
 
-    const res = await fetch(initUrl, {
-      method: "GET",
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Cookie": cookieHeader,
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-      },
-    });
+    let lastError: any = null;
+    for (const initUrl of candidateUrls) {
+      try {
+        const res = await fetch(initUrl, {
+          method: "GET",
+          headers: {
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Cookie": cookieHeader,
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+          },
+        });
 
-    if (!res.ok) {
-      throw new Error(`Gemini Web session init failed with HTTP ${res.status}`);
+        if (!res.ok) continue;
+
+        const html = await res.text();
+        const session = GeminiWebClient.extractSessionParameters(html, cookieHeader);
+        this.session = session;
+        return session;
+      } catch (err: any) {
+        lastError = err;
+      }
     }
 
-    const html = await res.text();
-    const session = GeminiWebClient.extractSessionParameters(html, cookieHeader);
-    this.session = session;
-    return session;
+    throw lastError || new Error("Failed to initialize Gemini Web session (check that your browser session cookies are still valid)");
   }
 
   /**
