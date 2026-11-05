@@ -1,7 +1,8 @@
 import crypto from "node:crypto";
 import { SUPPORTED_MODELS, SKIP_THOUGHT_SIGNATURE, findModel, ModelDef } from "./constants";
 import { AntigravityPayload } from "./antigravity-client";
-import { cleanToolDeclarations } from "./schema-cleaner";
+import { cleanToolDeclarations, cleanJSONSchemaForAntigravity } from "./schema-cleaner";
+import { repairJsonString, parseOrRepairJson } from "./json-repair";
 
 /** A model id the bridge cannot map to anything Google serves. */
 export class UnknownModelError extends Error {
@@ -735,10 +736,7 @@ export class Transformer {
         if (Array.isArray(msg.tool_calls)) {
           for (const tc of msg.tool_calls) {
             if (tc.function) {
-              let args = {};
-              try {
-                args = JSON.parse(tc.function.arguments || "{}");
-              } catch {}
+              const args = parseOrRepairJson(tc.function.arguments, {});
               const callId = tc.id || `call_${crypto.randomBytes(8).toString("hex")}`;
               parts.push({
                 functionCall: {
@@ -783,6 +781,17 @@ export class Transformer {
     }
     if (typeof body.top_p === "number") {
       generationConfig.topP = body.top_p;
+    }
+
+    // Support OpenAI response_format: { type: "json_object" } or { type: "json_schema", json_schema: {...} }
+    if (body.response_format && typeof body.response_format === "object") {
+      const rf = body.response_format;
+      if (rf.type === "json_object" || rf.type === "json_schema") {
+        generationConfig.responseMimeType = "application/json";
+        if (rf.type === "json_schema" && rf.json_schema?.schema) {
+          generationConfig.responseSchema = cleanJSONSchemaForAntigravity(rf.json_schema.schema);
+        }
+      }
     }
 
     const model = this.withAliasTier(findModel(targetModel), aliasTier);
@@ -967,11 +976,12 @@ export class Transformer {
         });
       } else if (part.functionCall) {
         stopReason = "tool_use";
+        const cleanArgs = parseOrRepairJson(part.functionCall.args, {});
         contentBlocks.push({
           type: "tool_use",
           id: `call_${crypto.randomBytes(8).toString("hex")}`,
           name: part.functionCall.name,
-          input: part.functionCall.args || {},
+          input: cleanArgs,
         });
       }
     }
@@ -995,7 +1005,7 @@ export class Transformer {
   /**
    * Format Antigravity response to OpenAI ChatCompletion response
    */
-  public static antigravityToOpenAI(resp: any, originalModel: string): any {
+  public static antigravityToOpenAI(resp: any, originalModel: string, responseFormat?: any): any {
     const raw = resp.response || resp;
     const candidate = raw.candidates?.[0] || {};
     const parts = candidate.content?.parts || [];
@@ -1012,12 +1022,13 @@ export class Transformer {
         text += part.text;
       } else if (part.functionCall) {
         finishReason = "tool_calls";
+        const cleanArgs = parseOrRepairJson(part.functionCall.args, {});
         toolCalls.push({
           id: `call_${crypto.randomBytes(8).toString("hex")}`,
           type: "function",
           function: {
             name: part.functionCall.name,
-            arguments: JSON.stringify(part.functionCall.args || {}),
+            arguments: JSON.stringify(cleanArgs),
           },
         });
       }
@@ -1025,6 +1036,11 @@ export class Transformer {
 
     if (candidate.finishReason === "MAX_TOKENS") {
       finishReason = "length";
+    }
+
+    // Auto-repair JSON response when response_format was requested as json_object or json_schema
+    if (responseFormat && (responseFormat.type === "json_object" || responseFormat.type === "json_schema") && text) {
+      text = repairJsonString(text);
     }
 
     const message: any = {
