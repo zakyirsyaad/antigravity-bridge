@@ -82,7 +82,38 @@ export class GeminiWebClient {
 
   public buildCookieHeader(): string {
     if (this.credentials?.rawCookies) {
-      return this.credentials.rawCookies;
+      // Filter out massive tracking cookies (NID, COMPASS) that exceed Node.js HTTP header size limits (UND_ERR_HEADERS_OVERFLOW)
+      const raw = this.credentials.rawCookies;
+      const essentialKeys = [
+        "__Secure-1PSID",
+        "__Secure-1PSIDTS",
+        "__Secure-1PAPISID",
+        "__Secure-3PSID",
+        "__Secure-3PSIDTS",
+        "__Secure-1PSIDCC",
+        "__Secure-3PSIDCC",
+        "SID",
+        "HSID",
+        "SSID",
+        "SAPISID",
+        "APISID",
+      ];
+      const found: string[] = [];
+      const parts = raw.split(";");
+      for (const p of parts) {
+        const trimmed = p.trim();
+        const eqIdx = trimmed.indexOf("=");
+        if (eqIdx !== -1) {
+          const k = trimmed.slice(0, eqIdx).trim();
+          if (essentialKeys.includes(k)) {
+            found.push(trimmed);
+          }
+        }
+      }
+      if (found.length > 0) {
+        return found.join("; ");
+      }
+      return raw;
     }
     const parts: string[] = [];
     if (this.credentials?.psid) {
@@ -214,13 +245,23 @@ export class GeminiWebClient {
 
   /**
    * Builds the double-JSON encoded RPC form payload (`f.req`).
+   * Supports specific modelId routing (e.g. Argon: 95a4c0abcba24364) at index 79.
    */
-  public static buildRpcPayload(prompt: string, atToken: string): URLSearchParams {
+  public static buildRpcPayload(prompt: string, atToken: string, modelId?: string): URLSearchParams {
     // Sparse array format used by assistant.lamda.BardFrontendService
     const innerData = new Array(81).fill(null);
     innerData[0] = [prompt];
     innerData[1] = ["en"];
     innerData[2] = ["", "", ""];
+
+    // If targeting Argon or specific model, route via index 79
+    if (modelId) {
+      if (modelId.toLowerCase().includes("argon") || modelId.toLowerCase().includes("gemini-argon")) {
+        innerData[79] = "95a4c0abcba24364"; // Exact Argon Model ID from otAQ7b discovery
+      } else {
+        innerData[79] = modelId;
+      }
+    }
 
     const fReq = JSON.stringify([null, JSON.stringify(innerData)]);
     return new URLSearchParams({
@@ -302,7 +343,7 @@ export class GeminiWebClient {
   /**
    * Generates content via Gemini Web upstream.
    */
-  public async generateContent(promptOrContents: any): Promise<any> {
+  public async generateContent(promptOrContents: any, targetModelId?: string): Promise<any> {
     const session = await this.ensureSession();
     let prompt = typeof promptOrContents === "string"
       ? promptOrContents
@@ -315,7 +356,7 @@ export class GeminiWebClient {
       ? `https://gemini.google.com/u/${authUser}/_/BardChatUi/data/assistant.lamda.BardFrontendService/StreamGenerate?bl=${encodeURIComponent(session.bl)}&f.sid=${encodeURIComponent(session.fsid)}&_reqid=${Math.floor(Math.random() * 89999 + 10000)}&rt=c`
       : `https://gemini.google.com/_/BardChatUi/data/assistant.lamda.BardFrontendService/StreamGenerate?bl=${encodeURIComponent(session.bl)}&f.sid=${encodeURIComponent(session.fsid)}&_reqid=${Math.floor(Math.random() * 89999 + 10000)}&rt=c`;
 
-    const bodyParams = GeminiWebClient.buildRpcPayload(prompt, session.at);
+    const bodyParams = GeminiWebClient.buildRpcPayload(prompt, session.at, targetModelId);
 
     const res = await fetch(generateUrl, {
       method: "POST",

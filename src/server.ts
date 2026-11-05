@@ -700,7 +700,7 @@ export class BridgeServer {
         }
       } else {
         try {
-          const resp = await geminiWeb.generateContent(payload.request);
+          const resp = await geminiWeb.generateContent(payload.request, requestedModel);
           const formatted = Transformer.antigravityToAnthropic(resp, requestedModel);
           res.writeHead(200, { "Content-Type": "application/json" });
           res.end(JSON.stringify(formatted));
@@ -1015,7 +1015,7 @@ export class BridgeServer {
         }
       } else {
         try {
-          const resp = await geminiWeb.generateContent(payload.request);
+          const resp = await geminiWeb.generateContent(payload.request, requestedModel);
           const formatted = Transformer.antigravityToOpenAI(resp, requestedModel, body?.response_format);
           res.writeHead(200, { "Content-Type": "application/json" });
           res.end(JSON.stringify(formatted));
