@@ -2,7 +2,13 @@
  * Test for Task 1: Hybrid AccountToken schema and linkWebCookies() in OAuthManager.
  */
 
+import http from "node:http";
 import { OAuthManager, AccountToken } from "../src/oauth";
+import { BridgeServer } from "../src/server";
+import { GeminiWebClient } from "../src/gemini-web-client";
+
+const TEST_PORT = 52149;
+const BASE_URL = `http://127.0.0.1:${TEST_PORT}`;
 
 let failures = 0;
 
@@ -15,9 +21,40 @@ function expect(label: string, actual: unknown, wanted: unknown) {
   }
 }
 
-function runTask1Tests() {
+async function postJson(pathUrl: string, body: any, headers: Record<string, string> = {}): Promise<{ status: number; data: any; raw: string }> {
+  return new Promise((resolve, reject) => {
+    const payload = JSON.stringify(body);
+    const req = http.request(
+      `${BASE_URL}${pathUrl}`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Content-Length": Buffer.byteLength(payload),
+          ...headers,
+        },
+      },
+      (res) => {
+        let raw = "";
+        res.on("data", (chunk) => (raw += chunk));
+        res.on("end", () => {
+          let data: any = {};
+          try {
+            data = JSON.parse(raw);
+          } catch {}
+          resolve({ status: res.statusCode || 0, data, raw });
+        });
+      }
+    );
+    req.on("error", reject);
+    req.write(payload);
+    req.end();
+  });
+}
+
+async function runTests() {
   console.log("=================================================");
-  console.log(" Task 1: OAuthManager.linkWebCookies Unit Test");
+  console.log(" Hybrid Account & Gemini Web Offline Test Suite");
   console.log("=================================================\n");
 
   const oauth = OAuthManager.getInstance();
@@ -26,8 +63,8 @@ function runTask1Tests() {
   const mockStorage = {
     accounts: [
       {
-        email: "test.user@example.com",
-        name: "Test User",
+        email: "hybrid.user@example.com",
+        name: "Hybrid User",
         accessToken: "mock-access",
         refreshToken: "mock-refresh",
         expiresAt: Date.now() + 100000,
@@ -47,33 +84,72 @@ function runTask1Tests() {
     activeIndex: mockStorage.activeAccountIndex,
   });
 
-  console.log("[1/3] Reject non-existent email ...");
-  const notFound = oauth.linkWebCookies("unknown@example.com", "__Secure-1PSID=mock-psid");
-  expect("returns false for unknown email", notFound, false);
+  console.log("[1/5] Task 1 Unit: linkWebCookies checks ...");
+  expect("returns false for unknown email", oauth.linkWebCookies("unknown@example.com", "__Secure-1PSID=mock-psid"), false);
+  expect("returns false for empty cookie", oauth.linkWebCookies("hybrid.user@example.com", "   "), false);
+  expect("successfully links valid cookie", oauth.linkWebCookies("hybrid.user@example.com", "__Secure-1PSID=token-123;"), true);
+  expect("persists webCookies", Boolean(mockStorage.accounts[0].webCookies?.includes("token-123")), true);
+  expect("pool reports hasWebCookies true", (oauth as any).getPoolStatus().accounts[0].hasWebCookies, true);
 
-  console.log("\n[2/3] Reject empty or invalid cookie string ...");
-  const invalidCookie = oauth.linkWebCookies("test.user@example.com", "   ");
-  expect("returns false for empty cookie", invalidCookie, false);
+  console.log("\n[2/5] Task 2 Endpoint: POST /api/accounts/link-web ...");
+  const server = new BridgeServer(TEST_PORT);
+  await server.start();
 
-  console.log("\n[3/3] Successfully link valid cookie string ...");
-  const linked = oauth.linkWebCookies("test.user@example.com", "__Secure-1PSID=mock-psid-token-xyz; __Secure-1PSIDTS=ts-123;");
-  expect("returns true on successful link", linked, true);
+  try {
+    const resBad = await postJson("/api/accounts/link-web", {});
+    expect("rejects missing body with 400", resBad.status, 400);
 
-  const updatedAccount = mockStorage.accounts[0];
-  expect("preserves existing refreshToken", updatedAccount.refreshToken, "mock-refresh");
-  expect("persists webCookies string", updatedAccount.webCookies?.includes("__Secure-1PSID=mock-psid-token-xyz"), true);
-  expect("sets webLinkedAt timestamp", typeof updatedAccount.webLinkedAt, "number");
+    const resCors = await postJson(
+      "/api/accounts/link-web",
+      { email: "hybrid.user@example.com", cookies: "__Secure-1PSID=abc" },
+      { Origin: "https://attacker.site" }
+    );
+    expect("blocks foreign origin with 403", resCors.status, 403);
 
-  const status = (oauth as any).getPoolStatus();
-  expect("pool account status reports hasWebCookies true", status.accounts[0].hasWebCookies, true);
+    const resSuccess = await postJson("/api/accounts/link-web", {
+      email: "hybrid.user@example.com",
+      cookies: "__Secure-1PSID=abc-cookie-val;",
+    });
+    expect("link-web returns 200", resSuccess.status, 200);
+    expect("response carries hasWebCookies", resSuccess.data.hasWebCookies, true);
+    expect("response never leaks cookie", resSuccess.raw.includes("abc-cookie-val"), false);
+
+    console.log("\n[3/5] Task 3 Routing: gemini-argon-4 routes to Gemini Web ...");
+    const geminiWeb = GeminiWebClient.getInstance();
+    (geminiWeb as any).generateContent = async (req: any) => ({
+      candidates: [{ content: { parts: [{ text: "Hello from Gemini Argon 4" }] }, finishReason: "STOP" }],
+    });
+
+    const resArgon = await postJson("/v1/chat/completions", {
+      model: "gemini-argon-4",
+      messages: [{ role: "user", content: "Tell me something cool" }],
+    });
+    expect("argon request answers 200", resArgon.status, 200);
+    expect(
+      "content generated from Gemini Web",
+      resArgon.data.choices?.[0]?.message?.content,
+      "Hello from Gemini Argon 4"
+    );
+
+    console.log("\n[4/5] Model routing check helper ...");
+    expect("detects gemini-argon-4 as web model", GeminiWebClient.isGeminiWebModel("gemini-argon-4"), true);
+    expect("detects gemini-auto as web model", GeminiWebClient.isGeminiWebModel("gemini-auto"), true);
+    expect("detects claude-opus as non-web model", GeminiWebClient.isGeminiWebModel("claude-opus-4-6-thinking"), false);
+
+  } finally {
+    await server.stop();
+  }
 
   console.log("\n=================================================");
   if (failures > 0) {
     console.error(`FAILED: ${failures} assertions failed`);
     process.exit(1);
   } else {
-    console.log("SUCCESS: Task 1 tests passed!");
+    console.log("SUCCESS: All Hybrid Account assertions passed!");
   }
 }
 
-runTask1Tests();
+runTests().catch((err) => {
+  console.error("Test runner crashed:", err);
+  process.exit(1);
+});

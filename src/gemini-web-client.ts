@@ -156,6 +156,21 @@ export class GeminiWebClient {
   }
 
   /**
+   * Checks whether a requested model name targets the Gemini Web engine.
+   */
+  public static isGeminiWebModel(modelName: string): boolean {
+    if (!modelName || typeof modelName !== "string") return false;
+    const lower = modelName.trim().toLowerCase();
+    return (
+      lower.startsWith("gemini-argon") ||
+      lower === "gemini-auto" ||
+      lower === "gemini-advanced" ||
+      lower.startsWith("gemini-web-") ||
+      lower.includes("argon")
+    );
+  }
+
+  /**
    * Formats Antigravity contents array into a single combined prompt text for Gemini Web.
    */
   public static contentsToPromptText(contents: any[]): string {
