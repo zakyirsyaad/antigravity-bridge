@@ -265,6 +265,79 @@ export class OAuthManager {
   }
 
   /**
+   * Directly push an account into storage without interactive browser login.
+   * If tokens lack email, fetches user info via access token or refreshed token.
+   */
+  public async pushAccount(input: {
+    refreshToken: string;
+    accessToken?: string;
+    email?: string;
+    name?: string;
+    projectId?: string;
+  }): Promise<PublicAccountSummary> {
+    const rawRefresh = (input.refreshToken || "").trim();
+    if (!rawRefresh) {
+      throw new Error("refreshToken is required");
+    }
+
+    let accessToken = (input.accessToken || "").trim();
+    let email = (input.email || "").trim();
+    let name = (input.name || "").trim();
+    const projectId = (input.projectId || "").trim() || DEFAULT_PROJECT_ID;
+    let expiresAt = Date.now() + 3600 * 1000 - 60000;
+
+    // If access token was missing or email is missing, try refreshing immediately
+    if (!accessToken || !email) {
+      try {
+        const refreshed = await this.refreshAccessToken(rawRefresh);
+        accessToken = refreshed.accessToken;
+        expiresAt = refreshed.expiresAt;
+        email = email || refreshed.email || "";
+        name = name || refreshed.name || "";
+      } catch (err: any) {
+        // If refresh fails but an accessToken was passed, try using it directly to get userinfo
+        if (accessToken) {
+          try {
+            const userRes = await fetch("https://www.googleapis.com/oauth2/v3/userinfo", {
+              headers: { Authorization: `Bearer ${accessToken}` },
+            });
+            if (userRes.ok) {
+              const uData = (await userRes.json()) as any;
+              email = email || uData.email || "";
+              name = name || uData.name || "";
+            }
+          } catch {}
+        } else {
+          throw err;
+        }
+      }
+    }
+
+    const token: AccountToken = {
+      accessToken,
+      refreshToken: rawRefresh,
+      expiresAt,
+      projectId,
+      ...(email ? { email } : {}),
+      ...(name ? { name } : {}),
+    };
+
+    this.saveAccount(token);
+
+    this.recordPoolEvent({
+      type: "info",
+      message: `Added/updated account ${email || "Google Account"} via push API`,
+      toAccount: email,
+    });
+
+    return {
+      email: token.email,
+      name: token.name,
+      projectId: token.projectId,
+    };
+  }
+
+  /**
    * List all stored Google accounts
    */
   public listAccounts(): { accounts: AccountToken[]; activeIndex: number } {

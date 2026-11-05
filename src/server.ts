@@ -362,6 +362,33 @@ export class BridgeServer {
             return;
           }
 
+          // Pool API: Push Account Credential directly (no browser popup needed)
+          if ((pathname === "/api/accounts/push" || pathname === "/api/pool/push") && req.method === "POST") {
+            const body = await this.parseBody(req);
+            const refreshToken = body.refreshToken || body.refresh_token;
+            if (!refreshToken || typeof refreshToken !== "string") {
+              res.writeHead(400, { "Content-Type": "application/json" });
+              res.end(JSON.stringify({ error: "refreshToken is required" }));
+              return;
+            }
+
+            try {
+              const summary = await this.oauth.pushAccount({
+                refreshToken,
+                accessToken: body.accessToken || body.access_token,
+                email: body.email,
+                name: body.name,
+                projectId: body.projectId || body.project_id,
+              });
+              res.writeHead(200, { "Content-Type": "application/json" });
+              res.end(JSON.stringify({ status: "ok", account: summary }));
+            } catch (err: any) {
+              res.writeHead(400, { "Content-Type": "application/json" });
+              res.end(JSON.stringify({ error: err.message || "Failed to push account" }));
+            }
+            return;
+          }
+
           // Pool API: Add Google Account via OAuth
           if (pathname === "/api/pool/auth-url" && req.method === "GET") {
             const authUrl = this.oauth.getWebOAuthUrl();
