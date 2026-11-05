@@ -7,5 +7,6 @@ export * from "./zcode-sync";
 export * from "./launchagent";
 export * from "./schema-cleaner";
 export * from "./json-repair";
+export * from "./gemini-web-client";
 export * from "./model-sync";
 export * from "./updater";

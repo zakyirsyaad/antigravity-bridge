@@ -48,6 +48,7 @@
     "test:accounts-mode": "tsx test/accounts-file-mode.test.ts",
     "test:json-repair": "tsx test/json-repair.test.ts",
     "test:accounts-push": "tsx test/accounts-push.test.ts",
+    "test:gemini-web": "tsx test/gemini-web-fallback.test.ts",
     "build": "tsc"
   },
   "keywords": [
