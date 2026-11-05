@@ -1289,27 +1289,27 @@ print(response.choices[0].message.content)</pre>
   </main>
 
   <!-- Push Token Modal -->
-  <div id="pushModal" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.75); backdrop-filter: blur(4px); z-index: 1000; align-items: center; justify-content: center;">
-    <div style="background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); width: 90%; max-width: 480px; padding: 24px; box-shadow: var(--shadow-lg);">
+  <div id="pushModal" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.8); backdrop-filter: blur(6px); z-index: 1000; align-items: center; justify-content: center;">
+    <div style="background: var(--surface-card); border: 1px solid var(--border-hover); border-radius: var(--radius-lg); width: 90%; max-width: 480px; padding: 24px; box-shadow: 0 20px 40px rgba(0,0,0,0.8);">
       <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
-        <h3 style="margin: 0; font-size: 1.1rem; font-weight: 600; color: var(--text-primary); display: flex; align-items: center; gap: 8px;">
+        <h3 style="margin: 0; font-size: 1.1rem; font-weight: 600; color: var(--text-main); display: flex; align-items: center; gap: 8px;">
           <span>🔑</span> Push Account Refresh Token
         </h3>
         <button type="button" onclick="closePushModal()" style="background: transparent; border: none; color: var(--text-muted); cursor: pointer; font-size: 1.2rem; padding: 4px;">&times;</button>
       </div>
 
-      <p style="font-size: 0.82rem; color: var(--text-secondary); margin-bottom: 16px; line-height: 1.45;">
+      <p style="font-size: 0.82rem; color: var(--text-muted); margin-bottom: 16px; line-height: 1.45;">
         Add or update an account in the pool directly by providing its Google OAuth refresh token. Tokens are stored locally with strict <code>0600</code> permissions.
       </p>
 
       <div style="display: flex; flex-direction: column; gap: 12px; margin-bottom: 16px;">
         <div>
           <label style="display: block; font-size: 0.78rem; font-weight: 500; color: var(--text-muted); margin-bottom: 4px;">Refresh Token (required)</label>
-          <input type="password" id="pushRefreshToken" placeholder="1//0..." style="width: 100%; box-sizing: border-box; background: var(--surface-subtle); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 8px 12px; color: var(--text-primary); font-family: var(--font-mono); font-size: 0.85rem;" />
+          <input type="password" id="pushRefreshToken" placeholder="1//0..." style="width: 100%; box-sizing: border-box; background: var(--surface-input); border: 1px solid var(--border-hover); border-radius: var(--radius-md); padding: 10px 12px; color: var(--text-main); font-family: var(--font-mono); font-size: 0.85rem; outline: none;" onfocus="this.style.borderColor='var(--border-active)'" onblur="this.style.borderColor='var(--border-hover)'" />
         </div>
         <div>
           <label style="display: block; font-size: 0.78rem; font-weight: 500; color: var(--text-muted); margin-bottom: 4px;">Email (optional)</label>
-          <input type="email" id="pushEmail" placeholder="user@gmail.com" style="width: 100%; box-sizing: border-box; background: var(--surface-subtle); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 8px 12px; color: var(--text-primary); font-family: var(--font-sans); font-size: 0.85rem;" />
+          <input type="email" id="pushEmail" placeholder="user@gmail.com" style="width: 100%; box-sizing: border-box; background: var(--surface-input); border: 1px solid var(--border-hover); border-radius: var(--radius-md); padding: 10px 12px; color: var(--text-main); font-family: var(--font-sans); font-size: 0.85rem; outline: none;" onfocus="this.style.borderColor='var(--border-active)'" onblur="this.style.borderColor='var(--border-hover)'" />
         </div>
       </div>
 
@@ -1323,31 +1323,31 @@ print(response.choices[0].message.content)</pre>
   </div>
 
   <!-- Link Gemini Web Cookies Modal -->
-  <div id="linkWebModal" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.75); backdrop-filter: blur(4px); z-index: 1000; align-items: center; justify-content: center;">
-    <div style="background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); width: 90%; max-width: 520px; padding: 24px; box-shadow: var(--shadow-lg);">
+  <div id="linkWebModal" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.8); backdrop-filter: blur(6px); z-index: 1000; align-items: center; justify-content: center;">
+    <div style="background: var(--surface-card); border: 1px solid var(--border-hover); border-radius: var(--radius-lg); width: 90%; max-width: 520px; padding: 24px; box-shadow: 0 20px 40px rgba(0,0,0,0.8);">
       <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">
-        <h3 style="margin: 0; font-size: 1.1rem; font-weight: 600; color: var(--text-primary); display: flex; align-items: center; gap: 8px;">
+        <h3 style="margin: 0; font-size: 1.1rem; font-weight: 600; color: var(--text-main); display: flex; align-items: center; gap: 8px;">
           <span>🔗</span> Link Gemini Web (Argon 4 & Web Models)
         </h3>
         <button type="button" onclick="closeLinkWebModal()" style="background: transparent; border: none; color: var(--text-muted); cursor: pointer; font-size: 1.2rem; padding: 4px;">&times;</button>
       </div>
 
-      <p style="font-size: 0.82rem; color: var(--text-secondary); margin-bottom: 12px; line-height: 1.45;">
+      <p style="font-size: 0.82rem; color: var(--text-muted); margin-bottom: 12px; line-height: 1.45;">
         Upgrade this account into a <strong>Hybrid Account</strong> by linking its browser session cookie. This enables access to <strong>Gemini Argon 4</strong>, <code>gemini-auto</code>, and web-exclusive models.
       </p>
 
-      <div style="background: var(--surface-subtle); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 10px 12px; font-size: 0.76rem; color: var(--text-muted); margin-bottom: 14px; line-height: 1.4;">
+      <div style="background: var(--surface-elevated); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 10px 12px; font-size: 0.76rem; color: var(--text-muted); margin-bottom: 14px; line-height: 1.4;">
         💡 <strong>How to get cookies:</strong> Open <a href="https://gemini.google.com" target="_blank" style="color: var(--emerald);">gemini.google.com</a> in browser &rarr; Press <code>F12</code> &rarr; Go to <strong>Application</strong> &rarr; <strong>Cookies</strong> &rarr; Copy <code>__Secure-1PSID</code> (or paste the entire Cookie header).
       </div>
 
       <div style="display: flex; flex-direction: column; gap: 12px; margin-bottom: 16px;">
         <div>
           <label style="display: block; font-size: 0.78rem; font-weight: 500; color: var(--text-muted); margin-bottom: 4px;">Target Account</label>
-          <input type="text" id="linkWebEmail" readonly style="width: 100%; box-sizing: border-box; background: var(--surface-subtle); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 8px 12px; color: var(--text-muted); font-family: var(--font-mono); font-size: 0.85rem; cursor: not-allowed;" />
+          <input type="text" id="linkWebEmail" readonly style="width: 100%; box-sizing: border-box; background: var(--surface-input); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 10px 12px; color: var(--text-faint); font-family: var(--font-mono); font-size: 0.85rem; cursor: not-allowed;" />
         </div>
         <div>
           <label style="display: block; font-size: 0.78rem; font-weight: 500; color: var(--text-muted); margin-bottom: 4px;">Cookies or __Secure-1PSID (required)</label>
-          <textarea id="linkWebCookies" rows="3" placeholder="__Secure-1PSID=... or paste entire cookie header" style="width: 100%; box-sizing: border-box; background: var(--surface-subtle); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 8px 12px; color: var(--text-primary); font-family: var(--font-mono); font-size: 0.82rem; resize: vertical;"></textarea>
+          <textarea id="linkWebCookies" rows="3" placeholder="__Secure-1PSID=... or paste entire cookie header" style="width: 100%; box-sizing: border-box; background: var(--surface-input); border: 1px solid var(--border-hover); border-radius: var(--radius-md); padding: 10px 12px; color: var(--text-main); font-family: var(--font-mono); font-size: 0.82rem; resize: vertical; outline: none;" onfocus="this.style.borderColor='var(--border-active)'" onblur="this.style.borderColor='var(--border-hover)'"></textarea>
         </div>
       </div>
 
