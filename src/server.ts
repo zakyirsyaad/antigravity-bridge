@@ -13,6 +13,7 @@ import { getDashboardHtml } from "./dashboard-html";
 import { applyConnectAttemptTimeout } from "./network";
 import { parseOrRepairJson } from "./json-repair";
 import { GeminiWebClient } from "./gemini-web-client";
+import { buildToolBridgePrompt, parseToolBridgeOutput } from "./tool-bridge";
 
 /**
  * Google rejected the request itself (HTTP 400): a tool schema it cannot take, a
@@ -700,7 +701,57 @@ export class BridgeServer {
         }
       } else {
         try {
-          const resp = await geminiWeb.generateContent(payload.request, requestedModel);
+          let webPromptObj: any = payload.request;
+          if (Array.isArray(body.tools) && body.tools.length > 0) {
+            const rawPrompt = GeminiWebClient.contentsToPromptText(payload.request?.contents || []);
+            webPromptObj = buildToolBridgePrompt(rawPrompt, body.tools, body.tool_choice);
+          }
+
+          const resp = await geminiWeb.generateContent(webPromptObj, requestedModel);
+          const rawText = resp.candidates?.[0]?.content?.parts?.[0]?.text || "";
+
+          if (Array.isArray(body.tools) && body.tools.length > 0) {
+            const bridged = parseToolBridgeOutput(rawText, body.tools);
+            const contentBlocks: any[] = [];
+            let stopReason = "end_turn";
+
+            if (bridged.finish_reason === "tool_calls") {
+              stopReason = "tool_use";
+              for (const tc of bridged.tool_calls) {
+                let parsedArgs = {};
+                try {
+                  parsedArgs = JSON.parse(tc.function.arguments);
+                } catch {}
+                contentBlocks.push({
+                  type: "tool_use",
+                  id: tc.id,
+                  name: tc.function.name,
+                  input: parsedArgs,
+                });
+              }
+            } else if (bridged.content) {
+              contentBlocks.push({
+                type: "text",
+                text: bridged.content,
+              });
+            }
+
+            res.writeHead(200, { "Content-Type": "application/json" });
+            res.end(
+              JSON.stringify({
+                id: msgId,
+                type: "message",
+                role: "assistant",
+                content: contentBlocks,
+                model: requestedModel,
+                stop_reason: stopReason,
+                stop_sequence: null,
+                usage: { input_tokens: 0, output_tokens: Math.max(1, Math.ceil(rawText.length / 4)) },
+              })
+            );
+            return;
+          }
+
           const formatted = Transformer.antigravityToAnthropic(resp, requestedModel);
           res.writeHead(200, { "Content-Type": "application/json" });
           res.end(JSON.stringify(formatted));
@@ -982,30 +1033,100 @@ export class BridgeServer {
       if (body.stream) {
         this.beginOpenAIStream(res);
         try {
-          const stream = geminiWeb.streamGenerateContent(payload.request);
+          // If tools are declared, apply tool bridge prompt
+          let webPromptObj: any = payload.request;
+          if (Array.isArray(body.tools) && body.tools.length > 0) {
+            const rawPrompt = GeminiWebClient.contentsToPromptText(payload.request?.contents || []);
+            const bridgedPrompt = buildToolBridgePrompt(rawPrompt, body.tools, body.tool_choice);
+            webPromptObj = bridgedPrompt;
+          }
+
+          let accumulatedText = "";
+          const stream = geminiWeb.streamGenerateContent(webPromptObj);
           for await (const chunk of stream) {
             const text = chunk.response?.candidates?.[0]?.content?.parts?.[0]?.text || "";
             if (text) {
+              accumulatedText += text;
+              // If tools are active, do not stream partial JSON fragments to avoid confusing clients
+              if (!body.tools || body.tools.length === 0) {
+                res.write(
+                  `data: ${JSON.stringify({
+                    id: cmplId,
+                    object: "chat.completion.chunk",
+                    created,
+                    model: requestedModel,
+                    choices: [{ index: 0, delta: { content: text }, finish_reason: null }],
+                  })}\n\n`
+                );
+              }
+            }
+          }
+
+          if (Array.isArray(body.tools) && body.tools.length > 0) {
+            const bridged = parseToolBridgeOutput(accumulatedText, body.tools);
+            if (bridged.finish_reason === "tool_calls") {
               res.write(
                 `data: ${JSON.stringify({
                   id: cmplId,
                   object: "chat.completion.chunk",
                   created,
                   model: requestedModel,
-                  choices: [{ index: 0, delta: { content: text }, finish_reason: null }],
+                  choices: [
+                    {
+                      index: 0,
+                      delta: {
+                        tool_calls: bridged.tool_calls.map((tc, idx) => ({
+                          index: idx,
+                          id: tc.id,
+                          type: "function",
+                          function: tc.function,
+                        })),
+                      },
+                      finish_reason: null,
+                    },
+                  ],
+                })}\n\n`
+              );
+              res.write(
+                `data: ${JSON.stringify({
+                  id: cmplId,
+                  object: "chat.completion.chunk",
+                  created,
+                  model: requestedModel,
+                  choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }],
+                })}\n\n`
+              );
+            } else {
+              res.write(
+                `data: ${JSON.stringify({
+                  id: cmplId,
+                  object: "chat.completion.chunk",
+                  created,
+                  model: requestedModel,
+                  choices: [{ index: 0, delta: { content: bridged.content }, finish_reason: null }],
+                })}\n\n`
+              );
+              res.write(
+                `data: ${JSON.stringify({
+                  id: cmplId,
+                  object: "chat.completion.chunk",
+                  created,
+                  model: requestedModel,
+                  choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
                 })}\n\n`
               );
             }
+          } else {
+            res.write(
+              `data: ${JSON.stringify({
+                id: cmplId,
+                object: "chat.completion.chunk",
+                created,
+                model: requestedModel,
+                choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+              })}\n\n`
+            );
           }
-          res.write(
-            `data: ${JSON.stringify({
-              id: cmplId,
-              object: "chat.completion.chunk",
-              created,
-              model: requestedModel,
-              choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
-            })}\n\n`
-          );
           res.write("data: [DONE]\n\n");
           res.end();
           return;
@@ -1015,7 +1136,44 @@ export class BridgeServer {
         }
       } else {
         try {
-          const resp = await geminiWeb.generateContent(payload.request, requestedModel);
+          let webPromptObj: any = payload.request;
+          if (Array.isArray(body.tools) && body.tools.length > 0) {
+            const rawPrompt = GeminiWebClient.contentsToPromptText(payload.request?.contents || []);
+            webPromptObj = buildToolBridgePrompt(rawPrompt, body.tools, body.tool_choice);
+          }
+
+          const resp = await geminiWeb.generateContent(webPromptObj, requestedModel);
+          const rawText = resp.candidates?.[0]?.content?.parts?.[0]?.text || "";
+
+          if (Array.isArray(body.tools) && body.tools.length > 0) {
+            const bridged = parseToolBridgeOutput(rawText, body.tools);
+            const message: any = { role: "assistant" };
+            if (bridged.finish_reason === "tool_calls") {
+              message.tool_calls = bridged.tool_calls;
+            } else {
+              message.content = bridged.content;
+            }
+
+            res.writeHead(200, { "Content-Type": "application/json" });
+            res.end(
+              JSON.stringify({
+                id: cmplId,
+                object: "chat.completion",
+                created,
+                model: requestedModel,
+                choices: [
+                  {
+                    index: 0,
+                    message,
+                    finish_reason: bridged.finish_reason,
+                  },
+                ],
+                usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+              })
+            );
+            return;
+          }
+
           const formatted = Transformer.antigravityToOpenAI(resp, requestedModel, body?.response_format);
           res.writeHead(200, { "Content-Type": "application/json" });
           res.end(JSON.stringify(formatted));

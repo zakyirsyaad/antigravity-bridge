@@ -60,9 +60,9 @@ async function runTests() {
   );
 
   client.setCredentials({
-    rawCookies: "NID=511; __Secure-1PSID=raw-psid",
+    rawCookies: "SID=session-123; __Secure-1PSID=raw-psid",
   });
-  expect("uses rawCookies when provided", client.buildCookieHeader(), "NID=511; __Secure-1PSID=raw-psid");
+  expect("uses filtered essential rawCookies when provided", client.buildCookieHeader(), "SID=session-123; __Secure-1PSID=raw-psid");
 
   console.log("\n[3/5] RPC payload double-JSON formatting ...");
   const rpcBody = GeminiWebClient.buildRpcPayload("Hello Gemini Web", "AIzaToken123");
