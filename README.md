@@ -11,7 +11,7 @@
 [![Protocol](https://img.shields.io/badge/protocol-Anthropic%20%7C%20OpenAI-purple.svg)](https://docs.anthropic.com/)
 [![UI](https://img.shields.io/badge/design%20system-Google%20Stitch-white.svg)](https://stitch.withgoogle.com/)
 
-[**Features**](#-features) • [**Quick Start**](#-quick-start) • [**Client Guides**](#-client-integration-guides) • [**Web Dashboard**](#-web-dashboard) • [**API Docs**](#-api-reference) • [**CLI Reference**](#-cli-commands)
+[**Features**](#-features) • [**Quick Start**](#-quick-start) • [**Gemini Web**](#-gemini-web-argon) • [**Client Guides**](#-client-integration-guides) • [**Web Dashboard**](#-web-dashboard) • [**API Docs**](#-api-reference) • [**CLI Reference**](#-cli-commands)
 
 ---
 
@@ -22,6 +22,8 @@
 **Antigravity Bridge** transforms multiple personal or team Google accounts into a single, high-availability, unified AI inference endpoint. 
 
 When developing with advanced coding agents like **Claude Code**, **Hermes**, or **Cursor**, hitting Google CloudCode's rate limits (`HTTP 429 RESOURCE_EXHAUSTED` / *"Individual quota reached"*) halts your momentum. Antigravity Bridge solves this by pooling multiple Google accounts and providing **automatic, transparent failover**. If your active account hits a rate limit, or Google has no capacity for the model on it, the bridge routes the request to the next available account in the pool before anything is streamed back, so your session and tool loop carry on.
+
+An optional second backend, **Gemini Web**, reaches models that are only in the Gemini app (such as **Argon**, `gemini-argon-4`) by using a signed-in browser session's cookies. See [Gemini Web (Argon)](#-gemini-web-argon).
 
 ```mermaid
 flowchart TD
@@ -49,12 +51,17 @@ flowchart TD
         GAPI["Google CloudCode API\n(Gemini Flash / Claude Opus & Sonnet / GPT-OSS)"]
     end
 
+    subgraph Web ["Optional: Gemini Web"]
+        GWEB["gemini.google.com\n(linked browser cookies)\nArgon · gemini-auto"]
+    end
+
     C1 & C2 & C3 & C4 --> GW
     GW --> ROUTER
     DASH -.-> ROUTER
     ROUTER -->|Active Route| A1
     ROUTER -.->|Failover on 429 / 503 / stall| A2
     A1 & A2 & AN --> GAPI
+    GW -.->|gemini-argon-4 · gemini-auto| GWEB
 ```
 
 ---
@@ -69,8 +76,11 @@ flowchart TD
 - 🔌 **Dual-Protocol Translation**:
   - **Anthropic Messages API** (`/v1/messages`): Full streaming SSE, extended thinking blocks (`claude-opus-4-6-thinking`), and multi-turn tool calling.
   - **OpenAI Chat Completions** (`/v1/chat/completions`): Full streaming, `tool_calls` schemas, `reasoning_effort` mapping, and function execution.
+- 🌐 **Gemini Web models (optional)**: link a browser session's cookies to an account and use `gemini-argon-4` (Argon), `gemini-auto` and `gemini-advanced` from the same endpoints, tool calling included. A separate quota from CloudCode; see [Gemini Web (Argon)](#-gemini-web-argon).
+- 🩹 **JSON & tool-call repair**: tool-call arguments, and non-streaming `response_format` JSON answers, are repaired before they reach the client (code fences, trailing commas, comments, single quotes, a reply cut off mid-object), so one malformed character does not break an agent's loop.
+- 📊 **Usage by model**: the bridge counts requests and tokens per model (`npm run bridge:usage`, `/api/usage`, and a ledger on the dashboard), with Gemini Web counts marked as estimates on the dashboard.
 - 🎨 **Google Stitch Web Dashboard**: High-craft web interface built to Google Stitch specifications (`DESIGN.md`) in **Minimalist OLED Zinc** dark mode, with smooth live countdown timers, activity streams, and an interactive theme switcher.
-- 🔑 **Automated PKCE OAuth & Background Refresh**: One-click Google login via web browser. Tokens refresh automatically in the background before expiration.
+- 🔑 **Automated PKCE OAuth & Background Refresh**: One-click Google login via web browser, or push an existing refresh token from the dashboard or `/api/accounts/push`. Tokens refresh automatically in the background before expiration.
 - 🖥️ **macOS LaunchAgent Support**: Native background daemon running automatically on system startup.
 
 ---
@@ -177,6 +187,42 @@ model that answers, and warns once when it does.
 
 ---
 
+## 🌐 Gemini Web (Argon)
+
+Some models exist only in the Gemini app at gemini.google.com, not in CloudCode — **Argon** among them. The bridge can reach them through a signed-in browser session: you give it that session's cookies, and requests for the models below go to gemini.google.com instead of CloudCode. Everything else stays on the pool.
+
+| Model ID | What runs | Notes |
+| :--- | :--- | :--- |
+| `gemini-argon-4` | Gemini Web's Argon model | The bridge sends Argon's own Gemini Web model id |
+| `gemini-auto` | Gemini Web's default model | |
+| `gemini-advanced` | Gemini Web's default model | Gemini Web has no known id for it, so the default answers |
+
+A `provider/` prefix (`open-design-byok/gemini-argon-4`) works too. `/v1/models` lists these ids once an account in the pool has linked cookies.
+
+### Linking cookies
+
+1. In a browser signed in to the Google account you want to use, open **gemini.google.com**.
+2. Open the developer tools → **Application** (Chrome) or **Storage** (Firefox) → **Cookies** → `https://gemini.google.com`, and copy the value of `__Secure-1PSID` (with `__Secure-1PSIDTS` if you can). Copying the whole `Cookie` request header from the **Network** tab also works.
+3. On the bridge's dashboard, press **🔗 Link Web** on the account card and paste it. A bare `__Secure-1PSID` value is accepted as is. The card then shows **● Web Linked**.
+
+Or set `GEMINI_WEB_COOKIES` (or `GEMINI_PSID` / `GEMINI_PSIDTS`) in the bridge's environment; cookies linked in the dashboard take precedence. If the browser has several Google accounts signed in, `GEMINI_AUTH_USER=N` picks `/u/N` (see [Configuration](#-configuration)).
+
+> **These cookies are a login.** Anyone holding them can use that Google account's Gemini session. The bridge keeps linked cookies in the same `0600` accounts file as the refresh tokens and never prints them. Signing out of that browser session invalidates them; link fresh ones when requests start failing with *"the browser cookies are signed out"*.
+
+### What to expect
+
+- **A separate limit.** Gemini Web uses the linked Google account's own Gemini app quota (whatever that account's plan allows). It is not the CloudCode quota on the dashboard's account cards, and the bridge cannot read it. When it runs out, the request fails with Google's message.
+- **Usage is estimated.** Gemini Web reports no token counts, so the bridge estimates them at about 4 characters per token and reports that figure to clients (so Claude Code's context meter and auto-compact keep working). The dashboard's usage ledger marks these rows as estimates (`bridge:usage` counts them like any other model).
+- **Tools work through a prompt.** Gemini Web has no function-calling API, so the bridge describes the tools in the prompt and reads the model's JSON reply back into `tool_use` / `tool_calls`. Only declared tools are let through, `tool_choice` is honored, and arguments must be a JSON object. It works with Claude Code, but it is less dependable than CloudCode's native tool calling.
+- **Text only.** Images and files in a request are not sent to Gemini Web.
+- **Streams arrive whole.** Gemini Web answers in one piece, so a "streamed" reply comes all at once, after up to `GEMINI_WEB_TIMEOUT_MS` (180 s) with no bytes sent. A failure is a real HTTP `500` before the stream starts.
+
+### Falling back to Gemini Web (opt-in)
+
+With `GEMINI_WEB_FALLBACK=1` (and auto-failover on), a request the whole pool cannot serve — every account answered 429, 503, or stopped answering — is answered by Gemini Web's default model instead of failing. It never takes a request that carries tools or asks for structured output, and any other CloudCode error (401, 404, 500, the network) still reaches the caller. Off by default: the answer comes from a different model than the one requested, and the bridge log says so (`[AutoPool] … Gemini Web's default model answers instead`).
+
+---
+
 ## ⬆️ Upgrading from 1.x
 
 **2.0 is breaking.** Three things can stop working — see [CHANGELOG.md](CHANGELOG.md) for the full
@@ -237,6 +283,8 @@ You can add as many Google accounts as you want to expand your quota headroom:
 npm run bridge:login
 ```
 *Or open the Web Dashboard and click **"+ Add Account"** in the top right.*
+
+> **Already have a refresh token?** The dashboard's **Push Token** button (or `POST /api/accounts/push`) adds an account from its Google OAuth refresh token without a browser login.
 
 ### 5. Start the Bridge Server
 
@@ -441,11 +489,13 @@ Open **`http://127.0.0.1:52130`** in your browser to access the management inter
   - `◌ Resting`: Google stopped answering on this account, so failover skips it for a few minutes (`BRIDGE_STALL_REST_SECONDS`). Held in memory, not a quota cooldown.
 - **Activity Stream**: every failover says why it happened (429 quota, 503 no capacity, 503 service unavailable, stall, cooling down, resting) and for which model.
 - **Dual Live Quotas**: Real-time bars showing internal 5-hour rolling limit and weekly cycle cap percentages.
-- **Usage by Model**: the bridge's own request and token counters per model (`/api/usage`), with each model's share of tokens. Gemini Web models (`gemini-argon-4`, …) are marked as estimates: Gemini Web reports no token counts, and its limit is the linked Google account's Gemini app quota, separate from the CloudCode quota above.
+- **Usage by Model**: the bridge's own request and token counters per requested model id (`/api/usage`), with each model's share of tokens. Gemini Web models (`gemini-argon-4`, …) are marked as estimates: Gemini Web reports no token counts, and its limit is the linked Google account's Gemini app quota, separate from the CloudCode quota above.
 - **One-Click Actions**:
   - **Set Active**: Manually route traffic to a specific account.
   - **Clear Cooldown**: Reset the rate limit timer on an account.
   - **Delete**: Remove an account from storage.
+  - **🔗 Link Web**: Link Gemini Web cookies to an account (see [Gemini Web](#-gemini-web-argon)); the card then shows **● Web Linked**.
+  - **Push Token**: Add or update an account from its OAuth refresh token.
   - **Auto-Failover Toggle**: Enable/disable automatic switching.
 - **Interactive Theme Switcher**: Choose between **OLED Zinc** (Default), **Gemini Cosmic**, **Claude Studio**, or **Cyber Emerald**.
 
@@ -464,6 +514,9 @@ Open **`http://127.0.0.1:52130`** in your browser to access the management inter
 | `POST` | `/api/pool/clear-cooldown` | Manually clear cooldown on an account (`{"email": "user@gmail.com"}`) |
 | `POST` | `/api/pool/delete` | Remove an account from the pool (`{"email": "user@gmail.com"}`) |
 | `GET` | `/api/pool/auth-url` | Generate Google OAuth PKCE authorization URL for browser login |
+| `POST` | `/api/accounts/push` (also `/api/pool/push`) | Add or update an account from a refresh token (`{"refreshToken": "1//0…"}`, optionally `email`, `accessToken`, `projectId`). Answers the account summary, never the tokens |
+| `POST` | `/api/accounts/link-web` | Link Gemini Web cookies to an existing account (`{"email": "user@gmail.com", "cookies": "__Secure-1PSID=…"}`) |
+| `GET` | `/api/usage` | The bridge's usage counters per requested model id, each with its `backend` (`cloudcode` or `gemini-web`, whose counts are estimates) |
 
 Each account in `/api/pool` has a `status`:
 - `active` or `ready`: failover can pick it.
@@ -478,7 +531,9 @@ Each account in `/api/pool` has a `status`:
 | :--- | :--- | :--- |
 | `POST` | `/v1/messages` | Anthropic Claude Code, Free Claude Code, Anthropic Python/Node SDK |
 | `POST` | `/v1/chat/completions` | Hermes Agent, Cursor, Continue.dev, OpenAI Python/Node SDK |
-| `GET` | `/v1/models` (also `/models`) | Any OpenAI-compatible client. Lists the exposed models, each with `context_length`, which clients use to size their prompts |
+| `GET` | `/v1/models` (also `/models`) | Any OpenAI-compatible client. Lists the exposed models, each with `context_length`, which clients use to size their prompts. Gemini Web models appear once an account has linked cookies |
+| `GET` | `/v1/usage` (also `/usage`) | Usage counters plus each account's live Google quota (slower: it asks Google) |
+| `POST` | `/v1/images/generations` | OpenAI Images shape. **Experimental:** the models CloudCode serves here answer in text, and any image the model does not return is filled with a placeholder (a 1×1 transparent PNG for `b64_json`, an image-search link for `url`) |
 
 ### Error responses
 
@@ -492,13 +547,16 @@ top-level `type: "error"` that the Anthropic SDKs expect. The message says which
 | `403` | `forbidden` | A web page on another origin called the management API | Use the dashboard on the bridge's own host |
 | `503` | `overloaded_error` | Google has no capacity for the model on every account tried. Not quota: nothing cools down | Retry shortly, or use another model |
 | `503` | `api_error` | Google answered some other 503 (an outage) on every account tried | Retry shortly |
+| `400` | `invalid_request_error` | A Gemini Web model was requested but no cookies are linked or configured | Link cookies, see [Gemini Web](#-gemini-web-argon) |
+| `500` | `api_error` | Gemini Web failed: signed-out cookies, its own limit, a timeout, or an answer with nothing usable (for example only a tool call the request does not allow). The message says which | Read the message |
 | `500` | `server_error` / `api_error` | Every account is cooling down after a 429 (*"All accounts in the pool are currently rate limited"*), Google stopped answering (*"Google stopped answering requests for model …"*), or anything else | Read the message: only the first one is quota |
 
 Two exceptions, both from how streaming works:
 
 - On `/v1/chat/completions` with `stream: true`, only a `400` or `503` is sent as a real status. Every
   other failure before the first chunk comes back as HTTP `200` with a `data: {"error": …}` event, so a
-  `200` on that route does not by itself mean success.
+  `200` on that route does not by itself mean success. Gemini Web models are the exception: their
+  answer is in hand before anything is written, so every failure is a real status.
 - Once a stream has started, a failure on either route can only be an in-band error event.
 
 ---
@@ -598,8 +656,8 @@ shell that has *all* of them, then `pm2 save`). A plain `pm2 restart` keeps the 
   Remote clients send it as `Authorization: Bearer <key>` or `x-api-key: <key>` — the same headers they already use for an API key, so point `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` at it instead of `antigravity-local`. The web dashboard prompts for the key once and remembers it in that browser.
 
   **If you expose this bridge beyond your own machine, set `BRIDGE_API_KEY`.** Without it, remote requests are refused rather than served — the endpoints hand out pooled Google quota and can delete accounts from the pool, so an unauthenticated public deployment is not a supported configuration. Set `BRIDGE_TRUST_LOCAL=0` to require the key on loopback too.
-- **Local Credential Storage**: All OAuth access tokens and refresh tokens are stored locally in `~/.zcode/antigravity-accounts.json` with user-level read permissions.
-- **No Third-Party Intermediaries**: Requests flow directly between your machine and Google's official CloudCode servers. No telemetry, prompts, or code are sent to any external server.
+- **Local Credential Storage**: OAuth access and refresh tokens, and any linked Gemini Web cookies, are stored locally in `~/.zcode/antigravity-accounts.json` with mode `0600` (readable by your user only). The management API never returns them.
+- **No Third-Party Intermediaries**: Requests flow directly between your machine and Google: CloudCode's servers, and gemini.google.com for Gemini Web models (or the opt-in fallback). No telemetry, prompts, or code are sent to any other server.
 
 ---
 
