@@ -21,6 +21,7 @@ import {
 } from "../src/gemini-web-client";
 import { generateWithLinkedSessions, WebSessionRests, webRestSeconds, MAX_WEB_SESSIONS_PER_REQUEST } from "../src/gemini-web-rotation";
 import { OAuthManager } from "../src/oauth";
+import { ANONYMOUS_PAGE, SIGNED_IN_PAGE, SIGNED_IN_THYKHD_PAGE } from "./gemini-web-fixtures";
 import { AntigravityClient } from "../src/antigravity-client";
 import { BridgeServer } from "../src/server";
 import { UsageTracker } from "../src/usage-tracker";
@@ -108,11 +109,13 @@ async function runTests() {
   }
 
   console.log("[1/3] Which failures are the account's ...");
-  const page = '<script>{"SNlM0e":"tok-1","cfb2h":"bl-1","FdrFJe":"sid-1"}</script>';
-  const classify = async (transport: (url: string) => Promise<any>) => {
+  const page = SIGNED_IN_PAGE;
+  const anonymousPage = ANONYMOUS_PAGE;
+  // authUser null means unpinned (no GEMINI_AUTH_USER): undefined would take the "0" default.
+  const classify = async (transport: (url: string) => Promise<any>, authUser: string | null = "0") => {
     const fresh: GeminiWebClient = new (GeminiWebClient as any)();
     (fresh as any).transport = transport;
-    fresh.setCredentials({ rawCookies: "__Secure-1PSID=x", authUser: "0" });
+    fresh.setCredentials({ rawCookies: "__Secure-1PSID=x", authUser: authUser ?? undefined });
     return errorOf(() => fresh.generateContent("hi"));
   };
   const generate429 = await classify(async (url) =>
@@ -128,6 +131,41 @@ async function runTests() {
   expect("and still says the cookies are signed out", /signed out/.test(redirected?.message || ""), true);
   const noToken = await classify(async () => ({ ok: true, status: 200, text: "<html>no token here</html>" }));
   expect("a session page without a token is the account's", noToken instanceof GeminiWebAccountError, true);
+  let anonGenerates = 0;
+  const anonymous = await classify(async (url) => {
+    if (!url.endsWith("/app")) anonGenerates++;
+    return url.endsWith("/app") ? { ok: true, status: 200, text: anonymousPage } : { ok: true, status: 200, text: ")]}'\n[]" };
+  });
+  expect("a session page served to a signed-out visitor is the account's", anonymous instanceof GeminiWebAccountError, true);
+  expect("and says the cookies are signed out", /signed out/.test(anonymous?.message || ""), true);
+  expect("and nothing is generated anonymously", anonGenerates, 0);
+  let wizGenerates = 0;
+  const signedInWiz = await classify(async (url) => {
+    if (!url.endsWith("/app")) wizGenerates++;
+    return url.endsWith("/app") ? { ok: true, status: 200, text: SIGNED_IN_THYKHD_PAGE } : { ok: true, status: 200, text: ")]}'\n[]" };
+  });
+  expect("a signed-in page with only the newer token still opens a session", wizGenerates, 1);
+  expect("so what fails it is the generate, not the page", /no readable reply/.test(signedInWiz?.message || ""), true);
+
+  // Unpinned (no GEMINI_AUTH_USER): /app then /u/1. A visitor signed in to nothing has no /u/1.
+  const pagesLoaded: string[] = [];
+  const unpinned = await classify(async (url) => {
+    pagesLoaded.push(url);
+    return { ok: true, status: 200, text: anonymousPage };
+  }, null);
+  expect("an anonymous /app is not followed by /u/1", pagesLoaded.join(","), "https://gemini.google.com/app");
+  expect("and still fails as signed out", /signed-out visitor/.test(unpinned?.message || ""), true);
+  expect("pointing at both places fresh cookies go", /dashboard/.test(unpinned?.message || "") && /GEMINI_WEB_COOKIES/.test(unpinned?.message || ""), true);
+
+  // The escape hatch for the day Google drops the marker.
+  process.env.GEMINI_WEB_SIGNED_IN_CHECK = "0";
+  let uncheckedGenerates = 0;
+  await classify(async (url) => {
+    if (!url.endsWith("/app")) uncheckedGenerates++;
+    return url.endsWith("/app") ? { ok: true, status: 200, text: anonymousPage } : { ok: true, status: 200, text: ")]}'\n[]" };
+  });
+  expect("GEMINI_WEB_SIGNED_IN_CHECK=0 opens an unmarked page again", uncheckedGenerates, 1);
+  delete process.env.GEMINI_WEB_SIGNED_IN_CHECK;
   const refused = await classify(async () => {
     throw Object.assign(new Error(""), { code: "ECONNREFUSED" });
   });

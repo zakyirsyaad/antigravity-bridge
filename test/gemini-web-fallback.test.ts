@@ -17,6 +17,7 @@ import { parseToolBridgeOutput } from "../src/tool-bridge";
 import { Transformer } from "../src/transformer";
 import { AntigravityClient } from "../src/antigravity-client";
 import { OAuthManager } from "../src/oauth";
+import { SIGNED_IN_PAGE } from "./gemini-web-fixtures";
 
 let failures = 0;
 
@@ -140,7 +141,8 @@ async function runTests() {
     }
   };
   const fetched: string[] = [];
-  const page = '<script>{"SNlM0e":"tok-1","cfb2h":"bl-1","FdrFJe":"sid-1"}</script>';
+  // A signed-in page: a signed-out visitor's page has a token too, but no signed-in marker.
+  const page = SIGNED_IN_PAGE;
   const stubTransport = async (url: string) => {
     fetched.push(url);
     if (url.endsWith("/app")) {
