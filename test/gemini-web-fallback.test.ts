@@ -9,7 +9,9 @@
  * 5. AntigravityClient automatic fallback to Gemini Web when CloudCode pool is rate-limited (429).
  */
 
-import { GeminiWebClient } from "../src/gemini-web-client";
+import http from "node:http";
+import { GeminiWebClient, GEMINI_WEB_FALLBACK_USAGE_ID, webRequest } from "../src/gemini-web-client";
+import { Transformer } from "../src/transformer";
 import { AntigravityClient } from "../src/antigravity-client";
 import { OAuthManager } from "../src/oauth";
 
@@ -142,6 +144,21 @@ async function runTests() {
     expect("answer tokens are estimated from the answer", resp.usageMetadata?.candidatesTokenCount, Math.ceil(answerText.length / 4));
     expect("total is their sum", resp.usageMetadata?.totalTokenCount, 1001 + Math.ceil(answerText.length / 4));
   }
+  {
+    // A 200 with nothing readable must not reach a client as an empty success.
+    const fresh: GeminiWebClient = new (GeminiWebClient as any)();
+    (fresh as any).transport = async (url: string) =>
+      url.endsWith("/app") ? { ok: true, status: 200, text: page } : { ok: true, status: 200, text: ")]}'\n\n[]" };
+    fresh.setCredentials({ rawCookies: "__Secure-1PSID=x" });
+    let emptyErr: any = null;
+    try {
+      await fresh.generateContent("hi");
+    } catch (err) {
+      emptyErr = err;
+    }
+    expect("an answer with no readable reply throws", /no readable reply/.test(String(emptyErr?.message)), true);
+    expect("and drops the cached session", (fresh as any).session, null);
+  }
 
   console.log("\n[5/5] AntigravityClient failover loop to Gemini Web on CloudCode exhaustion ...");
   const antigravity = new AntigravityClient();
@@ -176,18 +193,94 @@ async function runTests() {
     ],
   });
 
-  const res = await antigravity.generateContent({
+  const plain = { model: "gemini-3.8-flash-tiered", request: { contents: [{ role: "user", parts: [{ text: "test prompt" }] }] } };
+  const withTools = {
     model: "gemini-3.8-flash-tiered",
-    request: {
-      contents: [{ role: "user", parts: [{ text: "test prompt" }] }],
-    },
-  });
+    request: { ...plain.request, tools: [{ functionDeclarations: [{ name: "Read", parameters: { type: "object" } }] }] },
+  };
+  const errorOf = async (run: () => Promise<any>): Promise<any> => {
+    try {
+      await run();
+      return null;
+    } catch (err) {
+      return err;
+    }
+  };
 
-  expect(
-    "falls back to Gemini Web when CloudCode exhausted",
-    res.candidates[0].content.parts[0].text,
-    "Fallback response from Gemini Web"
-  );
+  // Off by default: a different provider answering is opt-in.
+  delete process.env.GEMINI_WEB_FALLBACK;
+  const offErr = await errorOf(() => antigravity.generateContent(plain));
+  expect("no fallback without GEMINI_WEB_FALLBACK=1", Boolean(offErr), true);
+  expect("the pool's own error (429) reaches the caller", offErr?.status === 429, true);
+
+  process.env.GEMINI_WEB_FALLBACK = "1";
+  const res = await antigravity.generateContent(plain);
+  expect("falls back to Gemini Web when opted in", res.candidates[0].content.parts[0].text, "Fallback response from Gemini Web");
+  expect("a fallback answer is marked for its usage", res.servedBy, GEMINI_WEB_FALLBACK_USAGE_ID);
+
+  const toolsErr = await errorOf(() => antigravity.generateContent(withTools));
+  expect("a request with tools is never answered by the fallback", toolsErr?.status === 429, true);
+
+  (oauth as any).isAutoFailoverEnabled = () => false;
+  const failoverOffErr = await errorOf(() => antigravity.generateContent(plain));
+  expect("failover off means no fallback", Boolean(failoverOffErr), true);
+  (oauth as any).isAutoFailoverEnabled = () => true;
+
+  const okGenerate = (client as any).generateContent;
+  (client as any).generateContent = async () => {
+    throw new Error("Gemini Web generation failed with HTTP 401: expired");
+  };
+  const bothErr = await errorOf(() => antigravity.generateContent(plain));
+  expect("a failed fallback keeps the pool's error, not Gemini Web's", bothErr?.status === 429, true);
+  (client as any).generateContent = okGenerate;
+
+  // Cookies linked in the dashboard are enough; no Gemini Web model request needed first.
+  (client as any).credentials = null;
+  (oauth as any).findAccountWithWebCookies = () => ({ email: "linked@example.com", webCookies: "__Secure-1PSID=linked" });
+  const linkedRes = await antigravity.generateContent(plain);
+  expect("linked cookies enable the fallback", linkedRes.servedBy, GEMINI_WEB_FALLBACK_USAGE_ID);
+
+  const stream = await antigravity.streamGenerateContent(plain);
+  const chunks: any[] = [];
+  for await (const chunk of stream) chunks.push(chunk);
+  expect("the stream fallback is one chunk", chunks.length, 1);
+  expect("the stream chunk is marked too", chunks[0]?.response?.servedBy, GEMINI_WEB_FALLBACK_USAGE_ID);
+
+  console.log("\n[6] Model resolution and webRequest ...");
+  expect("a provider-prefixed web id resolves to the web id", Transformer.resolveModel("open-design-byok/gemini-argon-4"), "gemini-argon-4");
+
+  // Google's ~29 KB of response headers: Node's fetch refuses them, webRequest must not.
+  const bigHeaders = "x".repeat(30 * 1024);
+  const local = http.createServer((req, resp) => {
+    if (req.url === "/redirect") {
+      resp.writeHead(302, { Location: "https://accounts.google.com/" });
+      resp.end();
+      return;
+    }
+    if (req.url === "/hang") return; // never answers
+    resp.writeHead(200, { "Content-Security-Policy": bigHeaders, "Content-Type": "text/plain" });
+    resp.end("big-headers-ok");
+  });
+  await new Promise<void>((r) => local.listen(0, "127.0.0.1", () => r()));
+  const base = `http://127.0.0.1:${(local.address() as any).port}`;
+  try {
+    const fetchErr = await errorOf(() => fetch(`${base}/big`));
+    expect("(control) Node's fetch overflows on these headers", fetchErr?.cause?.code, "UND_ERR_HEADERS_OVERFLOW");
+    const big = await webRequest(`${base}/big`, { method: "GET", headers: {} }, http.request as any);
+    expect("webRequest reads a reply with 30 KB of headers", big.text, "big-headers-ok");
+    const redirect = await webRequest(`${base}/redirect`, { method: "GET", headers: {} }, http.request as any);
+    expect("a redirect is not followed and is not ok", `${redirect.status}/${redirect.ok}`, "302/false");
+    process.env.GEMINI_WEB_TIMEOUT_MS = "300";
+    const started = Date.now();
+    const hangErr = await errorOf(() => webRequest(`${base}/hang`, { method: "GET", headers: {} }, http.request as any));
+    expect("a request that never answers times out", /did not answer within 300 ms/.test(String(hangErr?.message)), true);
+    expect("the timeout is the configured one", Date.now() - started < 3000, true);
+  } finally {
+    delete process.env.GEMINI_WEB_TIMEOUT_MS;
+    delete process.env.GEMINI_WEB_FALLBACK;
+    local.closeAllConnections?.();
+    await new Promise<void>((r) => local.close(() => r()));
+  }
 
   console.log("\n=================================================");
   if (failures > 0) {

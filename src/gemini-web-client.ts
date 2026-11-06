@@ -36,6 +36,14 @@ const ARGON_MODEL_ID = "95a4c0abcba24364";
 const WEB_MODEL_ID_PATTERN = /^[0-9a-f]{16}$/;
 const DEFAULT_WEB_TIMEOUT_MS = 180_000;
 const CHARS_PER_TOKEN = 4;
+/** An answer larger than this is not a chat reply; stop reading rather than buffer it all. */
+const MAX_RESPONSE_BYTES = 32 * 1024 * 1024;
+
+/**
+ * The model id usage is recorded under when the pool fell back to Gemini Web, so the
+ * estimate is not added to the CloudCode model that was asked for.
+ */
+export const GEMINI_WEB_FALLBACK_USAGE_ID = "gemini-web-fallback";
 
 /** How long one Gemini Web request may take. The answer arrives whole, so this covers generation too. */
 function webTimeoutMs(): number {
@@ -64,28 +72,53 @@ export interface WebResponse {
   text: string;
 }
 
-/** One request to gemini.google.com, read whole. Redirects are not followed: a redirect means signed out. */
-export function webRequest(url: string, init: WebRequestInit): Promise<WebResponse> {
+/**
+ * One request to gemini.google.com, read whole. Redirects are not followed: a redirect
+ * means signed out. The timeout bounds the whole request, not just a quiet socket:
+ * StreamGenerate (rt=c) sends chunks as it goes, so an idle timeout alone never fires
+ * on a slow drip. `request` is https.request; the offline suite passes http.request to
+ * test the header room against a local server.
+ */
+export function webRequest(
+  url: string,
+  init: WebRequestInit,
+  request: typeof https.request = https.request
+): Promise<WebResponse> {
   const timeoutMs = webTimeoutMs();
   return new Promise((resolve, reject) => {
     const headers = init.body !== undefined
       ? { ...init.headers, "Content-Length": String(Buffer.byteLength(init.body)) }
       : init.headers;
-    const req = https.request(
+    const req = request(
       url,
-      { method: init.method, headers, maxHeaderSize: MAX_RESPONSE_HEADER_BYTES, timeout: timeoutMs },
+      { method: init.method, headers, maxHeaderSize: MAX_RESPONSE_HEADER_BYTES },
       (res) => {
         const chunks: Buffer[] = [];
-        res.on("data", (chunk: Buffer) => chunks.push(chunk));
+        let bytes = 0;
+        res.on("data", (chunk: Buffer) => {
+          bytes += chunk.length;
+          if (bytes > MAX_RESPONSE_BYTES) {
+            req.destroy(new Error(`Gemini Web answer exceeded ${MAX_RESPONSE_BYTES} bytes`));
+            return;
+          }
+          chunks.push(chunk);
+        });
         res.on("error", reject);
         res.on("end", () => {
+          clearTimeout(timer);
           const status = res.statusCode || 0;
           resolve({ ok: status >= 200 && status < 300, status, text: Buffer.concat(chunks).toString("utf8") });
         });
       }
     );
-    req.on("timeout", () => req.destroy(new Error(`Gemini Web did not answer within ${timeoutMs} ms`)));
-    req.on("error", reject);
+    const timer = setTimeout(
+      () => req.destroy(new Error(`Gemini Web did not answer within ${timeoutMs} ms`)),
+      timeoutMs
+    );
+    req.on("error", (err) => {
+      clearTimeout(timer);
+      reject(err);
+    });
     if (init.body !== undefined) req.write(init.body);
     req.end();
   });
@@ -208,7 +241,6 @@ export class GeminiWebClient {
       throw new Error("Gemini Web fallback credentials missing (set GEMINI_WEB_COOKIES or GEMINI_PSID)");
     }
 
-    // Attempt root /app, /u/0/app, and /u/1/app in order to handle Google multi-login accounts
     // Attempt the configured account first, then /u/0 and /u/1, to handle Google multi-login.
     // The path that worked is kept on the session: its token is only good for that account.
     const authUser = this.credentials?.authUser || "0";
@@ -234,6 +266,10 @@ export class GeminiWebClient {
         const html = res.text;
         const session = { ...GeminiWebClient.extractSessionParameters(html, cookieHeader), authPath };
         this.session = session;
+        if (authPath !== candidatePaths[0]) {
+          // A different signed-in Google account than the one configured is answering.
+          console.warn(`[Gemini Web] session page ${candidatePaths[0] || "/"}app failed; using ${authPath}/app instead`);
+        }
         return session;
       } catch (err: any) {
         lastError = err;
@@ -488,7 +524,15 @@ export class GeminiWebClient {
     }
 
     const raw = res.text;
-    return GeminiWebClient.withEstimatedUsage(GeminiWebClient.parseAntiXssiResponse(raw), prompt);
+    const parsed = GeminiWebClient.parseAntiXssiResponse(raw);
+    if (!parsed.candidates?.[0]?.content?.parts?.[0]?.text) {
+      // A 200 with no answer we can read: a format change, an interstitial, a quota page.
+      // Passed on, it reaches the client as a successful empty reply ("completed without
+      // producing any output") with nothing in the log. Say so, and fetch a fresh session.
+      if (this.session === session) this.session = null;
+      throw new Error(`Gemini Web answered HTTP ${res.status} with no readable reply (${raw.length} bytes)`);
+    }
+    return GeminiWebClient.withEstimatedUsage(parsed, prompt);
   }
 
   /** A rough token count: Gemini Web reports none, and ~4 characters per token is the usual rule. */

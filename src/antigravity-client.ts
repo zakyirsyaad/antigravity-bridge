@@ -13,7 +13,7 @@ import { UpstreamError } from "./upstream-error";
 // Its home is upstream-error.ts; callers and tests have always imported it from here.
 export { UpstreamError };
 import { PoolFailures, rotationReason } from "./pool-failures";
-import { GeminiWebClient } from "./gemini-web-client";
+import { GeminiWebClient, GEMINI_WEB_FALLBACK_USAGE_ID } from "./gemini-web-client";
 
 /** A whole response as the one-chunk stream the server's SSE handlers read. */
 async function* singleChunkStream(response: any): AsyncIterable<any> {
@@ -157,29 +157,43 @@ export class AntigravityClient {
   }
 
   /**
-   * Execute non-streaming generateContent with multi-account auto-failover
-   */
-  /**
-   * The pool ran out: answer from Gemini Web when a session is available, or null to
-   * let the pool's own error through. Cookies linked to an account are picked up here
-   * too, not only after a Gemini Web model was once requested. The answer is awaited,
-   * also for a stream, so a Gemini Web failure leaves the pool's 429/503 error in place
-   * instead of surfacing mid-stream after the client was told 200.
+   * The pool ran out: answer from Gemini Web, or null to let the pool's own error through.
+   *
+   * A different provider and model answering is a large substitution, so it is opt-in
+   * (`GEMINI_WEB_FALLBACK=1`), follows the failover switch, and never takes a request
+   * that carries tools: Gemini Web has no native function calling, and an agent's tool
+   * loop silently continued by another model on a prompt-based bridge is worse than an
+   * honest 429/503. Asking for a Gemini Web model by name (gemini-argon-4) is the way to
+   * use it with tools.
+   *
+   * The answer is awaited, also for a stream, so a Gemini Web failure leaves the pool's
+   * error in place instead of surfacing mid-stream after the client was told 200. It is
+   * marked `servedBy`, so its usage is recorded under GEMINI_WEB_FALLBACK_USAGE_ID and not
+   * added to the counters of the CloudCode model that was asked for.
    */
   private async tryGeminiWebFallback(payload: AntigravityPayload): Promise<any | null> {
+    if (process.env.GEMINI_WEB_FALLBACK !== "1" || !this.oauth.isAutoFailoverEnabled()) return null;
+    if (Array.isArray(payload.request?.tools) && payload.request.tools.length > 0) {
+      console.log(`[AutoPool] CloudCode pool exhausted for ${payload.model}; request carries tools, so no Gemini Web fallback.`);
+      return null;
+    }
     const geminiWeb = GeminiWebClient.getInstance();
     const linked = this.oauth.findAccountWithWebCookies();
     if (linked?.webCookies) geminiWeb.setCredentials({ rawCookies: linked.webCookies });
     if (!geminiWeb.hasCredentials()) return null;
     try {
-      console.log(`[AutoPool] CloudCode pool exhausted for ${payload.model}; routing request to Gemini Web fallback...`);
-      return await geminiWeb.generateContent(payload.request);
+      console.warn(`[AutoPool] CloudCode pool exhausted for ${payload.model}; Gemini Web's default model answers instead.`);
+      const answer = await geminiWeb.generateContent(payload.request);
+      return { ...answer, servedBy: GEMINI_WEB_FALLBACK_USAGE_ID };
     } catch (gwErr: any) {
       console.warn("[AutoPool] Gemini Web fallback also failed:", gwErr?.message);
       return null;
     }
   }
 
+  /**
+   * Execute non-streaming generateContent with multi-account auto-failover
+   */
   public async generateContent(payload: AntigravityPayload): Promise<any> {
     const totalAccounts = Math.max(1, this.oauth.listAccounts().accounts.length);
     let attempts = 0;

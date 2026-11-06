@@ -210,6 +210,36 @@ async function runTests() {
     expect("both web requests are recorded", recorded.length, 2);
     expect("recorded under the web model id", recorded[1]?.[0], "gemini-argon-4");
     expect("recorded with the estimated prompt size", recorded[1]?.[1], 1234);
+
+    const oaiStream = await postJson("/v1/chat/completions", {
+      model: "gemini-argon-4",
+      stream: true,
+      stream_options: { include_usage: true },
+      messages: [{ role: "user", content: "Check weather in Berlin" }],
+      tools: mockTools,
+    });
+    expect("OpenAI stream responds 200", oaiStream.status, 200);
+    expect("OpenAI stream carries the tool call", oaiStream.raw.includes('"name":"get_weather"'), true);
+    expect("OpenAI stream finishes as tool_calls", oaiStream.raw.includes('"finish_reason":"tool_calls"'), true);
+    expect("OpenAI stream sends the usage chunk when asked", oaiStream.raw.includes('"prompt_tokens":1234'), true);
+    expect("OpenAI stream targets the requested model", lastWebArgs[1], "gemini-argon-4");
+
+    // A Gemini Web failure is a real status before any stream byte, on both protocols.
+    (geminiWeb as any).generateContent = async () => {
+      throw new Error("Gemini Web generation failed with HTTP 401: expired");
+    };
+    const anthFail = await postJson("/v1/messages", {
+      model: "gemini-argon-4", max_tokens: 64, stream: true,
+      messages: [{ role: "user", content: "hi" }],
+    });
+    expect("Anthropic stream failure is HTTP 500", anthFail.status, 500);
+    expect("Anthropic stream failure is a JSON error, not SSE", anthFail.data?.error?.type, "api_error");
+    const oaiFail = await postJson("/v1/chat/completions", {
+      model: "gemini-argon-4", stream: true,
+      messages: [{ role: "user", content: "hi" }],
+    });
+    expect("OpenAI stream failure is HTTP 500, not an event inside a 200", oaiFail.status, 500);
+    expect("OpenAI stream failure is a JSON error, not SSE", oaiFail.raw.startsWith("data:"), false);
   } finally {
     await server.stop();
   }

@@ -125,14 +125,6 @@ export class BridgeServer {
   }
 
   /**
-   * Thinking tokens Google reported for a response.
-   *
-   * Reported separately from candidatesTokenCount, and previously discarded, so
-   * `bridge:usage` always showed zero reasoning. It is the only way to tell
-   * whether a thinking budget is actually being used or is sitting idle — which
-   * is what a budget-vs-answer-window tradeoff has to be tuned against.
-   */
-  /**
    * Gemini Web requests go to the usage tracker too, so they show in bridge:usage and the
    * dashboard. The counts are GeminiWebClient's estimates: Gemini Web reports none.
    */
@@ -140,6 +132,14 @@ export class BridgeServer {
     UsageTracker.getInstance().recordUsage(model, usage?.promptTokenCount || 0, usage?.candidatesTokenCount || 0, 0);
   }
 
+  /**
+   * Thinking tokens Google reported for a response.
+   *
+   * Reported separately from candidatesTokenCount, and previously discarded, so
+   * `bridge:usage` always showed zero reasoning. It is the only way to tell
+   * whether a thinking budget is actually being used or is sitting idle — which
+   * is what a budget-vs-answer-window tradeoff has to be tuned against.
+   */
   private static thoughtsTokens(resp: any): number {
     const raw = resp?.response || resp;
     return raw?.usageMetadata?.thoughtsTokenCount || 0;
@@ -666,6 +666,7 @@ export class BridgeServer {
           rawText = resp.candidates?.[0]?.content?.parts?.[0]?.text || "";
           webUsage = resp.usageMetadata;
         } catch (err: any) {
+          console.error("[Gemini Web] /v1/messages stream failed:", err?.message);
           res.writeHead(500, { "Content-Type": "application/json" });
           res.end(
             JSON.stringify({
@@ -742,15 +743,11 @@ export class BridgeServer {
             if (bridged.finish_reason === "tool_calls") {
               stopReason = "tool_use";
               for (const tc of bridged.tool_calls) {
-                let parsedArgs = {};
-                try {
-                  parsedArgs = JSON.parse(tc.function.arguments);
-                } catch {}
                 contentBlocks.push({
                   type: "tool_use",
                   id: tc.id,
                   name: tc.function.name,
-                  input: parsedArgs,
+                  input: parseOrRepairJson(tc.function.arguments, {}),
                 });
               }
             } else if (bridged.content) {
@@ -783,8 +780,14 @@ export class BridgeServer {
           BridgeServer.recordWebUsage(requestedModel, resp.usageMetadata);
           return;
         } catch (err: any) {
+          console.error("[Gemini Web] /v1/messages failed:", err?.message);
           res.writeHead(500, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: { message: err.message || "Gemini Web request failed" } }));
+          res.end(
+            JSON.stringify({
+              type: "error",
+              error: { type: "api_error", message: err?.message || "Gemini Web request failed" },
+            })
+          );
           return;
         }
       }
@@ -822,12 +825,15 @@ export class BridgeServer {
         let outputTokens = 0;
         let sawToolUse = false;
         let streamUsage: any = null;
+        // Set when the pool fell back to Gemini Web: its estimate is recorded under that id.
+        let servedBy: string | undefined;
         const tally = new StreamEndTally();
 
         for await (const chunk of stream) {
           tally.observe(chunk);
           const chunkUsage = chunk.response?.usageMetadata || chunk.usageMetadata;
           if (chunkUsage) streamUsage = chunkUsage;
+          if (chunk.response?.servedBy) servedBy = chunk.response.servedBy;
           const candidate = chunk.response?.candidates?.[0] || chunk.candidates?.[0];
           const parts = candidate?.content?.parts || [];
 
@@ -959,7 +965,7 @@ export class BridgeServer {
         res.end();
 
         UsageTracker.getInstance().recordUsage(
-          requestedModel,
+          servedBy || requestedModel,
           streamUsage?.promptTokenCount || 0,
           streamUsage?.candidatesTokenCount || outputTokens,
           streamUsage?.thoughtsTokenCount || 0
@@ -999,7 +1005,7 @@ export class BridgeServer {
       // out, or bridge:usage would count every thought twice.
       const thoughts = BridgeServer.thoughtsTokens(resp);
       UsageTracker.getInstance().recordUsage(
-        requestedModel,
+        resp.servedBy || requestedModel,
         formatted.usage?.input_tokens || 0,
         (formatted.usage?.output_tokens || 0) - thoughts,
         thoughts
@@ -1056,178 +1062,81 @@ export class BridgeServer {
         return;
       }
 
-      if (body.stream) {
-        this.beginOpenAIStream(res);
-        try {
-          // If tools are declared, apply tool bridge prompt
-          let webPromptObj: any = payload.request;
-          if (Array.isArray(body.tools) && body.tools.length > 0) {
-            const rawPrompt = GeminiWebClient.requestToPromptText(payload.request);
-            const bridgedPrompt = buildToolBridgePrompt(rawPrompt, body.tools, body.tool_choice);
-            webPromptObj = bridgedPrompt;
-          }
+      const hasTools = Array.isArray(body.tools) && body.tools.length > 0;
+      const webPrompt: any = hasTools
+        ? buildToolBridgePrompt(GeminiWebClient.requestToPromptText(payload.request), body.tools, body.tool_choice)
+        : payload.request;
 
-          let accumulatedText = "";
-          let webUsage: any = null;
-          const stream = geminiWeb.streamGenerateContent(webPromptObj, requestedModel);
-          for await (const chunk of stream) {
-            if (chunk.response?.usageMetadata) webUsage = chunk.response.usageMetadata;
-            const text = chunk.response?.candidates?.[0]?.content?.parts?.[0]?.text || "";
-            if (text) {
-              accumulatedText += text;
-              // If tools are active, do not stream partial JSON fragments to avoid confusing clients
-              if (!body.tools || body.tools.length === 0) {
-                res.write(
-                  `data: ${JSON.stringify({
-                    id: cmplId,
-                    object: "chat.completion.chunk",
-                    created,
-                    model: requestedModel,
-                    choices: [{ index: 0, delta: { content: text }, finish_reason: null }],
-                  })}\n\n`
-                );
-              }
-            }
-          }
+      // Gemini Web answers whole, so ask before anything is written: a failure is then a
+      // real HTTP error on the stream too, not an in-band event inside a 200, which is how
+      // this branch used to report it.
+      let resp: any;
+      try {
+        resp = await geminiWeb.generateContent(webPrompt, requestedModel);
+      } catch (err: any) {
+        console.error("[Gemini Web] /v1/chat/completions failed:", err?.message);
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: { message: err?.message || "Gemini Web request failed", type: "api_error" } }));
+        return;
+      }
+      const rawText = resp.candidates?.[0]?.content?.parts?.[0]?.text || "";
+      const webUsage = resp.usageMetadata;
+      const bridged = hasTools ? parseToolBridgeOutput(rawText, body.tools) : null;
+      const toolCalls = bridged?.finish_reason === "tool_calls" ? bridged.tool_calls : [];
 
-          if (Array.isArray(body.tools) && body.tools.length > 0) {
-            const bridged = parseToolBridgeOutput(accumulatedText, body.tools);
-            if (bridged.finish_reason === "tool_calls") {
-              res.write(
-                `data: ${JSON.stringify({
-                  id: cmplId,
-                  object: "chat.completion.chunk",
-                  created,
-                  model: requestedModel,
-                  choices: [
-                    {
-                      index: 0,
-                      delta: {
-                        tool_calls: bridged.tool_calls.map((tc, idx) => ({
-                          index: idx,
-                          id: tc.id,
-                          type: "function",
-                          function: tc.function,
-                        })),
-                      },
-                      finish_reason: null,
-                    },
-                  ],
-                })}\n\n`
-              );
-              res.write(
-                `data: ${JSON.stringify({
-                  id: cmplId,
-                  object: "chat.completion.chunk",
-                  created,
-                  model: requestedModel,
-                  choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }],
-                })}\n\n`
-              );
-            } else {
-              res.write(
-                `data: ${JSON.stringify({
-                  id: cmplId,
-                  object: "chat.completion.chunk",
-                  created,
-                  model: requestedModel,
-                  choices: [{ index: 0, delta: { content: bridged.content }, finish_reason: null }],
-                })}\n\n`
-              );
-              res.write(
-                `data: ${JSON.stringify({
-                  id: cmplId,
-                  object: "chat.completion.chunk",
-                  created,
-                  model: requestedModel,
-                  choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
-                })}\n\n`
-              );
-            }
-          } else {
-            res.write(
-              `data: ${JSON.stringify({
-                id: cmplId,
-                object: "chat.completion.chunk",
-                created,
-                model: requestedModel,
-                choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
-              })}\n\n`
-            );
-          }
-          // OpenAI's contract: the usage chunk only when the caller asks for it.
-          if (body.stream_options?.include_usage === true && webUsage) {
-            res.write(
-              `data: ${JSON.stringify({
-                id: cmplId,
-                object: "chat.completion.chunk",
-                created,
-                model: requestedModel,
-                choices: [],
-                usage: Transformer.openaiUsage(webUsage),
-              })}\n\n`
-            );
-          }
-          res.write("data: [DONE]\n\n");
-          res.end();
-          BridgeServer.recordWebUsage(requestedModel, webUsage);
-          return;
-        } catch (err: any) {
-          this.endOpenAIStreamWithError(res, err);
-          return;
-        }
-      } else {
-        try {
-          let webPromptObj: any = payload.request;
-          if (Array.isArray(body.tools) && body.tools.length > 0) {
-            const rawPrompt = GeminiWebClient.requestToPromptText(payload.request);
-            webPromptObj = buildToolBridgePrompt(rawPrompt, body.tools, body.tool_choice);
-          }
-
-          const resp = await geminiWeb.generateContent(webPromptObj, requestedModel);
-          const rawText = resp.candidates?.[0]?.content?.parts?.[0]?.text || "";
-
-          if (Array.isArray(body.tools) && body.tools.length > 0) {
-            const bridged = parseToolBridgeOutput(rawText, body.tools);
-            const message: any = { role: "assistant" };
-            if (bridged.finish_reason === "tool_calls") {
-              message.tool_calls = bridged.tool_calls;
-            } else {
-              message.content = bridged.content;
-            }
-
-            res.writeHead(200, { "Content-Type": "application/json" });
-            res.end(
-              JSON.stringify({
-                id: cmplId,
-                object: "chat.completion",
-                created,
-                model: requestedModel,
-                choices: [
-                  {
-                    index: 0,
-                    message,
-                    finish_reason: bridged.finish_reason,
-                  },
-                ],
-                usage: Transformer.openaiUsage(resp.usageMetadata),
-              })
-            );
-            BridgeServer.recordWebUsage(requestedModel, resp.usageMetadata);
-            return;
-          }
-
+      if (!body.stream) {
+        if (bridged) {
+          const message: any = { role: "assistant", content: toolCalls.length > 0 ? null : bridged.content };
+          if (toolCalls.length > 0) message.tool_calls = toolCalls;
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(
+            JSON.stringify({
+              id: cmplId,
+              object: "chat.completion",
+              created,
+              model: requestedModel,
+              choices: [{ index: 0, message, finish_reason: bridged.finish_reason }],
+              usage: Transformer.openaiUsage(webUsage),
+            })
+          );
+        } else {
           const formatted = Transformer.antigravityToOpenAI(resp, requestedModel, body?.response_format);
           res.writeHead(200, { "Content-Type": "application/json" });
           res.end(JSON.stringify(formatted));
-          BridgeServer.recordWebUsage(requestedModel, resp.usageMetadata);
-          return;
-        } catch (err: any) {
-          res.writeHead(500, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: { message: err.message || "Gemini Web request failed", type: "api_error" } }));
-          return;
         }
+        BridgeServer.recordWebUsage(requestedModel, webUsage);
+        return;
       }
+
+      this.beginOpenAIStream(res);
+      const writeChunk = (choices: any[], extra: Record<string, unknown> = {}) =>
+        res.write(
+          `data: ${JSON.stringify({ id: cmplId, object: "chat.completion.chunk", created, model: requestedModel, choices, ...extra })}\n\n`
+        );
+      if (toolCalls.length > 0) {
+        writeChunk([
+          {
+            index: 0,
+            delta: {
+              tool_calls: toolCalls.map((tc, idx) => ({ index: idx, id: tc.id, type: "function", function: tc.function })),
+            },
+            finish_reason: null,
+          },
+        ]);
+        writeChunk([{ index: 0, delta: {}, finish_reason: "tool_calls" }]);
+      } else {
+        const text = bridged ? bridged.content : rawText;
+        if (text) writeChunk([{ index: 0, delta: { content: text }, finish_reason: null }]);
+        writeChunk([{ index: 0, delta: {}, finish_reason: "stop" }]);
+      }
+      // OpenAI's contract: the usage chunk only when the caller asks for it.
+      if (body.stream_options?.include_usage === true && webUsage) {
+        writeChunk([], { usage: Transformer.openaiUsage(webUsage) });
+      }
+      res.write("data: [DONE]\n\n");
+      res.end();
+      BridgeServer.recordWebUsage(requestedModel, webUsage);
+      return;
     }
 
     if (body.stream) {
@@ -1267,12 +1176,15 @@ export class BridgeServer {
         // single call with concatenated names and unparseable arguments.
         let toolCallIndex = 0;
         let streamUsage: any = null;
+        // Set when the pool fell back to Gemini Web: its estimate is recorded under that id.
+        let servedBy: string | undefined;
         const tally = new StreamEndTally();
 
         for await (const chunk of stream) {
           tally.observe(chunk);
           const chunkUsage = chunk.response?.usageMetadata || chunk.usageMetadata;
           if (chunkUsage) streamUsage = chunkUsage;
+          if (chunk.response?.servedBy) servedBy = chunk.response.servedBy;
           const candidate = chunk.response?.candidates?.[0] || chunk.candidates?.[0];
           const parts = candidate?.content?.parts || [];
 
@@ -1398,7 +1310,7 @@ export class BridgeServer {
         res.end();
 
         UsageTracker.getInstance().recordUsage(
-          requestedModel,
+          servedBy || requestedModel,
           streamUsage?.promptTokenCount || 0,
           streamUsage?.candidatesTokenCount || outputTokens,
           streamUsage?.thoughtsTokenCount || 0
@@ -1413,7 +1325,7 @@ export class BridgeServer {
       // the response's completion_tokens now includes the reasoning — so take it
       // back out, or bridge:usage would count every thought twice.
       UsageTracker.getInstance().recordUsage(
-        requestedModel,
+        resp.servedBy || requestedModel,
         formatted.usage?.prompt_tokens || 0,
         (formatted.usage?.completion_tokens || 0) - (formatted.usage?.completion_tokens_details?.reasoning_tokens || 0),
         BridgeServer.thoughtsTokens(resp)
