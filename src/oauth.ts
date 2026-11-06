@@ -398,6 +398,19 @@ export class OAuthManager {
   }
 
   /**
+   * Every account with Gemini Web cookies linked, the active one first and then the rest in
+   * pool order: the sessions a Gemini Web request may rotate through (gemini-web-rotation.ts).
+   */
+  public listAccountsWithWebCookies(): AccountToken[] {
+    const list = this.listAccounts();
+    const linked = (a: AccountToken | undefined): a is AccountToken =>
+      Boolean(a?.webCookies && a.webCookies.includes("__Secure-1PSID"));
+    const active = list.accounts[list.activeIndex];
+    const rest = list.accounts.filter((a, i) => i !== list.activeIndex && linked(a));
+    return linked(active) ? [active, ...rest] : rest;
+  }
+
+  /**
    * Finds the first account in the pool that has Gemini Web cookies linked.
    */
   public findAccountWithWebCookies(): AccountToken | null {

@@ -13,6 +13,7 @@ import { getDashboardHtml } from "./dashboard-html";
 import { applyConnectAttemptTimeout } from "./network";
 import { parseOrRepairJson } from "./json-repair";
 import { GeminiWebClient, GEMINI_WEB_FALLBACK_USAGE_ID } from "./gemini-web-client";
+import { generateWithLinkedSessions } from "./gemini-web-rotation";
 import { buildToolBridgePrompt, parseToolBridgeOutput, ToolBridgeResult } from "./tool-bridge";
 
 /** Gemini Web's answer for one request, after the tool bridge: text, or the tool calls to send. */
@@ -741,7 +742,7 @@ export class BridgeServer {
       let resp: any;
       let answer: WebAnswer;
       try {
-        resp = await geminiWeb.generateContent(webPrompt, requestedModel);
+        resp = await generateWithLinkedSessions(geminiWeb, this.oauth.listAccountsWithWebCookies(), webPrompt, requestedModel);
         answer = BridgeServer.webAnswer(resp, body);
       } catch (err: any) {
         console.error("[Gemini Web] /v1/messages%s failed:", body.stream ? " stream" : "", err?.message);
@@ -1098,7 +1099,7 @@ export class BridgeServer {
       let resp: any;
       let answer: WebAnswer;
       try {
-        resp = await geminiWeb.generateContent(webPrompt, requestedModel);
+        resp = await generateWithLinkedSessions(geminiWeb, this.oauth.listAccountsWithWebCookies(), webPrompt, requestedModel);
         answer = BridgeServer.webAnswer(resp, body);
       } catch (err: any) {
         console.error("[Gemini Web] /v1/chat/completions%s failed:", body.stream ? " stream" : "", err?.message);

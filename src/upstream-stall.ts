@@ -10,6 +10,8 @@
  * dashboard built on it) should keep meaning "out of quota".
  */
 
+import { RestBook } from "./rest-book";
+
 const DEFAULT_TIMEOUT_MS = 60_000;
 const DEFAULT_REST_SECONDS = 300;
 /** A year. Longer is no rest, and a huge value puts the rest's end past what a Date holds, which /api/pool prints. */
@@ -57,31 +59,23 @@ export class UpstreamStall extends Error {
 
 /** Accounts that stalled recently, by email, with when each may be used again. */
 export class StallRegistry {
-  private static restingUntil = new Map<string, number>();
+  private static book = new RestBook();
 
   /** Leave an account alone for a while. `now` is injectable for tests. */
   static rest(email: string | undefined, seconds: number = stallRestSeconds(), now: number = Date.now()): void {
-    if (!email) return;
-    this.restingUntil.set(email.toLowerCase(), now + seconds * 1000);
+    this.book.rest(email, seconds, now);
   }
 
   static isResting(email: string | undefined, now: number = Date.now()): boolean {
-    return this.restEndsAt(email, now) !== null;
+    return this.book.isResting(email, now);
   }
 
   /** When an account's rest ends (epoch ms), or null when it is not resting. */
   static restEndsAt(email: string | undefined, now: number = Date.now()): number | null {
-    if (!email) return null;
-    const until = this.restingUntil.get(email.toLowerCase());
-    if (until === undefined) return null;
-    if (now >= until) {
-      this.restingUntil.delete(email.toLowerCase());
-      return null;
-    }
-    return until;
+    return this.book.restEndsAt(email, now);
   }
 
   static clear(): void {
-    this.restingUntil.clear();
+    this.book.clear();
   }
 }
