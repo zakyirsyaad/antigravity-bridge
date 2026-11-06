@@ -1,7 +1,7 @@
 import http, { IncomingMessage, ServerResponse } from "node:http";
 import crypto from "node:crypto";
 import { BRIDGE_DEFAULT_PORT, SUPPORTED_MODELS } from "./constants";
-import { OAuthManager } from "./oauth";
+import { OAuthManager, toPublicAccountSummary } from "./oauth";
 import { AntigravityClient, UpstreamError } from "./antigravity-client";
 import { PoolExhaustedError } from "./pool-failures";
 import { Transformer, UnknownModelError } from "./transformer";
@@ -248,7 +248,15 @@ export class BridgeServer {
    * browser-based clients.
    */
   private isManagementPath(pathname: string): boolean {
-    return pathname === "/api" || pathname.startsWith("/api/") || pathname.startsWith("/oauth/");
+    return (
+      pathname === "/api" ||
+      pathname.startsWith("/api/") ||
+      pathname.startsWith("/oauth/") ||
+      // Not inference: it names every pooled account and its live quota, so a page on
+      // another origin must not read it (loopback needs no key).
+      pathname === "/v1/usage" ||
+      pathname === "/usage"
+    );
   }
 
   private setCorsHeaders(res: http.ServerResponse, isManagement: boolean) {
@@ -408,7 +416,8 @@ export class BridgeServer {
               res.end(JSON.stringify({ error: "Email is required" }));
               return;
             }
-            const active = this.oauth.switchAccountByEmail(body.email);
+            // switchAccountByEmail() returns the stored record, tokens and cookies included.
+            const active = toPublicAccountSummary(this.oauth.switchAccountByEmail(body.email));
             res.writeHead(200, { "Content-Type": "application/json" });
             res.end(JSON.stringify({ status: "ok", active }));
             return;
