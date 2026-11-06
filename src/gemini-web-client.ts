@@ -67,6 +67,9 @@ export function webTimeoutMs(): number {
  * better (gemini-web-rotation.ts). A transport failure or the bridge's own timeout is a
  * plain Error: that is the network, and another account would meet the same one.
  */
+/** Generate statuses that blame the request, not the account: never rotated. */
+const REQUEST_FAULT_STATUSES = new Set([400, 413]);
+
 export class GeminiWebAccountError extends Error {
   constructor(message: string) {
     super(message);
@@ -348,7 +351,8 @@ export class GeminiWebClient {
         }
         return session;
       } catch (err: any) {
-        firstError ??= err instanceof GeminiWebAccountError ? err : describedError(err);
+        // describedError() keeps any Error that has a message, so an account error stays one.
+        firstError ??= describedError(err);
       }
     }
 
@@ -617,7 +621,10 @@ export class GeminiWebClient {
       // The token or the rotating 1PSIDTS cookie may have gone stale: fetch a fresh
       // session next time instead of failing every request until the TTL runs out.
       if (this.session === session) this.session = null;
-      throw new GeminiWebAccountError(`Gemini Web generation failed with HTTP ${res.status}: ${res.text.slice(0, 200)}`);
+      const message = `Gemini Web generation failed with HTTP ${res.status}: ${res.text.slice(0, 200)}`;
+      // A 400 or 413 is this request's own fault (a history or size Gemini Web refuses):
+      // another account would refuse it too, so it must not rotate and rest healthy sessions.
+      throw REQUEST_FAULT_STATUSES.has(res.status) ? new Error(message) : new GeminiWebAccountError(message);
     }
 
     const raw = res.text;

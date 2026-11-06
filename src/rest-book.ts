@@ -5,6 +5,18 @@
  * (WebSessionRests). Each keeps its own book: a CloudCode account that stalled says
  * nothing about the same person's Gemini Web session, and the reverse.
  */
+
+/** A year. Longer is no rest, and a huge value puts the rest's end past what a Date holds, which /api/pool prints. */
+export const MAX_REST_SECONDS = 365 * 24 * 60 * 60;
+
+/** A rest length from the environment variable `name`: a positive number of seconds, at most a year. */
+export function restSecondsFromEnv(name: string, fallback: number): number {
+  const configured = Number(process.env[name]);
+  return Number.isFinite(configured) && configured > 0
+    ? Math.min(Math.floor(configured), MAX_REST_SECONDS)
+    : fallback;
+}
+
 export class RestBook {
   private restingUntil = new Map<string, number>();
 

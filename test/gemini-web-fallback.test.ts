@@ -365,7 +365,10 @@ async function runTests() {
 
   // Cookies linked in the dashboard are enough; no Gemini Web model request needed first.
   (client as any).credentials = null;
-  (oauth as any).findAccountWithWebCookies = () => ({ email: "linked@example.com", webCookies: "__Secure-1PSID=linked" });
+  const linkedAccount = { email: "linked@example.com", webCookies: "__Secure-1PSID=linked" };
+  (oauth as any).findAccountWithWebCookies = () => linkedAccount;
+  // What the fallback reads: the linked sessions it may rotate through (gemini-web-rotation.ts).
+  (oauth as any).listAccountsWithWebCookies = () => [linkedAccount];
   const linkedRes = await antigravity.generateContent(plain);
   expect("linked cookies enable the fallback", linkedRes.servedBy, GEMINI_WEB_FALLBACK_USAGE_ID);
   expect("and are the credentials it used", (client as any).credentials?.rawCookies, "__Secure-1PSID=linked");

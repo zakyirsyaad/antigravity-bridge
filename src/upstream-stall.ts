@@ -10,12 +10,10 @@
  * dashboard built on it) should keep meaning "out of quota".
  */
 
-import { RestBook } from "./rest-book";
+import { RestBook, restSecondsFromEnv } from "./rest-book";
 
 const DEFAULT_TIMEOUT_MS = 60_000;
 const DEFAULT_REST_SECONDS = 300;
-/** A year. Longer is no rest, and a huge value puts the rest's end past what a Date holds, which /api/pool prints. */
-const MAX_REST_SECONDS = 365 * 24 * 60 * 60;
 
 /** How long a request waits for Google's first response before giving up on it. */
 export function upstreamTimeoutMs(): number {
@@ -25,10 +23,7 @@ export function upstreamTimeoutMs(): number {
 
 /** How long an account that stalled is left alone before it is chosen again (at most a year). */
 export function stallRestSeconds(): number {
-  const configured = Number(process.env.BRIDGE_STALL_REST_SECONDS);
-  return Number.isFinite(configured) && configured > 0
-    ? Math.min(Math.floor(configured), MAX_REST_SECONDS)
-    : DEFAULT_REST_SECONDS;
+  return restSecondsFromEnv("BRIDGE_STALL_REST_SECONDS", DEFAULT_REST_SECONDS);
 }
 
 /** Rotations one request may spend on stalls: three accounts tried, never the whole pool. */

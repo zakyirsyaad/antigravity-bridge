@@ -137,6 +137,13 @@ async function runTests() {
     throw new Error("Gemini Web did not answer within 180000 ms");
   });
   expect("a timeout is not the account's", timedOut instanceof GeminiWebAccountError, false);
+  for (const status of [400, 413]) {
+    const requestFault = await classify(async (url) =>
+      url.endsWith("/app") ? { ok: true, status: 200, text: page } : { ok: false, status, text: "bad request" }
+    );
+    expect(`a generate ${status} is the request's, not the account's`, requestFault instanceof GeminiWebAccountError, false);
+    expect(`and still says what Google answered (${status})`, requestFault?.message?.includes(`HTTP ${status}`), true);
+  }
 
   console.log("\n[2/3] generateWithLinkedSessions ...");
   const client = GeminiWebClient.getInstance();
@@ -198,13 +205,32 @@ async function runTests() {
   expect("the message counts the sessions tried", /3 linked sessions/.test(exhausted.error?.message || ""), true);
   expect("and keeps Google's last answer", /HTTP 429/.test(exhausted.error?.message || ""), true);
   expect("the message carries no cookie", /secret/.test(exhausted.error?.message || ""), false);
+  expect("nor an account email (it reaches the client)", /@example\.com/.test(exhausted.error?.message || ""), false);
+  expect("the log still names the accounts", exhausted.lines.some((l) => l.includes("a@example.com") && l.includes("c@example.com")), true);
 
   calls.length = 0;
   failing = new Set();
   const allResting = await generateWithLinkedSessions(client, [A, B, C], "hi");
-  expect("when every session rests, they are still tried in order", calls[0]?.cookie, A.webCookies);
+  expect("when every session rests, the one whose rest ends first is tried", calls[0]?.cookie, A.webCookies);
+  expect("and only that one", calls.length, 1);
   expect("and one that recovered answers", allResting.candidates[0].content.parts[0].text, `from ${A.webCookies}`);
   expect("an answer ends its rest", WebSessionRests.isResting("a@example.com"), false);
+
+  reset();
+  for (const acc of [A, B]) failing.add(acc.webCookies);
+  await errorOf(() => generateWithLinkedSessions(client, [A, B], "hi"));
+  calls.length = 0;
+  const stillDown = await errorOf(() => generateWithLinkedSessions(client, [A, B], "hi"));
+  expect("an all-resting pool that still fails costs one attempt, not one per session", calls.length, 1);
+  expect("and passes that failure on", stillDown instanceof GeminiWebAccountError, true);
+
+  reset();
+  failing.add(A.webCookies);
+  transportFailing.add(B.webCookies);
+  const late = await errorOf(() => generateWithLinkedSessions(client, [A, B], "hi"));
+  expect("a network failure after a rotation is not an account error", late instanceof GeminiWebAccountError, false);
+  expect("but says the sessions before it failed", /after 1 linked session\(s\) failed first/.test(late?.message || ""), true);
+  expect("and keeps its own cause", /ECONNRESET/.test(late?.message || ""), true);
 
   reset();
   failing.add(A.webCookies);
@@ -232,6 +258,10 @@ async function runTests() {
   expect("candidates are the linked accounts, in pool order", oauth.listAccountsWithWebCookies().map((a) => a.email).join(","), "a@example.com,b@example.com");
   (oauth as any).listAccounts = () => ({ accounts: [A, B], activeIndex: 1 });
   expect("the active one comes first", oauth.listAccountsWithWebCookies().map((a) => a.email).join(","), "b@example.com,a@example.com");
+  const twin = { ...C, webCookies: A.webCookies };
+  (oauth as any).listAccounts = () => ({ accounts: [A, twin, B], activeIndex: 0 });
+  expect("cookies linked on two cards are one session", oauth.listAccountsWithWebCookies().map((a) => a.email).join(","), "a@example.com,b@example.com");
+  expect("findAccountWithWebCookies is the first of them", oauth.findAccountWithWebCookies()?.email, "a@example.com");
   (oauth as any).listAccounts = () => ({ accounts: [A, B], activeIndex: 0 });
   (oauth as any).loadSavedAccount = () => A;
   (UsageTracker.getInstance() as any).recordUsage = () => {};
@@ -263,6 +293,27 @@ async function runTests() {
     );
     expect("every session failing is still a 500", both.value?.status, 500);
     expect("whose message counts the sessions", /2 linked sessions/.test(both.value?.data?.error?.message || ""), true);
+    expect("and names no account to the client", /@example\.com/.test(JSON.stringify(both.value?.data || {})), false);
+
+    // While A rests, a request must set B and only B: setting A first and then rotating to B
+    // drops the cached session (setCredentials() clears it), so B's page was fetched every time.
+    reset();
+    WebSessionRests.rest("a@example.com", 300);
+    const setTo: string[] = [];
+    const realUse = client.useLinkedCookies.bind(client);
+    (client as any).useLinkedCookies = (cookies: string | undefined) => {
+      setTo.push(String(cookies));
+      realUse(cookies);
+    };
+    try {
+      await captured(() =>
+        postJson("/v1/chat/completions", { model: "gemini-argon-4", messages: [{ role: "user", content: "hi" }] })
+      );
+      expect("a resting account's cookies are never set on the way to the next one", setTo.every((c) => c === B.webCookies), true);
+      expect("so the session in use is not dropped", setTo.length > 0, true);
+    } finally {
+      (client as any).useLinkedCookies = realUse;
+    }
   } finally {
     await server.stop();
   }
