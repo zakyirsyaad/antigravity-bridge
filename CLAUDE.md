@@ -87,9 +87,9 @@ Everything else runs offline — no account, no network, no quota — by stubbin
 | `test:network` | `start()` sets Node's per-address connect timeout (2 s, configurable; a value Node would reject falls back instead of stopping the boot); a quick connect failure is retried after 2 s then 5 s on the same account, and the retry line names the cause code; a retry after a timeout keeps the old short pause |
 | `test:stream-end` | a stream that ends empty, non-STOP or without a finish reason leaves one `[Stream End]` warning (with the `maxOut`/`think` that were sent) on both routes; a healthy one stays silent; a `MAX_TOKENS` turn closes as `max_tokens` / `length` (a complete tool call still wins); everything else the client receives is unchanged |
 | `test:accounts-mode` | the accounts file is created `0600` whatever the umask; an existing file has group and other access taken away before the write by each of the five writers, and the owner's bits are kept (`0400` stays `0400`); a directory the bridge creates for it is `0700` and one that exists is left alone; a failed write is still swallowed in failover and thrown elsewhere, and a failed `chmod` writes nothing and logs the path and the code; nothing but `writeStorage()` writes the file; no token reaches the console. Runs the real `OAuthManager` against a temporary `$HOME`, not stubbed `fs` |
-| `test:gemini-web` | Gemini Web session parsing, cookie header, RPC payload (only ids Gemini Web knows go to index 79), Anti-XSSI parsing; a failed generate or an unreadable 200 drops the session, and generate posts to the `/u/N` the session came from; prompt text carries the system instruction and prior tool calls; estimated usage; the pool fallback is off without `GEMINI_WEB_FALLBACK=1`, off with failover off, never takes a request with tools, keeps the pool's own error when it fails, and is marked `servedBy`; `webRequest` reads a reply with 30 KB of headers that Node's `fetch` refuses, does not follow a redirect, and times out |
-| `test:tool-bridge` | tool declarations folded into the Gemini Web prompt; both protocols' `tool_choice`; tool calls parsed back out; through the server on `gemini-argon-4`: OpenAI non-stream and stream, Anthropic stream emit tool calls with the requested model and the system prompt; estimated usage is reported (Anthropic `message_delta`, OpenAI `include_usage`) and recorded; a Gemini Web failure is HTTP 500 before any stream byte on both protocols |
-| `test:hybrid` | `linkWebCookies()`; `/api/accounts/link-web`; `hasWebCookies` in the pool status; web models in `/v1/models` once cookies are linked; a token refresh keeps the cookies. Needs an accounts file to exist under `$HOME` (`saveAccount()` checks the real path before its stubbed read), so with a temporary `$HOME` create an empty one first |
+| `test:gemini-web` | Gemini Web session parsing, cookie header, RPC payload (only ids Gemini Web knows go to index 79), Anti-XSSI parsing (a payload with no candidate is unreadable, not its response id); a failed generate or an unreadable 200 drops the session, and generate posts to the `/u/N` the session came from; an explicit account is the only page tried, a session from the second account lives 10 minutes, a redirect says the cookies are signed out, `GEMINI_WEB_TIMEOUT_MS` is one budget for the pages and the generate, linked cookies keep `GEMINI_AUTH_USER`; prompt text carries the system instruction, prior tool calls in the bridge's own JSON shape, and results named and tied to their calls (an empty one included); estimated usage; the pool fallback is off without `GEMINI_WEB_FALLBACK=1`, off with failover off, never takes a request with tools or structured output, never answers a 404 (only a pool that ran out), keeps the pool's own error when it fails, uses linked cookies, and is marked `servedBy`; `webRequest` reads a reply with 30 KB of headers that Node's `fetch` refuses, does not follow a redirect, times out, names a refused connection's cause, and ignores a timeout past setTimeout's limit |
+| `test:tool-bridge` | tool declarations folded into the Gemini Web prompt; both protocols' `tool_choice`; tool calls parsed back out and held to the request (no undeclared tool, nothing under none, only the forced tool, object arguments only, repaired), in linear time on a long brace-heavy reply; through the server on `gemini-argon-4`: OpenAI non-stream and stream and Anthropic stream and non-stream emit tool calls, with the requested model and the system prompt reaching Gemini Web; estimated usage is reported (Anthropic `message_delta`, OpenAI `include_usage`) and recorded; a Gemini Web failure, an answer the bridge empties, and a call under tool_choice none are HTTP 500 before any stream byte; a pool-fallback answer is recorded under `gemini-web-fallback` on all four CloudCode paths |
+| `test:hybrid` | `linkWebCookies()`; `/api/accounts/link-web`; `hasWebCookies` in the pool status; web models in `/v1/models` once cookies are linked; a token refresh keeps the cookies; usage recording is stubbed. Needs an accounts file to exist under `$HOME` (`saveAccount()` checks the real path before its stubbed read), so with a temporary `$HOME` create an empty one first |
 
 When stubbing, keep side effects off the real `~/.zcode` files and off `launchctl` — several suites
 assert that explicitly, and that is deliberate. A suite that stubs `fs` for the accounts path stubs
@@ -485,26 +485,45 @@ id (`95a4c0abcba24364`, sent at RPC index 79), so the others run Gemini Web's de
   (`UND_ERR_HEADERS_OVERFLOW`) — filtering the request's cookies, as was first tried, cannot help.
   `webRequest()` sets `maxHeaderSize` per request. Do not switch it back to `fetch`; `test:gemini-web`
   has a control that shows `fetch` refusing the same reply.
-- **The answer arrives whole**, so all four handlers ask Gemini Web *before* writing anything: a
-  failure is a real 500, also on the streams. The cost is up to `GEMINI_WEB_TIMEOUT_MS` (180 s) with
-  zero bytes sent, which a client with a short idle timeout can cut off.
+- **The answer arrives whole**, so both handlers ask Gemini Web and run the tool bridge once,
+  *before* writing anything, and only then split on `stream`: a failure is a real 500, also on the
+  streams. `GEMINI_WEB_TIMEOUT_MS` (180 s) is one deadline for the whole request — the session pages
+  and the generate share it — so that is the longest a client waits with zero bytes sent, which a
+  client with a short idle timeout can still cut off. The web branches have their own SSE writers,
+  separate from the CloudCode loops (no `StreamEndTally`): mirror a change between them.
 - **Tools are a prompt, not an API**: `tool-bridge.ts` folds the declarations into the prompt and
-  parses JSON tool calls back out, on both protocols and both stream modes. Streaming and
-  non-streaming branches share no code here either — mirror a change.
+  parses JSON tool calls back out, then holds them to the request in `parseToolBridgeOutput()`:
+  only declared tools, nothing under `tool_choice` none, only the forced tool when one is named,
+  and arguments that are a JSON object (repaired, so both protocols send the same JSON). A call that
+  fails those rules is dropped and named in `dropped`. A prompt is a request, not a contract: before
+  this, a call to a tool the client never declared went out as a real one. Prior calls are written
+  into the history in that same `{"tool_calls": [...]}` shape (with their ids), and each result is
+  named and tied to its call, so a model continuing its own history stays parseable and parallel
+  results cannot be swapped.
 - **Usage is estimated** (~4 characters per token from the prompt sent and the answer), attached as a
   Google-shaped `usageMetadata` by `generateContent()`. Gemini Web reports none, and `input_tokens: 0`
   is what kept Claude Code from ever compacting. Rate limits are not mapped: no real limit reply has
   been seen yet, so every Gemini Web failure is a 500.
-- **A 200 with no readable answer throws** and drops the session: passed on, it would reach the client
-  as a successful empty reply with nothing in the log.
-- **The session** (`SNlM0e` token, build label, session id) is cached 6 h and dropped on any failed
-  generate. It remembers which `/u/N` page it came from and posts there; a fallback to another
-  signed-in account is logged as `[Gemini Web] session page ... failed; using ...`.
-- **The pool fallback is opt-in** (`GEMINI_WEB_FALLBACK=1`), follows the failover switch, and never
-  takes a request with tools: a tool loop silently continued by another model on a prompt bridge is
-  worse than an honest 429/503. Its answer is marked `servedBy: "gemini-web-fallback"` and its usage
-  recorded under that id, not the CloudCode model's. Look for `[AutoPool] ... Gemini Web's default model
-  answers instead`.
+- **An answer with nothing usable is an error, never an empty success**: `generateContent()` throws
+  on a 200 it cannot read (and drops the session), and `BridgeServer.webAnswer()` throws when the
+  bridge leaves neither text nor an allowed call (`{"content": ""}`, or only dropped calls). Passed on,
+  either reached the client as a successful empty reply with nothing in the log. The parser looks for
+  text only inside the candidate subtree (`payload[4]`), skipping ids such as `r_…`: scanning the
+  whole payload returned the response id as the model's answer.
+- **The session** (`SNlM0e` token, build label, session id) is cached 6 h and dropped when generate
+  answers non-2xx or unreadable (a transport failure such as the timeout keeps it). It remembers which
+  `/u/N` page it came from and posts there. An explicit `GEMINI_AUTH_USER` pins it to that account; without
+  one, the default account is tried and then the second, and a session from the second lives only
+  10 minutes (logged as `[Gemini Web] session page ... failed; using ...`). Cookies linked in the
+  dashboard go through `useLinkedCookies()`, which keeps `GEMINI_AUTH_USER` — replacing the whole
+  credentials object with `{ rawCookies }`, as all three call sites did, dropped it.
+- **The pool fallback is opt-in** (`GEMINI_WEB_FALLBACK=1`), follows the failover switch, runs only when
+  the pool ran out (`PoolFailures.ranOut()`: the last account answered 429, 503 or stalled — a 401, 404,
+  500 or network error is the caller's to see), and never takes a request with tools or structured
+  output (`GeminiWebClient.fallbackRefusal()`): a tool loop silently continued by another model on a
+  prompt bridge is worse than an honest 429/503. Its answer is marked `servedBy: "gemini-web-fallback"`
+  and its usage recorded under that id, not the CloudCode model's. Look for `[AutoPool] ... Gemini Web's
+  default model answers instead`.
 
 ## Gotchas
 

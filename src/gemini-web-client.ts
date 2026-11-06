@@ -35,6 +35,10 @@ const ARGON_MODEL_ID = "95a4c0abcba24364";
 /** The shape of Gemini Web's model ids; anything else is a bridge name, not one Google knows. */
 const WEB_MODEL_ID_PATTERN = /^[0-9a-f]{16}$/;
 const DEFAULT_WEB_TIMEOUT_MS = 180_000;
+/** setTimeout's ceiling: a longer delay is clamped to 1 ms by Node, so every request would fail at once. */
+const MAX_TIMER_MS = 2_147_483_647;
+/** A session read from another signed-in account than the configured one is retried after this. */
+const FALLBACK_SESSION_TTL_MS = 10 * 60 * 1000;
 const CHARS_PER_TOKEN = 4;
 /** An answer larger than this is not a chat reply; stop reading rather than buffer it all. */
 const MAX_RESPONSE_BYTES = 32 * 1024 * 1024;
@@ -45,10 +49,27 @@ const MAX_RESPONSE_BYTES = 32 * 1024 * 1024;
  */
 export const GEMINI_WEB_FALLBACK_USAGE_ID = "gemini-web-fallback";
 
-/** How long one Gemini Web request may take. The answer arrives whole, so this covers generation too. */
-function webTimeoutMs(): number {
+/**
+ * How long one Gemini Web request may take in all: the session pages and the generate
+ * share it. The answer arrives whole, so this covers generation too.
+ */
+export function webTimeoutMs(): number {
   const configured = Number(process.env.GEMINI_WEB_TIMEOUT_MS);
-  return Number.isFinite(configured) && configured > 0 ? Math.floor(configured) : DEFAULT_WEB_TIMEOUT_MS;
+  return Number.isFinite(configured) && configured > 0 && configured <= MAX_TIMER_MS
+    ? Math.floor(configured)
+    : DEFAULT_WEB_TIMEOUT_MS;
+}
+
+/**
+ * An error that says what happened. A connection that fails on every address is an
+ * AggregateError with an empty message, which used to reach the log and the client as
+ * nothing at all; its code (ECONNREFUSED, ETIMEDOUT) is the useful part.
+ */
+function describedError(err: any): Error {
+  if (err instanceof Error && err.message) return err;
+  const codes = [err?.code, ...(Array.isArray(err?.errors) ? err.errors.map((e: any) => e?.code || e?.message) : [])]
+    .filter(Boolean);
+  return new Error(`Gemini Web connection failed${codes.length ? `: ${Array.from(new Set(codes)).join(", ")}` : ""}`);
 }
 
 /**
@@ -64,6 +85,8 @@ export interface WebRequestInit {
   method: "GET" | "POST";
   headers: Record<string, string>;
   body?: string;
+  /** What is left of the request's deadline; defaults to the whole GEMINI_WEB_TIMEOUT_MS. */
+  timeoutMs?: number;
 }
 
 export interface WebResponse {
@@ -84,8 +107,20 @@ export function webRequest(
   init: WebRequestInit,
   request: typeof https.request = https.request
 ): Promise<WebResponse> {
-  const timeoutMs = webTimeoutMs();
+  const timeoutMs = Math.max(1, Math.min(init.timeoutMs ?? webTimeoutMs(), MAX_TIMER_MS));
   return new Promise((resolve, reject) => {
+    let bytes = 0;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    // Every way out goes through here, so the timer never outlives the request (it used
+    // to stay armed, holding the buffered body, when the response errored mid-body).
+    let settled = false;
+    const settle = (err: unknown, value?: WebResponse) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      if (err) reject(describedError(err));
+      else resolve(value as WebResponse);
+    };
     const headers = init.body !== undefined
       ? { ...init.headers, "Content-Length": String(Buffer.byteLength(init.body)) }
       : init.headers;
@@ -94,7 +129,6 @@ export function webRequest(
       { method: init.method, headers, maxHeaderSize: MAX_RESPONSE_HEADER_BYTES },
       (res) => {
         const chunks: Buffer[] = [];
-        let bytes = 0;
         res.on("data", (chunk: Buffer) => {
           bytes += chunk.length;
           if (bytes > MAX_RESPONSE_BYTES) {
@@ -103,22 +137,20 @@ export function webRequest(
           }
           chunks.push(chunk);
         });
-        res.on("error", reject);
+        res.on("error", (err) => settle(err));
         res.on("end", () => {
-          clearTimeout(timer);
           const status = res.statusCode || 0;
-          resolve({ ok: status >= 200 && status < 300, status, text: Buffer.concat(chunks).toString("utf8") });
+          settle(null, { ok: status >= 200 && status < 300, status, text: Buffer.concat(chunks).toString("utf8") });
         });
       }
     );
-    const timer = setTimeout(
-      () => req.destroy(new Error(`Gemini Web did not answer within ${timeoutMs} ms`)),
+    timer = setTimeout(
+      () => req.destroy(new Error(bytes > 0
+        ? `Gemini Web did not finish answering within ${timeoutMs} ms`
+        : `Gemini Web did not answer within ${timeoutMs} ms`)),
       timeoutMs
     );
-    req.on("error", (err) => {
-      clearTimeout(timer);
-      reject(err);
-    });
+    req.on("error", (err) => settle(err));
     if (init.body !== undefined) req.write(init.body);
     req.end();
   });
@@ -160,6 +192,16 @@ export class GeminiWebClient {
     this.session = null; // Invalidate cached session only when credentials change
   }
 
+  /**
+   * Use the cookies linked to an account in the dashboard. Only the cookies come from the
+   * account: the multi-login choice (GEMINI_AUTH_USER) is still the operator's, and it was
+   * dropped when the whole credentials object was replaced with `{ rawCookies }`.
+   */
+  public useLinkedCookies(webCookies: string | undefined): void {
+    if (!webCookies) return;
+    this.setCredentials({ rawCookies: webCookies, authUser: process.env.GEMINI_AUTH_USER });
+  }
+
   public hasCredentials(): boolean {
     if (this.credentials?.rawCookies || this.credentials?.psid) return true;
     const envCookies = process.env.GEMINI_WEB_COOKIES || process.env.GEMINI_COOKIES || process.env.GEMINI_PSID;
@@ -170,7 +212,8 @@ export class GeminiWebClient {
     const raw = process.env.GEMINI_WEB_COOKIES || process.env.GEMINI_COOKIES;
     const psid = process.env.GEMINI_PSID;
     const psidts = process.env.GEMINI_PSIDTS;
-    const authUser = process.env.GEMINI_AUTH_USER || "0";
+    // Left undefined when unset: an explicit choice pins the session to that account.
+    const authUser = process.env.GEMINI_AUTH_USER;
 
     if (raw || psid) {
       this.credentials = {
@@ -231,52 +274,71 @@ export class GeminiWebClient {
    * Initializes or refreshes session by fetching https://gemini.google.com/app
    * and extracting SNlM0e and build metadata.
    */
-  public async ensureSession(): Promise<GeminiWebSession> {
+  public async ensureSession(deadline: number = Date.now() + webTimeoutMs()): Promise<GeminiWebSession> {
     if (this.session && this.session.expiresAt > Date.now()) {
       return this.session;
     }
 
+    const credentials = this.credentials;
     const cookieHeader = this.buildCookieHeader();
     if (!cookieHeader) {
       throw new Error("Gemini Web fallback credentials missing (set GEMINI_WEB_COOKIES or GEMINI_PSID)");
     }
 
-    // Attempt the configured account first, then /u/0 and /u/1, to handle Google multi-login.
-    // The path that worked is kept on the session: its token is only good for that account.
-    const authUser = this.credentials?.authUser || "0";
-    const candidatePaths = Array.from(new Set([authPathFor(authUser), "/u/0", "/u/1"]));
+    // An explicit GEMINI_AUTH_USER pins the session to that account: answering as another
+    // signed-in Google account instead is not a fallback anyone asked for. Without one, the
+    // default account ("/app", which is also "/u/0") is tried, then the second one; a
+    // session from that second one is retried after FALLBACK_SESSION_TTL_MS rather than
+    // kept for the full six hours.
+    const configured = credentials?.authUser;
+    const candidatePaths = configured !== undefined ? [authPathFor(configured)] : ["", "/u/1"];
 
-    let lastError: any = null;
+    let firstError: Error | null = null;
     for (const authPath of candidatePaths) {
+      const page = `${authPath}/app`;
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) {
+        firstError ??= new Error(`Gemini Web did not answer within ${webTimeoutMs()} ms`);
+        break;
+      }
       try {
-        const res = await this.transport(`https://gemini.google.com${authPath}/app`, {
+        const res = await this.transport(`https://gemini.google.com${page}`, {
           method: "GET",
           headers: {
             "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Cookie": cookieHeader,
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
           },
+          timeoutMs: remaining,
         });
 
         if (!res.ok) {
-          lastError = new Error(`Gemini Web session page ${authPath || "/"}app answered HTTP ${res.status}`);
+          firstError ??= res.status >= 300 && res.status < 400
+            ? new Error(`Gemini Web session page ${page} redirected (HTTP ${res.status}): the browser cookies are signed out; link fresh ones`)
+            : new Error(`Gemini Web session page ${page} answered HTTP ${res.status}`);
           continue;
         }
 
-        const html = res.text;
-        const session = { ...GeminiWebClient.extractSessionParameters(html, cookieHeader), authPath };
-        this.session = session;
-        if (authPath !== candidatePaths[0]) {
-          // A different signed-in Google account than the one configured is answering.
-          console.warn(`[Gemini Web] session page ${candidatePaths[0] || "/"}app failed; using ${authPath}/app instead`);
+        const extracted = GeminiWebClient.extractSessionParameters(res.text, cookieHeader);
+        const isFallback = authPath !== candidatePaths[0];
+        const session: GeminiWebSession = {
+          ...extracted,
+          authPath,
+          expiresAt: isFallback ? Date.now() + FALLBACK_SESSION_TTL_MS : extracted.expiresAt,
+        };
+        // Cookies switched while this page was loading: the session belongs to the old ones.
+        if (this.credentials === credentials) this.session = session;
+        if (isFallback) {
+          // A different signed-in Google account than the default one is answering.
+          console.warn(`[Gemini Web] session page ${candidatePaths[0]}/app failed; using ${page} instead`);
         }
         return session;
       } catch (err: any) {
-        lastError = err;
+        firstError ??= describedError(err);
       }
     }
 
-    throw lastError || new Error("Failed to initialize Gemini Web session (check that your browser session cookies are still valid)");
+    throw firstError || new Error("Failed to initialize Gemini Web session (check that your browser session cookies are still valid)");
   }
 
   /**
@@ -363,17 +425,28 @@ export class GeminiWebClient {
     for (const turn of contents) {
       const role = turn.role === "model" ? "Assistant" : "User";
       const texts: string[] = [];
+      // A turn's calls are written in the JSON shape the tool bridge asks the model to
+      // answer in, so a model that continues in the style of its history still produces
+      // something parseToolBridgeOutput() reads (a `[Tool Call: ...]` notation it did not).
+      const calls: Array<{ id?: string; name: string; arguments: unknown }> = [];
       if (Array.isArray(turn.parts)) {
         for (const p of turn.parts) {
           if (p.text && p.thought !== true) {
             texts.push(p.text);
           } else if (p.functionCall?.name) {
-            texts.push(`[Tool Call: ${p.functionCall.name}(${JSON.stringify(p.functionCall.args ?? {})})]`);
-          } else if (p.functionResponse?.response?.content) {
-            texts.push(`[Tool Result: ${p.functionResponse.response.content}]`);
+            calls.push({ ...(p.functionCall.id ? { id: p.functionCall.id } : {}), name: p.functionCall.name, arguments: p.functionCall.args ?? {} });
+          } else if (p.functionResponse) {
+            // Named and tied to its call: parallel results can come back in any order, and
+            // an empty result is still an answer (dropping it left the call unanswered).
+            const fr = p.functionResponse;
+            const content = fr.response?.content;
+            const shown = content === undefined || content === null || content === "" ? "(empty)" : String(content);
+            const label = [fr.name, fr.id ? `id ${fr.id}` : ""].filter(Boolean).join(", ");
+            texts.push(`[Tool Result${label ? ` (${label})` : ""}: ${shown}]`);
           }
         }
       }
+      if (calls.length > 0) texts.push(JSON.stringify({ tool_calls: calls }));
       if (texts.length > 0) {
         lines.push(`${role}: ${texts.join("\n")}`);
       }
@@ -448,10 +521,13 @@ export class GeminiWebClient {
                   parsedText = cand[1][0];
                 }
               }
-              // If not found in payload[4], scan strings inside payload
-              if (!parsedText) {
+              // Otherwise look inside the candidate subtree only (an extra level of nesting
+              // has been seen there). The whole payload must not be scanned: its first string
+              // is metadata such as the response id ("r_9f8e7d"), which then went out as the
+              // model's answer and defeated the "no readable reply" check.
+              if (!parsedText && payload && Array.isArray(payload[4])) {
                 const findDeepText = (obj: any): string | null => {
-                  if (typeof obj === "string" && obj.length > 0 && !obj.startsWith("c_") && !obj.startsWith("rc_")) {
+                  if (typeof obj === "string" && obj.length > 0 && !/^(?:r|rc|c)_[A-Za-z0-9]+$/.test(obj)) {
                     return obj;
                   }
                   if (Array.isArray(obj)) {
@@ -462,7 +538,7 @@ export class GeminiWebClient {
                   }
                   return null;
                 };
-                const candText = findDeepText(payload);
+                const candText = findDeepText(payload[4]);
                 if (candText) parsedText = candText;
               }
             }
@@ -490,15 +566,17 @@ export class GeminiWebClient {
    * Generates content via Gemini Web upstream.
    */
   public async generateContent(promptOrContents: any, targetModelId?: string): Promise<any> {
-    const session = await this.ensureSession();
+    // One deadline for the whole request: the session pages and the generate share it.
+    const deadline = Date.now() + webTimeoutMs();
+    const session = await this.ensureSession(deadline);
     let prompt = typeof promptOrContents === "string"
       ? promptOrContents
       : GeminiWebClient.requestToPromptText(promptOrContents || {});
 
     if (!prompt.trim()) prompt = "Hello";
 
-    // Post to the account the session's token came from, not the one configured.
-    const authPath = session.authPath ?? authPathFor(this.credentials?.authUser || "0");
+    // Post to the account the session's token came from.
+    const authPath = session.authPath ?? "";
     const generateUrl = `https://gemini.google.com${authPath}/_/BardChatUi/data/assistant.lamda.BardFrontendService/StreamGenerate?bl=${encodeURIComponent(session.bl)}&f.sid=${encodeURIComponent(session.fsid)}&_reqid=${Math.floor(Math.random() * 89999 + 10000)}&rt=c`;
 
     const bodyParams = GeminiWebClient.buildRpcPayload(prompt, session.at, targetModelId);
@@ -514,6 +592,7 @@ export class GeminiWebClient {
         "X-Same-Domain": "1",
       },
       body: bodyParams.toString(),
+      timeoutMs: Math.max(1, deadline - Date.now()),
     });
 
     if (!res.ok) {
@@ -558,13 +637,20 @@ export class GeminiWebClient {
   }
 
   /**
-   * Streams content chunk by chunk.
+   * Why a CloudCode request must not be answered by Gemini Web in the pool's place, or null
+   * when it may be: what it asks for would be silently lost in a flattened text prompt.
    */
-  public async *streamGenerateContent(promptOrContents: any, targetModelId?: string): AsyncIterable<any> {
-    // Generate complete response and yield as single candidate chunk
-    const full = await this.generateContent(promptOrContents, targetModelId);
-    yield {
-      response: full,
-    };
+  public static fallbackRefusal(request: any): string | null {
+    if (Array.isArray(request?.tools) && request.tools.length > 0) return "request carries tools";
+    const config = request?.generationConfig;
+    if (config?.responseSchema || config?.responseJsonSchema || config?.responseMimeType === "application/json") {
+      return "request asks for structured output";
+    }
+    return null;
+  }
+
+  /** The answer text of a Gemini Web response (one candidate, one text part). */
+  public static answerText(response: any): string {
+    return response?.candidates?.[0]?.content?.parts?.[0]?.text || "";
   }
 }

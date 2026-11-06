@@ -111,6 +111,15 @@ export class PoolFailures {
     this.last = { kind, message503: outcome.message503, stallAttempts: outcome.stallAttempts ?? 1 };
   }
 
+  /**
+   * Whether the run ended because the pool ran out — the last account tried answered 429,
+   * 503 or stalled — rather than on some other failure (a 401, a 404, a 500, the network),
+   * which is that account's problem and says nothing about the pool.
+   */
+  ranOut(): boolean {
+    return this.last !== null && this.last.kind !== "other";
+  }
+
   /** The error to end the run with, or null to keep the caller's own. */
   exhaustedError(model: string): PoolExhaustedError | PoolStalledError | null {
     if (!this.last) return null;

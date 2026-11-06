@@ -160,8 +160,10 @@ export class AntigravityClient {
    * The pool ran out: answer from Gemini Web, or null to let the pool's own error through.
    *
    * A different provider and model answering is a large substitution, so it is opt-in
-   * (`GEMINI_WEB_FALLBACK=1`), follows the failover switch, and never takes a request
-   * that carries tools: Gemini Web has no native function calling, and an agent's tool
+   * (`GEMINI_WEB_FALLBACK=1`), follows the failover switch, runs only when the pool ran
+   * out (the caller checks PoolFailures.ranOut()), and never takes a request that carries
+   * tools or asks for structured output: Gemini Web has no native function calling or
+   * JSON mode (the schema never reaches its prompt), and an agent's tool
    * loop silently continued by another model on a prompt-based bridge is worse than an
    * honest 429/503. Asking for a Gemini Web model by name (gemini-argon-4) is the way to
    * use it with tools.
@@ -173,13 +175,13 @@ export class AntigravityClient {
    */
   private async tryGeminiWebFallback(payload: AntigravityPayload): Promise<any | null> {
     if (process.env.GEMINI_WEB_FALLBACK !== "1" || !this.oauth.isAutoFailoverEnabled()) return null;
-    if (Array.isArray(payload.request?.tools) && payload.request.tools.length > 0) {
-      console.log(`[AutoPool] CloudCode pool exhausted for ${payload.model}; request carries tools, so no Gemini Web fallback.`);
+    const refusal = GeminiWebClient.fallbackRefusal(payload.request);
+    if (refusal) {
+      console.log(`[AutoPool] CloudCode pool exhausted for ${payload.model}; ${refusal}, so no Gemini Web fallback.`);
       return null;
     }
     const geminiWeb = GeminiWebClient.getInstance();
-    const linked = this.oauth.findAccountWithWebCookies();
-    if (linked?.webCookies) geminiWeb.setCredentials({ rawCookies: linked.webCookies });
+    geminiWeb.useLinkedCookies(this.oauth.findAccountWithWebCookies()?.webCookies);
     if (!geminiWeb.hasCredentials()) return null;
     try {
       console.warn(`[AutoPool] CloudCode pool exhausted for ${payload.model}; Gemini Web's default model answers instead.`);
@@ -317,13 +319,15 @@ export class AntigravityClient {
         }
       }
 
-      const webFallback = await this.tryGeminiWebFallback(payload);
+      // Only a pool that ran out falls back. Any other failure (401, 404, 500, the
+      // network) is the caller's to see, and used to be answered by Gemini Web instead.
+      const webFallback = failures.ranOut() ? await this.tryGeminiWebFallback(payload) : null;
       if (webFallback) return webFallback;
 
       throw failures.exhaustedError(payload.model) ?? lastError ?? new Error("All Antigravity endpoints failed.");
     }
 
-    const webFallback = await this.tryGeminiWebFallback(payload);
+    const webFallback = failures.ranOut() ? await this.tryGeminiWebFallback(payload) : null;
     if (webFallback) return webFallback;
 
     throw failures.exhaustedError(payload.model) ?? new Error(POOL_RATE_LIMITED);
@@ -458,13 +462,13 @@ export class AntigravityClient {
         }
       }
 
-      const webFallback = await this.tryGeminiWebFallback(payload);
+      const webFallback = failures.ranOut() ? await this.tryGeminiWebFallback(payload) : null;
       if (webFallback) return singleChunkStream(webFallback);
 
       throw failures.exhaustedError(payload.model) ?? lastError ?? new Error("All Antigravity streaming endpoints failed.");
     }
 
-    const webFallback = await this.tryGeminiWebFallback(payload);
+    const webFallback = failures.ranOut() ? await this.tryGeminiWebFallback(payload) : null;
     if (webFallback) return singleChunkStream(webFallback);
 
     throw failures.exhaustedError(payload.model) ?? new Error(POOL_RATE_LIMITED);

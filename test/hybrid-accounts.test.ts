@@ -6,6 +6,10 @@ import http from "node:http";
 import { OAuthManager, AccountToken } from "../src/oauth";
 import { BridgeServer } from "../src/server";
 import { GeminiWebClient } from "../src/gemini-web-client";
+import { UsageTracker } from "../src/usage-tracker";
+
+// The Gemini Web routes record usage; keep it off the real ~/.zcode counters.
+(UsageTracker.getInstance() as any).recordUsage = () => {};
 
 const TEST_PORT = 52149;
 const BASE_URL = `http://127.0.0.1:${TEST_PORT}`;

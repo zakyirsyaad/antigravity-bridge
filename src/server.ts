@@ -13,7 +13,13 @@ import { getDashboardHtml } from "./dashboard-html";
 import { applyConnectAttemptTimeout } from "./network";
 import { parseOrRepairJson } from "./json-repair";
 import { GeminiWebClient } from "./gemini-web-client";
-import { buildToolBridgePrompt, parseToolBridgeOutput } from "./tool-bridge";
+import { buildToolBridgePrompt, parseToolBridgeOutput, ToolBridgeResult } from "./tool-bridge";
+
+/** Gemini Web's answer for one request, after the tool bridge: text, or the tool calls to send. */
+interface WebAnswer {
+  text: string;
+  toolCalls: ToolBridgeResult["tool_calls"];
+}
 
 /**
  * Google rejected the request itself (HTTP 400): a tool schema it cannot take, a
@@ -122,6 +128,35 @@ export class BridgeServer {
     const apiKey = req.headers["x-api-key"];
     if (typeof apiKey === "string" && apiKey.trim()) return apiKey.trim();
     return null;
+  }
+
+  /**
+   * The Gemini Web client, using the cookies linked to an account when there are any (the
+   * operator's GEMINI_AUTH_USER is kept: GeminiWebClient.useLinkedCookies()).
+   */
+  private geminiWebWithLinkedCookies(): GeminiWebClient {
+    const geminiWeb = GeminiWebClient.getInstance();
+    geminiWeb.useLinkedCookies(this.oauth.findAccountWithWebCookies()?.webCookies);
+    return geminiWeb;
+  }
+
+  /**
+   * What Gemini Web answered, for this request: tool calls the request allows, or text,
+   * never neither. generateContent() already refuses a reply it cannot read; this refuses
+   * one the tool bridge empties (`{"content": ""}`, or only calls the request does not
+   * allow), which otherwise reached the client as a successful empty turn with nothing in
+   * the log. Callers turn the error into a 500 before writing anything.
+   */
+  private static webAnswer(resp: any, body: any): WebAnswer {
+    const rawText = GeminiWebClient.answerText(resp);
+    if (!Array.isArray(body?.tools) || body.tools.length === 0) return { text: rawText, toolCalls: [] };
+    const bridged = parseToolBridgeOutput(rawText, body.tools, body.tool_choice);
+    if (bridged.tool_calls.length === 0 && !bridged.content) {
+      throw new Error(
+        `Gemini Web's answer held nothing the request can use${bridged.dropped.length ? `: ${bridged.dropped.join("; ")}` : " (empty content)"}`
+      );
+    }
+    return { text: bridged.content, toolCalls: bridged.tool_calls };
   }
 
   /**
@@ -630,11 +665,7 @@ export class BridgeServer {
 
     // Dedicated routing for Gemini Web models (e.g. Gemini Argon 4, Gemini Auto)
     if (GeminiWebClient.isGeminiWebModel(requestedModel)) {
-      const hybridAcc = this.oauth.findAccountWithWebCookies();
-      const geminiWeb = GeminiWebClient.getInstance();
-      if (hybridAcc?.webCookies) {
-        geminiWeb.setCredentials({ rawCookies: hybridAcc.webCookies });
-      }
+      const geminiWeb = this.geminiWebWithLinkedCookies();
 
       if (!geminiWeb.hasCredentials()) {
         res.writeHead(400, { "Content-Type": "application/json" });
@@ -655,142 +686,91 @@ export class BridgeServer {
         ? buildToolBridgePrompt(GeminiWebClient.requestToPromptText(payload.request), body.tools, body.tool_choice)
         : payload.request;
 
-      if (body.stream) {
-        // Gemini Web answers whole, so the answer is in hand before the 200 goes out and a
-        // failure is still a real HTTP error. With tools it is bridged into tool_use blocks,
-        // as the non-streaming branch below does: Claude Code always streams.
-        let rawText = "";
-        let webUsage: any = null;
-        try {
-          const resp = await geminiWeb.generateContent(webPrompt, requestedModel);
-          rawText = resp.candidates?.[0]?.content?.parts?.[0]?.text || "";
-          webUsage = resp.usageMetadata;
-        } catch (err: any) {
-          console.error("[Gemini Web] /v1/messages stream failed:", err?.message);
-          res.writeHead(500, { "Content-Type": "application/json" });
-          res.end(
-            JSON.stringify({
-              type: "error",
-              error: { type: "api_error", message: err.message || "Gemini Web stream failed" },
-            })
-          );
-          return;
-        }
-
-        const bridged = hasTools ? parseToolBridgeOutput(rawText, body.tools) : null;
-        const blocks: any[] = [];
-        if (bridged?.finish_reason === "tool_calls") {
-          for (const tc of bridged.tool_calls) {
-            blocks.push({ type: "tool_use", id: tc.id, name: tc.function.name, input: parseOrRepairJson(tc.function.arguments, {}) });
-          }
-        } else {
-          const text = bridged ? bridged.content : rawText;
-          if (text) blocks.push({ type: "text", text });
-        }
-        const sawToolUse = blocks.some((b) => b.type === "tool_use");
-
-        res.writeHead(200, {
-          "Content-Type": "text/event-stream; charset=utf-8",
-          "Cache-Control": "no-cache",
-          Connection: "keep-alive",
-        });
-        res.write(
-          `event: message_start\ndata: ${JSON.stringify({
-            type: "message_start",
-            message: {
-              id: msgId,
-              type: "message",
-              role: "assistant",
-              content: [],
-              model: requestedModel,
-              stop_reason: null,
-              stop_sequence: null,
-              usage: { input_tokens: webUsage?.promptTokenCount || 0, output_tokens: 0 },
-            },
-          })}\n\n`
+      // Gemini Web answers whole, so the answer is asked for, and read, before anything is
+      // written: a failure is then a real HTTP error on the stream too. One call and one
+      // bridge serve both modes (Claude Code always streams), as in the OpenAI handler.
+      let resp: any;
+      let answer: WebAnswer;
+      try {
+        resp = await geminiWeb.generateContent(webPrompt, requestedModel);
+        answer = BridgeServer.webAnswer(resp, body);
+      } catch (err: any) {
+        console.error("[Gemini Web] /v1/messages%s failed:", body.stream ? " stream" : "", err?.message);
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            type: "error",
+            error: { type: "api_error", message: err?.message || "Gemini Web request failed" },
+          })
         );
-        blocks.forEach((block, index) => {
-          const start = block.type === "tool_use" ? { ...block, input: {} } : { type: "text", text: "" };
-          const delta =
-            block.type === "tool_use"
-              ? { type: "input_json_delta", partial_json: JSON.stringify(block.input) }
-              : { type: "text_delta", text: block.text };
-          res.write(`event: content_block_start\ndata: ${JSON.stringify({ type: "content_block_start", index, content_block: start })}\n\n`);
-          res.write(`event: content_block_delta\ndata: ${JSON.stringify({ type: "content_block_delta", index, delta })}\n\n`);
-          res.write(`event: content_block_stop\ndata: ${JSON.stringify({ type: "content_block_stop", index })}\n\n`);
-        });
-        res.write(
-          `event: message_delta\ndata: ${JSON.stringify({
-            type: "message_delta",
-            delta: { stop_reason: sawToolUse ? "tool_use" : "end_turn", stop_sequence: null },
+        return;
+      }
+      const webUsage = resp.usageMetadata;
+      // The bridge only lets through arguments that are a JSON object, as Anthropic's input must be.
+      const blocks: any[] = answer.toolCalls.length > 0
+        ? answer.toolCalls.map((tc) => ({ type: "tool_use", id: tc.id, name: tc.function.name, input: JSON.parse(tc.function.arguments) }))
+        : [{ type: "text", text: answer.text }];
+      const stopReason = answer.toolCalls.length > 0 ? "tool_use" : "end_turn";
+
+      if (!body.stream) {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            id: msgId,
+            type: "message",
+            role: "assistant",
+            content: blocks,
+            model: requestedModel,
+            stop_reason: stopReason,
+            stop_sequence: null,
             usage: Transformer.anthropicUsage(webUsage),
-          })}\n\n`
+          })
         );
-        res.write(`event: message_stop\ndata: {"type":"message_stop"}\n\n`);
-        res.end();
         BridgeServer.recordWebUsage(requestedModel, webUsage);
         return;
-      } else {
-        try {
-          const resp = await geminiWeb.generateContent(webPrompt, requestedModel);
-          const rawText = resp.candidates?.[0]?.content?.parts?.[0]?.text || "";
-
-          if (Array.isArray(body.tools) && body.tools.length > 0) {
-            const bridged = parseToolBridgeOutput(rawText, body.tools);
-            const contentBlocks: any[] = [];
-            let stopReason = "end_turn";
-
-            if (bridged.finish_reason === "tool_calls") {
-              stopReason = "tool_use";
-              for (const tc of bridged.tool_calls) {
-                contentBlocks.push({
-                  type: "tool_use",
-                  id: tc.id,
-                  name: tc.function.name,
-                  input: parseOrRepairJson(tc.function.arguments, {}),
-                });
-              }
-            } else if (bridged.content) {
-              contentBlocks.push({
-                type: "text",
-                text: bridged.content,
-              });
-            }
-
-            res.writeHead(200, { "Content-Type": "application/json" });
-            res.end(
-              JSON.stringify({
-                id: msgId,
-                type: "message",
-                role: "assistant",
-                content: contentBlocks,
-                model: requestedModel,
-                stop_reason: stopReason,
-                stop_sequence: null,
-                usage: Transformer.anthropicUsage(resp.usageMetadata),
-              })
-            );
-            BridgeServer.recordWebUsage(requestedModel, resp.usageMetadata);
-            return;
-          }
-
-          const formatted = Transformer.antigravityToAnthropic(resp, requestedModel);
-          res.writeHead(200, { "Content-Type": "application/json" });
-          res.end(JSON.stringify(formatted));
-          BridgeServer.recordWebUsage(requestedModel, resp.usageMetadata);
-          return;
-        } catch (err: any) {
-          console.error("[Gemini Web] /v1/messages failed:", err?.message);
-          res.writeHead(500, { "Content-Type": "application/json" });
-          res.end(
-            JSON.stringify({
-              type: "error",
-              error: { type: "api_error", message: err?.message || "Gemini Web request failed" },
-            })
-          );
-          return;
-        }
       }
+
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream; charset=utf-8",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive",
+      });
+      res.write(
+        `event: message_start\ndata: ${JSON.stringify({
+          type: "message_start",
+          message: {
+            id: msgId,
+            type: "message",
+            role: "assistant",
+            content: [],
+            model: requestedModel,
+            stop_reason: null,
+            stop_sequence: null,
+            usage: { input_tokens: webUsage?.promptTokenCount || 0, output_tokens: 0 },
+          },
+        })}\n\n`
+      );
+      blocks.forEach((block, index) => {
+        const start = block.type === "tool_use" ? { ...block, input: {} } : { type: "text", text: "" };
+        const delta =
+          block.type === "tool_use"
+            ? { type: "input_json_delta", partial_json: JSON.stringify(block.input) }
+            : { type: "text_delta", text: block.text };
+        res.write(`event: content_block_start\ndata: ${JSON.stringify({ type: "content_block_start", index, content_block: start })}\n\n`);
+        res.write(`event: content_block_delta\ndata: ${JSON.stringify({ type: "content_block_delta", index, delta })}\n\n`);
+        res.write(`event: content_block_stop\ndata: ${JSON.stringify({ type: "content_block_stop", index })}\n\n`);
+      });
+      res.write(
+        `event: message_delta\ndata: ${JSON.stringify({
+          type: "message_delta",
+          delta: { stop_reason: stopReason, stop_sequence: null },
+          usage: Transformer.anthropicUsage(webUsage),
+        })}\n\n`
+      );
+      res.write(`event: message_stop\ndata: {"type":"message_stop"}\n\n`);
+      res.end();
+      BridgeServer.recordWebUsage(requestedModel, webUsage);
+      return;
     }
 
     if (body.stream) {
@@ -1043,11 +1023,7 @@ export class BridgeServer {
 
     // Dedicated routing for Gemini Web models (e.g. Gemini Argon 4, Gemini Auto)
     if (GeminiWebClient.isGeminiWebModel(requestedModel)) {
-      const hybridAcc = this.oauth.findAccountWithWebCookies();
-      const geminiWeb = GeminiWebClient.getInstance();
-      if (hybridAcc?.webCookies) {
-        geminiWeb.setCredentials({ rawCookies: hybridAcc.webCookies });
-      }
+      const geminiWeb = this.geminiWebWithLinkedCookies();
 
       if (!geminiWeb.hasCredentials()) {
         res.writeHead(400, { "Content-Type": "application/json" });
@@ -1071,22 +1047,22 @@ export class BridgeServer {
       // real HTTP error on the stream too, not an in-band event inside a 200, which is how
       // this branch used to report it.
       let resp: any;
+      let answer: WebAnswer;
       try {
         resp = await geminiWeb.generateContent(webPrompt, requestedModel);
+        answer = BridgeServer.webAnswer(resp, body);
       } catch (err: any) {
-        console.error("[Gemini Web] /v1/chat/completions failed:", err?.message);
+        console.error("[Gemini Web] /v1/chat/completions%s failed:", body.stream ? " stream" : "", err?.message);
         res.writeHead(500, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: { message: err?.message || "Gemini Web request failed", type: "api_error" } }));
         return;
       }
-      const rawText = resp.candidates?.[0]?.content?.parts?.[0]?.text || "";
       const webUsage = resp.usageMetadata;
-      const bridged = hasTools ? parseToolBridgeOutput(rawText, body.tools) : null;
-      const toolCalls = bridged?.finish_reason === "tool_calls" ? bridged.tool_calls : [];
+      const toolCalls = answer.toolCalls;
 
       if (!body.stream) {
-        if (bridged) {
-          const message: any = { role: "assistant", content: toolCalls.length > 0 ? null : bridged.content };
+        if (hasTools) {
+          const message: any = { role: "assistant", content: toolCalls.length > 0 ? null : answer.text };
           if (toolCalls.length > 0) message.tool_calls = toolCalls;
           res.writeHead(200, { "Content-Type": "application/json" });
           res.end(
@@ -1095,7 +1071,7 @@ export class BridgeServer {
               object: "chat.completion",
               created,
               model: requestedModel,
-              choices: [{ index: 0, message, finish_reason: bridged.finish_reason }],
+              choices: [{ index: 0, message, finish_reason: toolCalls.length > 0 ? "tool_calls" : "stop" }],
               usage: Transformer.openaiUsage(webUsage),
             })
           );
@@ -1125,8 +1101,7 @@ export class BridgeServer {
         ]);
         writeChunk([{ index: 0, delta: {}, finish_reason: "tool_calls" }]);
       } else {
-        const text = bridged ? bridged.content : rawText;
-        if (text) writeChunk([{ index: 0, delta: { content: text }, finish_reason: null }]);
+        writeChunk([{ index: 0, delta: { content: answer.text }, finish_reason: null }]);
         writeChunk([{ index: 0, delta: {}, finish_reason: "stop" }]);
       }
       // OpenAI's contract: the usage chunk only when the caller asks for it.

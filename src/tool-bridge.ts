@@ -20,6 +20,8 @@ export interface ToolBridgeResult {
     };
   }>;
   finish_reason: "stop" | "tool_calls";
+  /** Why calls the model wrote were left out (undeclared, forbidden by tool_choice, bad arguments). */
+  dropped: string[];
 }
 
 /**
@@ -113,11 +115,69 @@ ${conversationPrompt}`;
 /**
  * Parses the raw text output from Gemini Web, extracting tool calls or content text.
  */
-export function parseToolBridgeOutput(rawText: string, availableTools?: any[]): ToolBridgeResult {
+/**
+ * Gemini Web's raw text as content or tool calls, held to what the request allows: only
+ * declared tools, nothing under tool_choice "none", only the forced tool when one is
+ * named, and arguments that are a JSON object (repaired, so every protocol sends the same
+ * valid JSON). A prompt is a request, not a contract: before this, any call the model
+ * wrote went out as a real one, including to tools the client never declared.
+ */
+export function parseToolBridgeOutput(rawText: string, availableTools?: any[], toolChoice?: any): ToolBridgeResult {
+  const loose = parseToolCallsLoosely(rawText);
+  if (loose.tool_calls.length === 0) return loose;
+
+  const declared = declaredToolNames(availableTools);
+  const { mode, name: forced } = normalizeToolChoice(toolChoice);
+  const dropped: string[] = [];
+  const kept: ToolBridgeResult["tool_calls"] = [];
+  for (const tc of loose.tool_calls) {
+    const name = tc.function.name;
+    if (mode === "none") {
+      dropped.push(`${name}: tool_choice is none`);
+      continue;
+    }
+    if (declared && !declared.has(name)) {
+      dropped.push(`${name}: not a declared tool`);
+      continue;
+    }
+    if (forced && name !== forced) {
+      dropped.push(`${name}: tool_choice requires ${forced}`);
+      continue;
+    }
+    const args = objectArguments(tc.function.arguments);
+    if (args === null) {
+      dropped.push(`${name}: arguments are not a JSON object`);
+      continue;
+    }
+    kept.push({ ...tc, function: { name, arguments: args } });
+  }
+  return kept.length > 0
+    ? { content: "", tool_calls: kept, finish_reason: "tool_calls", dropped }
+    : { content: "", tool_calls: [], finish_reason: "stop", dropped };
+}
+
+/** The tool names a request declares, in either protocol's shape; null when it declares none. */
+function declaredToolNames(tools?: any[]): Set<string> | null {
+  if (!Array.isArray(tools) || tools.length === 0) return null;
+  return new Set(tools.map((t) => String((t?.function || t)?.name || "").trim()).filter(Boolean));
+}
+
+/** Arguments as a JSON object string, or null when they are not an object (Anthropic's input must be one). */
+function objectArguments(raw: string): string | null {
+  // The repairer turns any text into something; a bare string ("/etc/hosts") came back as
+  // {}, a call with its one argument silently gone. Only text that opens an object counts.
+  if (!raw.trim().startsWith("{")) return null;
+  const value = parseOrRepairJson<any>(raw, undefined);
+  return value && typeof value === "object" && !Array.isArray(value) ? JSON.stringify(value) : null;
+}
+
+/** Tool calls read leniently out of the model's text, before the request's rules are applied. */
+function parseToolCallsLoosely(rawText: string): ToolBridgeResult {
   const result: ToolBridgeResult = {
     content: "",
     tool_calls: [],
     finish_reason: "stop",
+    dropped: [],
   };
 
   if (!rawText || typeof rawText !== "string") {
@@ -176,9 +236,9 @@ export function parseToolBridgeOutput(rawText: string, availableTools?: any[]): 
   }
 
   // 2. Regex scan for embedded tool_calls or function objects in text
-  const toolCallMatch = trimmed.match(
-    /\{[\s\S]*?"(?:tool_calls|functionCall)"\s*:\s*\[?([\s\S]*?)\]?\}|\{"name"\s*:\s*"([^"]+)",\s*"(?:arguments|args)"\s*:\s*(\{[\s\S]*?\})\}/
-  );
+  // Only a gate for the extraction below. The regex it replaces was tried from every "{"
+  // and scanned to the end of the text, quadratic on a long brace-heavy reply (code).
+  const toolCallMatch = /"(?:tool_calls|functionCall)"\s*:/.test(trimmed) || /\{\s*"name"\s*:\s*"/.test(trimmed);
 
   if (toolCallMatch) {
     try {
