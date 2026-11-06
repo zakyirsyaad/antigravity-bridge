@@ -132,6 +132,14 @@ export class BridgeServer {
    * whether a thinking budget is actually being used or is sitting idle — which
    * is what a budget-vs-answer-window tradeoff has to be tuned against.
    */
+  /**
+   * Gemini Web requests go to the usage tracker too, so they show in bridge:usage and the
+   * dashboard. The counts are GeminiWebClient's estimates: Gemini Web reports none.
+   */
+  private static recordWebUsage(model: string, usage: any): void {
+    UsageTracker.getInstance().recordUsage(model, usage?.promptTokenCount || 0, usage?.candidatesTokenCount || 0, 0);
+  }
+
   private static thoughtsTokens(resp: any): number {
     const raw = resp?.response || resp;
     return raw?.usageMetadata?.thoughtsTokenCount || 0;
@@ -652,9 +660,11 @@ export class BridgeServer {
         // failure is still a real HTTP error. With tools it is bridged into tool_use blocks,
         // as the non-streaming branch below does: Claude Code always streams.
         let rawText = "";
+        let webUsage: any = null;
         try {
           const resp = await geminiWeb.generateContent(webPrompt, requestedModel);
           rawText = resp.candidates?.[0]?.content?.parts?.[0]?.text || "";
+          webUsage = resp.usageMetadata;
         } catch (err: any) {
           res.writeHead(500, { "Content-Type": "application/json" });
           res.end(
@@ -694,7 +704,7 @@ export class BridgeServer {
               model: requestedModel,
               stop_reason: null,
               stop_sequence: null,
-              usage: { input_tokens: 0, output_tokens: 0 },
+              usage: { input_tokens: webUsage?.promptTokenCount || 0, output_tokens: 0 },
             },
           })}\n\n`
         );
@@ -712,11 +722,12 @@ export class BridgeServer {
           `event: message_delta\ndata: ${JSON.stringify({
             type: "message_delta",
             delta: { stop_reason: sawToolUse ? "tool_use" : "end_turn", stop_sequence: null },
-            usage: { output_tokens: Math.max(1, Math.ceil(rawText.length / 4)) },
+            usage: Transformer.anthropicUsage(webUsage),
           })}\n\n`
         );
         res.write(`event: message_stop\ndata: {"type":"message_stop"}\n\n`);
         res.end();
+        BridgeServer.recordWebUsage(requestedModel, webUsage);
         return;
       } else {
         try {
@@ -759,15 +770,17 @@ export class BridgeServer {
                 model: requestedModel,
                 stop_reason: stopReason,
                 stop_sequence: null,
-                usage: { input_tokens: 0, output_tokens: Math.max(1, Math.ceil(rawText.length / 4)) },
+                usage: Transformer.anthropicUsage(resp.usageMetadata),
               })
             );
+            BridgeServer.recordWebUsage(requestedModel, resp.usageMetadata);
             return;
           }
 
           const formatted = Transformer.antigravityToAnthropic(resp, requestedModel);
           res.writeHead(200, { "Content-Type": "application/json" });
           res.end(JSON.stringify(formatted));
+          BridgeServer.recordWebUsage(requestedModel, resp.usageMetadata);
           return;
         } catch (err: any) {
           res.writeHead(500, { "Content-Type": "application/json" });
@@ -1055,8 +1068,10 @@ export class BridgeServer {
           }
 
           let accumulatedText = "";
+          let webUsage: any = null;
           const stream = geminiWeb.streamGenerateContent(webPromptObj, requestedModel);
           for await (const chunk of stream) {
+            if (chunk.response?.usageMetadata) webUsage = chunk.response.usageMetadata;
             const text = chunk.response?.candidates?.[0]?.content?.parts?.[0]?.text || "";
             if (text) {
               accumulatedText += text;
@@ -1140,8 +1155,22 @@ export class BridgeServer {
               })}\n\n`
             );
           }
+          // OpenAI's contract: the usage chunk only when the caller asks for it.
+          if (body.stream_options?.include_usage === true && webUsage) {
+            res.write(
+              `data: ${JSON.stringify({
+                id: cmplId,
+                object: "chat.completion.chunk",
+                created,
+                model: requestedModel,
+                choices: [],
+                usage: Transformer.openaiUsage(webUsage),
+              })}\n\n`
+            );
+          }
           res.write("data: [DONE]\n\n");
           res.end();
+          BridgeServer.recordWebUsage(requestedModel, webUsage);
           return;
         } catch (err: any) {
           this.endOpenAIStreamWithError(res, err);
@@ -1181,15 +1210,17 @@ export class BridgeServer {
                     finish_reason: bridged.finish_reason,
                   },
                 ],
-                usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+                usage: Transformer.openaiUsage(resp.usageMetadata),
               })
             );
+            BridgeServer.recordWebUsage(requestedModel, resp.usageMetadata);
             return;
           }
 
           const formatted = Transformer.antigravityToOpenAI(resp, requestedModel, body?.response_format);
           res.writeHead(200, { "Content-Type": "application/json" });
           res.end(JSON.stringify(formatted));
+          BridgeServer.recordWebUsage(requestedModel, resp.usageMetadata);
           return;
         } catch (err: any) {
           res.writeHead(500, { "Content-Type": "application/json" });

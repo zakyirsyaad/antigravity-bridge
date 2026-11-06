@@ -35,6 +35,7 @@ const ARGON_MODEL_ID = "95a4c0abcba24364";
 /** The shape of Gemini Web's model ids; anything else is a bridge name, not one Google knows. */
 const WEB_MODEL_ID_PATTERN = /^[0-9a-f]{16}$/;
 const DEFAULT_WEB_TIMEOUT_MS = 180_000;
+const CHARS_PER_TOKEN = 4;
 
 /** How long one Gemini Web request may take. The answer arrives whole, so this covers generation too. */
 function webTimeoutMs(): number {
@@ -487,7 +488,29 @@ export class GeminiWebClient {
     }
 
     const raw = res.text;
-    return GeminiWebClient.parseAntiXssiResponse(raw);
+    return GeminiWebClient.withEstimatedUsage(GeminiWebClient.parseAntiXssiResponse(raw), prompt);
+  }
+
+  /** A rough token count: Gemini Web reports none, and ~4 characters per token is the usual rule. */
+  public static estimateTokens(text: string): number {
+    return text ? Math.ceil(text.length / CHARS_PER_TOKEN) : 0;
+  }
+
+  /**
+   * Gemini Web's answer with a usageMetadata estimated from the prompt actually sent and
+   * the text that came back, in Google's own shape, so every reader of usageMetadata (the
+   * protocol converters, the pool-fallback streams, the usage tracker) gets a figure.
+   * Without it a client is told 0 input tokens, and Claude Code then shows no context in
+   * use and never compacts, re-sending an ever larger prompt.
+   */
+  public static withEstimatedUsage(response: any, prompt: string): any {
+    const answer = response?.candidates?.[0]?.content?.parts?.[0]?.text || "";
+    const promptTokenCount = GeminiWebClient.estimateTokens(prompt);
+    const candidatesTokenCount = GeminiWebClient.estimateTokens(answer);
+    return {
+      ...response,
+      usageMetadata: { promptTokenCount, candidatesTokenCount, totalTokenCount: promptTokenCount + candidatesTokenCount },
+    };
   }
 
   /**

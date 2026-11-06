@@ -16,6 +16,7 @@ import { formatToolsForPrompt, buildToolBridgePrompt, parseToolBridgeOutput, nor
 import { BridgeServer } from "../src/server";
 import { OAuthManager } from "../src/oauth";
 import { GeminiWebClient } from "../src/gemini-web-client";
+import { UsageTracker } from "../src/usage-tracker";
 
 const TEST_PORT = 52150;
 const BASE_URL = `http://127.0.0.1:${TEST_PORT}`;
@@ -166,7 +167,10 @@ async function runTests() {
         finishReason: "STOP",
       },
     ],
+    usageMetadata: { promptTokenCount: 1234, candidatesTokenCount: 20, totalTokenCount: 1254 },
   });
+  const recorded: any[][] = [];
+  (UsageTracker.getInstance() as any).recordUsage = (...args: any[]) => recorded.push(args);
 
   const server = new BridgeServer(TEST_PORT);
   await server.start();
@@ -200,6 +204,12 @@ async function runTests() {
     expect("Anthropic stream stops as tool_use", anth.raw.includes('"stop_reason":"tool_use"'), true);
     expect("Anthropic stream targets the requested model", lastWebArgs[1], "gemini-argon-4");
     expect("system prompt reaches Gemini Web", String(lastWebArgs[0]).includes("You are a weather bot."), true);
+    // Claude Code sizes its context meter (and decides to compact) from this figure.
+    expect("Anthropic stream reports the estimated prompt size", anth.raw.includes('"usage":{"input_tokens":1234,"output_tokens":20}'), true);
+    expect("OpenAI non-stream reports the estimated usage", res.data.usage?.prompt_tokens, 1234);
+    expect("both web requests are recorded", recorded.length, 2);
+    expect("recorded under the web model id", recorded[1]?.[0], "gemini-argon-4");
+    expect("recorded with the estimated prompt size", recorded[1]?.[1], 1234);
   } finally {
     await server.stop();
   }

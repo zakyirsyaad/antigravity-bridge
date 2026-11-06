@@ -127,6 +127,21 @@ async function runTests() {
     expect("generate posts to the account the session came from", generateUrl.startsWith("https://gemini.google.com/u/1/_/"), true);
     expect("a failed generate drops the cached session", (fresh as any).session, null);
   }
+  {
+    // Gemini Web reports no token counts: the answer carries an estimate in Google's shape.
+    const answerText = "Hello there, this is Argon.";
+    const xssi = ")]}'\n\n" + JSON.stringify([["wrb.fr", null, JSON.stringify([null, null, null, null, [["rc_1", [answerText]]]])]]);
+    const fresh: GeminiWebClient = new (GeminiWebClient as any)();
+    (fresh as any).transport = async (url: string) =>
+      url.endsWith("/app") ? { ok: true, status: 200, text: page } : { ok: true, status: 200, text: xssi };
+    fresh.setCredentials({ rawCookies: "__Secure-1PSID=x" });
+    const prompt = "x".repeat(4001);
+    const resp = await fresh.generateContent(prompt, "gemini-argon-4");
+    expect("the answer text is parsed", resp.candidates[0].content.parts[0].text, answerText);
+    expect("prompt tokens are estimated from the prompt sent", resp.usageMetadata?.promptTokenCount, 1001);
+    expect("answer tokens are estimated from the answer", resp.usageMetadata?.candidatesTokenCount, Math.ceil(answerText.length / 4));
+    expect("total is their sum", resp.usageMetadata?.totalTokenCount, 1001 + Math.ceil(answerText.length / 4));
+  }
 
   console.log("\n[5/5] AntigravityClient failover loop to Gemini Web on CloudCode exhaustion ...");
   const antigravity = new AntigravityClient();
