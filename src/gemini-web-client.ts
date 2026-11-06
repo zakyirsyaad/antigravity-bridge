@@ -11,6 +11,8 @@
  * or when configured with GEMINI_WEB_COOKIES.
  */
 
+import https from "node:https";
+
 export interface GeminiWebCredentials {
   psid?: string;
   psidts?: string;
@@ -40,6 +42,54 @@ function webTimeoutMs(): number {
   return Number.isFinite(configured) && configured > 0 ? Math.floor(configured) : DEFAULT_WEB_TIMEOUT_MS;
 }
 
+/**
+ * Room for Google's response headers. gemini.google.com sends ~29 KB of them (a 21 KB
+ * Content-Security-Policy alone), past the 16 KB that Node's built-in fetch accepts, so
+ * every fetch() to it died as UND_ERR_HEADERS_OVERFLOW ("fetch failed"). Raising that
+ * limit means a process flag (--max-http-header-size) set outside this repo, so these
+ * requests go through node:https, which takes the limit per request.
+ */
+const MAX_RESPONSE_HEADER_BYTES = 128 * 1024;
+
+export interface WebRequestInit {
+  method: "GET" | "POST";
+  headers: Record<string, string>;
+  body?: string;
+}
+
+export interface WebResponse {
+  ok: boolean;
+  status: number;
+  text: string;
+}
+
+/** One request to gemini.google.com, read whole. Redirects are not followed: a redirect means signed out. */
+export function webRequest(url: string, init: WebRequestInit): Promise<WebResponse> {
+  const timeoutMs = webTimeoutMs();
+  return new Promise((resolve, reject) => {
+    const headers = init.body !== undefined
+      ? { ...init.headers, "Content-Length": String(Buffer.byteLength(init.body)) }
+      : init.headers;
+    const req = https.request(
+      url,
+      { method: init.method, headers, maxHeaderSize: MAX_RESPONSE_HEADER_BYTES, timeout: timeoutMs },
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on("data", (chunk: Buffer) => chunks.push(chunk));
+        res.on("error", reject);
+        res.on("end", () => {
+          const status = res.statusCode || 0;
+          resolve({ ok: status >= 200 && status < 300, status, text: Buffer.concat(chunks).toString("utf8") });
+        });
+      }
+    );
+    req.on("timeout", () => req.destroy(new Error(`Gemini Web did not answer within ${timeoutMs} ms`)));
+    req.on("error", reject);
+    if (init.body !== undefined) req.write(init.body);
+    req.end();
+  });
+}
+
 function authPathFor(authUser: string): string {
   return authUser && authUser !== "0" ? `/u/${authUser}` : "";
 }
@@ -48,6 +98,8 @@ export class GeminiWebClient {
   private static instance: GeminiWebClient;
   private session: GeminiWebSession | null = null;
   private credentials: GeminiWebCredentials | null = null;
+  /** How requests reach Google; a field so the offline suites can stand in for it. */
+  private transport: (url: string, init: WebRequestInit) => Promise<WebResponse> = webRequest;
 
   private constructor() {
     this.loadCredentialsFromEnv();
@@ -164,14 +216,13 @@ export class GeminiWebClient {
     let lastError: any = null;
     for (const authPath of candidatePaths) {
       try {
-        const res = await fetch(`https://gemini.google.com${authPath}/app`, {
+        const res = await this.transport(`https://gemini.google.com${authPath}/app`, {
           method: "GET",
           headers: {
             "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Cookie": cookieHeader,
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
           },
-          signal: AbortSignal.timeout(webTimeoutMs()),
         });
 
         if (!res.ok) {
@@ -179,7 +230,7 @@ export class GeminiWebClient {
           continue;
         }
 
-        const html = await res.text();
+        const html = res.text;
         const session = { ...GeminiWebClient.extractSessionParameters(html, cookieHeader), authPath };
         this.session = session;
         return session;
@@ -415,7 +466,7 @@ export class GeminiWebClient {
 
     const bodyParams = GeminiWebClient.buildRpcPayload(prompt, session.at, targetModelId);
 
-    const res = await fetch(generateUrl, {
+    const res = await this.transport(generateUrl, {
       method: "POST",
       headers: {
         "Content-Type": "application/x-www-form-urlencoded;charset=utf-8",
@@ -426,18 +477,16 @@ export class GeminiWebClient {
         "X-Same-Domain": "1",
       },
       body: bodyParams.toString(),
-      signal: AbortSignal.timeout(webTimeoutMs()),
     });
 
     if (!res.ok) {
       // The token or the rotating 1PSIDTS cookie may have gone stale: fetch a fresh
       // session next time instead of failing every request until the TTL runs out.
       if (this.session === session) this.session = null;
-      const errText = await res.text();
-      throw new Error(`Gemini Web generation failed with HTTP ${res.status}: ${errText.slice(0, 200)}`);
+      throw new Error(`Gemini Web generation failed with HTTP ${res.status}: ${res.text.slice(0, 200)}`);
     }
 
-    const raw = await res.text();
+    const raw = res.text;
     return GeminiWebClient.parseAntiXssiResponse(raw);
   }
 

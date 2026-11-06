@@ -100,22 +100,21 @@ async function runTests() {
   expect("system instruction is in the prompt", promptText.startsWith("System: Be terse."), true);
   expect("a prior tool call is in the prompt", promptText.includes('[Tool Call: get_weather({"city":"Berlin"})]'), true);
 
-  const realFetch = globalThis.fetch;
   const fetched: string[] = [];
   const page = '<script>{"SNlM0e":"tok-1","cfb2h":"bl-1","FdrFJe":"sid-1"}</script>';
-  globalThis.fetch = (async (url: any) => {
-    const u = String(url);
-    fetched.push(u);
-    if (u.endsWith("/app")) {
+  const stubTransport = async (url: string) => {
+    fetched.push(url);
+    if (url.endsWith("/app")) {
       // The root page fails; the second signed-in account's page works.
-      return u === "https://gemini.google.com/u/1/app"
-        ? new Response(page, { status: 200 })
-        : new Response("nope", { status: 500 });
+      return url === "https://gemini.google.com/u/1/app"
+        ? { ok: true, status: 200, text: page }
+        : { ok: false, status: 500, text: "nope" };
     }
-    return new Response("expired", { status: 401 });
-  }) as any;
-  try {
+    return { ok: false, status: 401, text: "expired" };
+  };
+  {
     const fresh: GeminiWebClient = new (GeminiWebClient as any)();
+    (fresh as any).transport = stubTransport;
     fresh.setCredentials({ rawCookies: "__Secure-1PSID=x" });
     let threw = false;
     try {
@@ -127,8 +126,6 @@ async function runTests() {
     const generateUrl = fetched.find((u) => u.includes("StreamGenerate")) || "";
     expect("generate posts to the account the session came from", generateUrl.startsWith("https://gemini.google.com/u/1/_/"), true);
     expect("a failed generate drops the cached session", (fresh as any).session, null);
-  } finally {
-    globalThis.fetch = realFetch;
   }
 
   console.log("\n[5/5] AntigravityClient failover loop to Gemini Web on CloudCode exhaustion ...");
