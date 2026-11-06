@@ -574,6 +574,10 @@ local install.
 | `BRIDGE_ANSWER_RESERVE_TOKENS` | `8192` | Output tokens held back from thinking for the visible answer |
 | `BRIDGE_TOOL_MIN_OUTPUT_TOKENS` | off | Raises a smaller output cap on requests that carry tools (see [Controlling reasoning](#controlling-reasoning)) |
 | `ANTIGRAVITY_CLIENT_ID` / `ANTIGRAVITY_CLIENT_SECRET` | Antigravity desktop app's | OAuth client used for login and token refresh |
+| `GEMINI_WEB_COOKIES` (or `GEMINI_PSID` / `GEMINI_PSIDTS`) | *(none)* | gemini.google.com session cookies, for the Gemini Web models (`gemini-argon-4`, `gemini-auto`, `gemini-advanced`). Cookies linked to an account in the dashboard work too, and take precedence |
+| `GEMINI_AUTH_USER` | default account | Which signed-in Google account (`/u/N`) the cookies use. When set, only that account is used; when unset, the default account is tried, then the second |
+| `GEMINI_WEB_TIMEOUT_MS` | `180000` | Total time one Gemini Web request may take, session pages and answer together (its answer arrives whole) |
+| `GEMINI_WEB_FALLBACK` | off | `1` lets Gemini Web answer when the whole pool is out (429, 503 or no answer), for requests **without tools or structured output** and only with auto-failover on. Any other CloudCode error still reaches the caller. Gemini Web's default model answers, not the one requested |
 
 Under pm2, set these when the process is first started (or with `pm2 restart --update-env` from a
 shell that has *all* of them, then `pm2 save`). A plain `pm2 restart` keeps the environment it has.
