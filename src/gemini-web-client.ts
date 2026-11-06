@@ -336,6 +336,16 @@ export class GeminiWebClient {
           continue;
         }
 
+        // gemini.google.com serves signed-out visitors too: an expired, signed-out or bogus
+        // cookie gets HTTP 200 and an action token, and the generate is answered
+        // anonymously — not this account, not its quota, not Argon. Refuse that page, so a
+        // stale cookie is an error and the rotation moves to another linked session.
+        if (!GeminiWebClient.isSignedInPage(res.text)) {
+          firstError ??= new GeminiWebAccountError(
+            `Gemini Web session page ${page} was served to a signed-out visitor: the browser cookies are signed out or expired; link fresh ones`
+          );
+          continue;
+        }
         const extracted = GeminiWebClient.extractSessionParameters(res.text, cookieHeader);
         const isFallback = authPath !== candidatePaths[0];
         const session: GeminiWebSession = {
@@ -357,6 +367,17 @@ export class GeminiWebClient {
     }
 
     throw firstError || new Error("Failed to initialize Gemini Web session (check that your browser session cookies are still valid)");
+  }
+
+  /**
+   * Whether a session page was rendered for a signed-in Google account. Both kinds carry an
+   * action token (`thykhd`; `SNlM0e` is gone from both), so the token says nothing. Seen
+   * 2026-11-06: only a signed-in page carries `WZsZ1e`, as a non-empty string; with no
+   * cookie or an invalid one it is absent. It is Google's private page data, not an API: if
+   * every request starts failing as "signed out" with fresh cookies, check this marker first.
+   */
+  public static isSignedInPage(html: string): boolean {
+    return /"WZsZ1e"\s*:\s*"[^"]+"/.test(html);
   }
 
   /**

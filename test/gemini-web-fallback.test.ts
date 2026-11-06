@@ -140,7 +140,8 @@ async function runTests() {
     }
   };
   const fetched: string[] = [];
-  const page = '<script>{"SNlM0e":"tok-1","cfb2h":"bl-1","FdrFJe":"sid-1"}</script>';
+  // A signed-in page: a signed-out visitor's page has a token too, but no WZsZ1e.
+  const page = '<script>{"SNlM0e":"tok-1","cfb2h":"bl-1","FdrFJe":"sid-1","WZsZ1e":"signed-in-user-marker"}</script>';
   const stubTransport = async (url: string) => {
     fetched.push(url);
     if (url.endsWith("/app")) {

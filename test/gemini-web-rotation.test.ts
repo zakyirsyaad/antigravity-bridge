@@ -108,7 +108,10 @@ async function runTests() {
   }
 
   console.log("[1/3] Which failures are the account's ...");
-  const page = '<script>{"SNlM0e":"tok-1","cfb2h":"bl-1","FdrFJe":"sid-1"}</script>';
+  const page = '<script>{"SNlM0e":"tok-1","cfb2h":"bl-1","FdrFJe":"sid-1","WZsZ1e":"signed-in-user-marker"}</script>';
+  // What gemini.google.com serves a signed-out visitor (no cookie, a bad one, an expired one):
+  // HTTP 200 with an action token, so it looked like a working session and answered anonymously.
+  const anonymousPage = '<script>{"thykhd":"anon-tok","cfb2h":"bl-1","FdrFJe":"sid-1"}</script>';
   const classify = async (transport: (url: string) => Promise<any>) => {
     const fresh: GeminiWebClient = new (GeminiWebClient as any)();
     (fresh as any).transport = transport;
@@ -128,6 +131,20 @@ async function runTests() {
   expect("and still says the cookies are signed out", /signed out/.test(redirected?.message || ""), true);
   const noToken = await classify(async () => ({ ok: true, status: 200, text: "<html>no token here</html>" }));
   expect("a session page without a token is the account's", noToken instanceof GeminiWebAccountError, true);
+  let anonGenerates = 0;
+  const anonymous = await classify(async (url) => {
+    if (!url.endsWith("/app")) anonGenerates++;
+    return url.endsWith("/app") ? { ok: true, status: 200, text: anonymousPage } : { ok: true, status: 200, text: ")]}'\n[]" };
+  });
+  expect("a session page served to a signed-out visitor is the account's", anonymous instanceof GeminiWebAccountError, true);
+  expect("and says the cookies are signed out", /signed out/.test(anonymous?.message || ""), true);
+  expect("and nothing is generated anonymously", anonGenerates, 0);
+  const signedInWiz = await classify(async (url) =>
+    url.endsWith("/app")
+      ? { ok: true, status: 200, text: '<script>{"thykhd":"tok","cfb2h":"bl","FdrFJe":"sid","WZsZ1e":"marker"}</script>' }
+      : { ok: true, status: 200, text: ")]}'\n[]" }
+  );
+  expect("a signed-in page with only the newer token still opens a session", /signed out/.test(signedInWiz?.message || ""), false);
   const refused = await classify(async () => {
     throw Object.assign(new Error(""), { code: "ECONNREFUSED" });
   });
