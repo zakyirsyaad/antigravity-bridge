@@ -1,7 +1,7 @@
 import http, { IncomingMessage, ServerResponse } from "node:http";
 import crypto from "node:crypto";
 import { BRIDGE_DEFAULT_PORT, SUPPORTED_MODELS } from "./constants";
-import { OAuthManager, toPublicAccountSummary } from "./oauth";
+import { OAuthManager, toPublicAccountSummary, type AccountToken } from "./oauth";
 import { AntigravityClient, UpstreamError } from "./antigravity-client";
 import { PoolExhaustedError } from "./pool-failures";
 import { Transformer, UnknownModelError } from "./transformer";
@@ -13,6 +13,7 @@ import { getDashboardHtml } from "./dashboard-html";
 import { applyConnectAttemptTimeout } from "./network";
 import { parseOrRepairJson } from "./json-repair";
 import { GeminiWebClient, GEMINI_WEB_FALLBACK_USAGE_ID } from "./gemini-web-client";
+import { generateWithLinkedSessions, preferredLinkedSession } from "./gemini-web-rotation";
 import { buildToolBridgePrompt, parseToolBridgeOutput, ToolBridgeResult } from "./tool-bridge";
 
 /** Gemini Web's answer for one request, after the tool bridge: text, or the tool calls to send. */
@@ -131,12 +132,14 @@ export class BridgeServer {
   }
 
   /**
-   * The Gemini Web client, using the cookies linked to an account when there are any (the
-   * operator's GEMINI_AUTH_USER is kept: GeminiWebClient.useLinkedCookies()).
+   * The Gemini Web client, set to the linked session this request will try first (the
+   * operator's GEMINI_AUTH_USER is kept: GeminiWebClient.useLinkedCookies()). The same
+   * `linked` list goes on to generateWithLinkedSessions(), so a resting account is not set
+   * here only to be replaced there, which would drop the cached session on every request.
    */
-  private geminiWebWithLinkedCookies(): GeminiWebClient {
+  private geminiWebWithLinkedCookies(linked: AccountToken[]): GeminiWebClient {
     const geminiWeb = GeminiWebClient.getInstance();
-    geminiWeb.useLinkedCookies(this.oauth.findAccountWithWebCookies()?.webCookies);
+    geminiWeb.useLinkedCookies(preferredLinkedSession(linked)?.webCookies);
     return geminiWeb;
   }
 
@@ -714,7 +717,8 @@ export class BridgeServer {
 
     // Dedicated routing for Gemini Web models (e.g. Gemini Argon 4, Gemini Auto)
     if (GeminiWebClient.isGeminiWebModel(requestedModel)) {
-      const geminiWeb = this.geminiWebWithLinkedCookies();
+      const linked = this.oauth.listAccountsWithWebCookies();
+      const geminiWeb = this.geminiWebWithLinkedCookies(linked);
 
       if (!geminiWeb.hasCredentials()) {
         res.writeHead(400, { "Content-Type": "application/json" });
@@ -741,7 +745,7 @@ export class BridgeServer {
       let resp: any;
       let answer: WebAnswer;
       try {
-        resp = await geminiWeb.generateContent(webPrompt, requestedModel);
+        resp = await generateWithLinkedSessions(geminiWeb, linked, webPrompt, requestedModel);
         answer = BridgeServer.webAnswer(resp, body);
       } catch (err: any) {
         console.error("[Gemini Web] /v1/messages%s failed:", body.stream ? " stream" : "", err?.message);
@@ -1072,7 +1076,8 @@ export class BridgeServer {
 
     // Dedicated routing for Gemini Web models (e.g. Gemini Argon 4, Gemini Auto)
     if (GeminiWebClient.isGeminiWebModel(requestedModel)) {
-      const geminiWeb = this.geminiWebWithLinkedCookies();
+      const linked = this.oauth.listAccountsWithWebCookies();
+      const geminiWeb = this.geminiWebWithLinkedCookies(linked);
 
       if (!geminiWeb.hasCredentials()) {
         res.writeHead(400, { "Content-Type": "application/json" });
@@ -1098,7 +1103,7 @@ export class BridgeServer {
       let resp: any;
       let answer: WebAnswer;
       try {
-        resp = await geminiWeb.generateContent(webPrompt, requestedModel);
+        resp = await generateWithLinkedSessions(geminiWeb, linked, webPrompt, requestedModel);
         answer = BridgeServer.webAnswer(resp, body);
       } catch (err: any) {
         console.error("[Gemini Web] /v1/chat/completions%s failed:", body.stream ? " stream" : "", err?.message);

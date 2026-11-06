@@ -61,6 +61,23 @@ export function webTimeoutMs(): number {
 }
 
 /**
+ * Google answered, but not with anything usable for these cookies: a session page that
+ * redirects (signed out) or carries no token, a generate that answers non-2xx, a 200 with
+ * no readable reply. It is about the account's session, so another linked session may do
+ * better (gemini-web-rotation.ts). A transport failure or the bridge's own timeout is a
+ * plain Error: that is the network, and another account would meet the same one.
+ */
+/** Generate statuses that blame the request, not the account: never rotated. */
+const REQUEST_FAULT_STATUSES = new Set([400, 413]);
+
+export class GeminiWebAccountError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "GeminiWebAccountError";
+  }
+}
+
+/**
  * An error that says what happened. A connection that fails on every address is an
  * AggregateError with an empty message, which used to reach the log and the client as
  * nothing at all; its code (ECONNREFUSED, ETIMEDOUT) is the useful part.
@@ -314,8 +331,8 @@ export class GeminiWebClient {
 
         if (!res.ok) {
           firstError ??= res.status >= 300 && res.status < 400
-            ? new Error(`Gemini Web session page ${page} redirected (HTTP ${res.status}): the browser cookies are signed out; link fresh ones`)
-            : new Error(`Gemini Web session page ${page} answered HTTP ${res.status}`);
+            ? new GeminiWebAccountError(`Gemini Web session page ${page} redirected (HTTP ${res.status}): the browser cookies are signed out; link fresh ones`)
+            : new GeminiWebAccountError(`Gemini Web session page ${page} answered HTTP ${res.status}`);
           continue;
         }
 
@@ -334,6 +351,7 @@ export class GeminiWebClient {
         }
         return session;
       } catch (err: any) {
+        // describedError() keeps any Error that has a message, so an account error stays one.
         firstError ??= describedError(err);
       }
     }
@@ -356,7 +374,7 @@ export class GeminiWebClient {
       if (wizMatch) {
         at = wizMatch[1];
       } else {
-        throw new Error("Failed to extract action session token from Gemini Web HTML (check your cookie session)");
+        throw new GeminiWebAccountError("Failed to extract action session token from Gemini Web HTML (check your cookie session)");
       }
     }
 
@@ -565,9 +583,13 @@ export class GeminiWebClient {
   /**
    * Generates content via Gemini Web upstream.
    */
-  public async generateContent(promptOrContents: any, targetModelId?: string): Promise<any> {
-    // One deadline for the whole request: the session pages and the generate share it.
-    const deadline = Date.now() + webTimeoutMs();
+  public async generateContent(
+    promptOrContents: any,
+    targetModelId?: string,
+    deadline: number = Date.now() + webTimeoutMs(),
+  ): Promise<any> {
+    // One deadline for the whole request: the session pages and the generate share it, and
+    // so do the linked sessions a rotation tries (gemini-web-rotation.ts passes it in).
     const session = await this.ensureSession(deadline);
     let prompt = typeof promptOrContents === "string"
       ? promptOrContents
@@ -599,7 +621,10 @@ export class GeminiWebClient {
       // The token or the rotating 1PSIDTS cookie may have gone stale: fetch a fresh
       // session next time instead of failing every request until the TTL runs out.
       if (this.session === session) this.session = null;
-      throw new Error(`Gemini Web generation failed with HTTP ${res.status}: ${res.text.slice(0, 200)}`);
+      const message = `Gemini Web generation failed with HTTP ${res.status}: ${res.text.slice(0, 200)}`;
+      // A 400 or 413 is this request's own fault (a history or size Gemini Web refuses):
+      // another account would refuse it too, so it must not rotate and rest healthy sessions.
+      throw REQUEST_FAULT_STATUSES.has(res.status) ? new Error(message) : new GeminiWebAccountError(message);
     }
 
     const raw = res.text;
@@ -609,7 +634,7 @@ export class GeminiWebClient {
       // Passed on, it reaches the client as a successful empty reply ("completed without
       // producing any output") with nothing in the log. Say so, and fetch a fresh session.
       if (this.session === session) this.session = null;
-      throw new Error(`Gemini Web answered HTTP ${res.status} with no readable reply (${raw.length} bytes)`);
+      throw new GeminiWebAccountError(`Gemini Web answered HTTP ${res.status} with no readable reply (${raw.length} bytes)`);
     }
     return GeminiWebClient.withEstimatedUsage(parsed, prompt);
   }

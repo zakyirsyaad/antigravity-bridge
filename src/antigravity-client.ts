@@ -14,6 +14,7 @@ import { UpstreamError } from "./upstream-error";
 export { UpstreamError };
 import { PoolFailures, rotationReason } from "./pool-failures";
 import { GeminiWebClient, GEMINI_WEB_FALLBACK_USAGE_ID } from "./gemini-web-client";
+import { generateWithLinkedSessions, preferredLinkedSession } from "./gemini-web-rotation";
 
 /** A whole response as the one-chunk stream the server's SSE handlers read. */
 async function* singleChunkStream(response: any): AsyncIterable<any> {
@@ -181,11 +182,13 @@ export class AntigravityClient {
       return null;
     }
     const geminiWeb = GeminiWebClient.getInstance();
-    geminiWeb.useLinkedCookies(this.oauth.findAccountWithWebCookies()?.webCookies);
+    const linked = this.oauth.listAccountsWithWebCookies();
+    // The session the rotation will try first, so it is not set here and replaced there.
+    geminiWeb.useLinkedCookies(preferredLinkedSession(linked)?.webCookies);
     if (!geminiWeb.hasCredentials()) return null;
     try {
       console.warn(`[AutoPool] CloudCode pool exhausted for ${payload.model}; Gemini Web's default model answers instead.`);
-      const answer = await geminiWeb.generateContent(payload.request);
+      const answer = await generateWithLinkedSessions(geminiWeb, linked, payload.request);
       return { ...answer, servedBy: GEMINI_WEB_FALLBACK_USAGE_ID };
     } catch (gwErr: any) {
       console.warn("[AutoPool] Gemini Web fallback also failed:", gwErr?.message);

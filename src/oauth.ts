@@ -398,18 +398,28 @@ export class OAuthManager {
   }
 
   /**
-   * Finds the first account in the pool that has Gemini Web cookies linked.
+   * Every account with Gemini Web cookies linked, the active one first and then the rest in
+   * pool order: the sessions a Gemini Web request may rotate through (gemini-web-rotation.ts).
+   * Cookies linked on two cards are one session, so only the first card carrying them is kept:
+   * rotating to the "next" one would ask the same session again.
+   */
+  public listAccountsWithWebCookies(): AccountToken[] {
+    const list = this.listAccounts();
+    const linked = (a: AccountToken | undefined): a is AccountToken =>
+      Boolean(a?.webCookies && a.webCookies.includes("__Secure-1PSID"));
+    const active = list.accounts[list.activeIndex];
+    const rest = list.accounts.filter((a, i) => i !== list.activeIndex && linked(a));
+    const ordered = linked(active) ? [active, ...rest] : rest;
+    const seen = new Set<string>();
+    return ordered.filter((a) => !seen.has(a.webCookies!) && Boolean(seen.add(a.webCookies!)));
+  }
+
+  /**
+   * The account whose Gemini Web cookies a request would try first: the active one when it
+   * has some, otherwise the first linked one in pool order.
    */
   public findAccountWithWebCookies(): AccountToken | null {
-    const list = this.listAccounts();
-    const active = list.accounts[list.activeIndex];
-    if (active && active.webCookies && active.webCookies.includes("__Secure-1PSID")) {
-      return active;
-    }
-    const found = list.accounts.find(
-      (a) => a.webCookies && a.webCookies.includes("__Secure-1PSID")
-    );
-    return found || null;
+    return this.listAccountsWithWebCookies()[0] ?? null;
   }
 
   /**
