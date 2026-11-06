@@ -1,5 +1,81 @@
 # Changelog
 
+## 2.7.0
+
+The first GitHub release since v2.5.0: 2.6.0 to 2.6.4 were never tagged, so `npm run bridge:status`
+kept reporting v2.5.0 as the latest. Their entries are below; read them too if you are coming from 2.5.
+
+### Two changes that can break a caller
+
+- **`POST /api/pool/switch` no longer returns the stored account.** It answered the full record:
+  access token, refresh token and any linked Gemini Web cookies, to any holder of the key. It now
+  answers `{ status, active }` with `active` as the same summary `/api/pool` uses (`email`, `name`,
+  `projectId`, `hasWebCookies`). Anything that read a token from that reply must stop.
+- **`/v1/usage` (and `/usage`) refuses other origins.** It names every pooled account and its live
+  quota, but was served with `Access-Control-Allow-Origin: *` and no origin check, so on a loopback
+  install any web page could read the pool's emails. It now sits behind the same gate as `/api/*`: no
+  wildcard CORS header, `403` for a foreign `Origin`. curl and the CLI send no `Origin` and still work.
+
+### Added: Gemini Web, a second backend (optional)
+
+A browser session's cookies reach models that exist only in the Gemini app at gemini.google.com,
+**Argon** among them. Nothing changes unless you link cookies.
+
+- **Models:** `gemini-argon-4` (Argon), `gemini-auto` and `gemini-advanced` (both Gemini Web's default
+  model). Any id starting with `gemini-argon`, `argon` or `gemini-web-` routes there too.
+- **Cookies:** press **🔗 Link Web** on an account card in the dashboard (`POST /api/accounts/link-web`)
+  and paste `__Secure-1PSID=…; __Secure-1PSIDTS=…`, or set `GEMINI_WEB_COOKIES` (or `GEMINI_PSID` /
+  `GEMINI_PSIDTS`). They are stored in the `0600` accounts file and never printed. They are your Google
+  sign-in, not a Gemini-only key: see the README before linking.
+- **Tools work through a prompt.** Gemini Web has no function-calling API, so the tool bridge describes
+  the tools in the prompt and parses calls back out, holding them to the request: only declared tools,
+  nothing under `tool_choice: none`, only the forced tool, object arguments only.
+- **The answer arrives whole**, so streams wait up to `GEMINI_WEB_TIMEOUT_MS` (180 s, one budget for the
+  session pages and the answer) with no bytes sent, and a failure is a real HTTP `500`.
+- **Usage is estimated** at ~4 characters per token, reported to clients and counted per model.
+- **Linked sessions rotate.** Each request tries the active account's session first, then the other
+  linked cards. A session that fails on the account's side (signed out, an HTTP error, an unreadable
+  answer) is skipped for `GEMINI_WEB_REST_SECONDS` (300 s) and the next one is tried, at most three per
+  request within the one deadline. A network failure, a timeout or a `400`/`413` (the request's own
+  fault) is not rotated. Account emails go to the log only, never into the error the client gets.
+- **A signed-out session is refused.** gemini.google.com answers signed-out visitors too, so an expired
+  or wrong cookie used to get an anonymous answer (not your account, not Argon) with no error. A session
+  page without the signed-in marker is now refused as signed out, which also lets the rotation move on.
+  The marker is Google's private page data: if fresh cookies all start failing as signed out, set
+  `GEMINI_WEB_SIGNED_IN_CHECK=0` until the bridge is updated.
+- **Pool fallback, opt-in:** with `GEMINI_WEB_FALLBACK=1` (and auto-failover on), a request the CloudCode
+  pool runs out on is answered by Gemini Web's default model instead of failing. Never for requests with
+  tools or `response_format`, and the client is not told: the reply still names the model it asked for.
+  Its usage is counted under `gemini-web-fallback`.
+- `/v1/models` lists the web models once cookies are linked in the dashboard.
+
+Gemini Web is the consumer app's private web interface, not an API Google offers: it can change or
+stop working without notice. No real "limit reached" reply has been seen yet, so running out is
+recognized only if it shows as an HTTP error or an unreadable answer.
+
+### Added: elsewhere
+
+- **JSON and tool-call repair.** Non-streaming `response_format` JSON answers and Gemini Web's prompted
+  tool calls are repaired (code fences, trailing commas, comments, single quotes, unclosed brackets)
+  before they reach the client. Zero new dependencies.
+- **Push an account from a refresh token.** The dashboard's **Push Token** button and
+  `POST /api/accounts/push` (also `/api/pool/push`) add or update an account without a browser login.
+  The token must be one issued to the bridge's OAuth client, and the CloudCode project is not
+  discovered: pass `projectId`, or the shared default is used.
+- **Usage by Model** on the dashboard, from the new `GET /api/usage`: the bridge's own request and token
+  counters per requested model id, each labelled `cloudcode` or `gemini-web` (estimates).
+- **`POST /v1/images/generations`** in the OpenAI Images shape. It does not generate images: the models
+  answer in text, so every reply is a placeholder (a 1×1 PNG, or a Google Images search link for the
+  prompt). Each call spends one CloudCode request that usage does not count.
+
+### Upgrading
+
+`npm run bridge:update`, then restart the bridge (under pm2, a plain `pm2 restart`, which keeps the
+environment). New, all optional: `GEMINI_WEB_COOKIES` / `GEMINI_PSID` / `GEMINI_PSIDTS`,
+`GEMINI_AUTH_USER`, `GEMINI_WEB_TIMEOUT_MS`, `GEMINI_WEB_FALLBACK`, `GEMINI_WEB_REST_SECONDS` and
+`GEMINI_WEB_SIGNED_IN_CHECK`. Check the two breaking changes above if anything calls
+`/api/pool/switch` or reads `/v1/usage` from a browser page.
+
 ## 2.6.4
 
 ### Fixed: the accounts file was readable by every user on the machine
