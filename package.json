@@ -52,6 +52,7 @@
     "test:images": "tsx test/images-generations.test.ts",
     "test:hybrid": "tsx test/hybrid-accounts.test.ts",
     "test:tool-bridge": "tsx test/tool-bridge.test.ts",
+    "test:usage-panel": "tsx test/usage-panel.test.ts",
     "build": "tsc"
   },
   "keywords": [

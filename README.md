@@ -441,6 +441,7 @@ Open **`http://127.0.0.1:52130`** in your browser to access the management inter
   - `◌ Resting`: Google stopped answering on this account, so failover skips it for a few minutes (`BRIDGE_STALL_REST_SECONDS`). Held in memory, not a quota cooldown.
 - **Activity Stream**: every failover says why it happened (429 quota, 503 no capacity, 503 service unavailable, stall, cooling down, resting) and for which model.
 - **Dual Live Quotas**: Real-time bars showing internal 5-hour rolling limit and weekly cycle cap percentages.
+- **Usage by Model**: the bridge's own request and token counters per model (`/api/usage`), with each model's share of tokens. Gemini Web models (`gemini-argon-4`, …) are marked as estimates: Gemini Web reports no token counts, and its limit is the linked Google account's Gemini app quota, separate from the CloudCode quota above.
 - **One-Click Actions**:
   - **Set Active**: Manually route traffic to a specific account.
   - **Clear Cooldown**: Reset the rate limit timer on an account.

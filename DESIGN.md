@@ -113,6 +113,15 @@ Antigravity Bridge is a mission-critical AI inference gateway connecting local d
     `GOOGLE QUOTA · LIVE` group label: these are Google's numbers, not the bridge's, and the two
     disagree by design.
   - High-contrast "Set Active" primary button, "Clear Cooldown" action, and subtle danger removal trigger.
+- **Usage Ledger** ("Usage by Model"):
+  - The bridge's own counters, one row per model, under a `Bridge counters` badge: requests, input,
+    output and reasoning tokens (compact, full figure on hover), relative last use, and a hairline
+    share-of-tokens meter. These are not Google's numbers, and the badge says so.
+  - Backend chip under the id: `CloudCode` (solid zinc) or `Gemini Web · estimate` (dashed, monochrome,
+    like Resting: an estimate is not quota and must not borrow amber). Estimated counts carry a `~`.
+  - A footnote appears only when a Gemini Web row exists, saying the counts are estimates and that its
+    limit is the linked account's Gemini app quota, separate from the account cards' CloudCode quota.
+  - Below 900 px the reasoning and last-use columns drop and the share meter takes its own line.
 - **Auto-Failover Controller**:
   - Micro-pill toggle with animated status LED.
 - **Universal Multi-Harness Connect**:

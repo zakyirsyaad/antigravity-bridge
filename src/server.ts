@@ -5,14 +5,14 @@ import { OAuthManager } from "./oauth";
 import { AntigravityClient, UpstreamError } from "./antigravity-client";
 import { PoolExhaustedError } from "./pool-failures";
 import { Transformer, UnknownModelError } from "./transformer";
-import { UsageTracker } from "./usage-tracker";
+import { UsageTracker, UsageReport } from "./usage-tracker";
 import { StreamEndTally } from "./stream-diagnostics";
 import { QuotaService } from "./quota-service";
 import { QuotaTracker } from "./quota-tracker";
 import { getDashboardHtml } from "./dashboard-html";
 import { applyConnectAttemptTimeout } from "./network";
 import { parseOrRepairJson } from "./json-repair";
-import { GeminiWebClient } from "./gemini-web-client";
+import { GeminiWebClient, GEMINI_WEB_FALLBACK_USAGE_ID } from "./gemini-web-client";
 import { buildToolBridgePrompt, parseToolBridgeOutput, ToolBridgeResult } from "./tool-bridge";
 
 /** Gemini Web's answer for one request, after the tool bridge: text, or the tool calls to send. */
@@ -157,6 +157,40 @@ export class BridgeServer {
       );
     }
     return { text: bridged.content, toolCalls: bridged.tool_calls };
+  }
+
+  /**
+   * The usage counters per model, each labelled with the backend that served it, for the
+   * dashboard. Gemini Web reports no token counts, so its rows are this bridge's estimates
+   * and say so (`estimated`); its limit is the linked Google account's Gemini app quota,
+   * which the bridge cannot read, and is separate from the CloudCode quota on the account
+   * cards. Only counts and model ids leave here: nothing about the accounts.
+   */
+  private static usageByModel(report: UsageReport) {
+    const models = Object.entries(report?.byModel || {})
+      .map(([id, usage]) => {
+        const web = id === GEMINI_WEB_FALLBACK_USAGE_ID || GeminiWebClient.isGeminiWebModel(id);
+        return {
+          id,
+          backend: web ? "gemini-web" : "cloudcode",
+          estimated: web,
+          requests: usage?.requests || 0,
+          inputTokens: usage?.inputTokens || 0,
+          outputTokens: usage?.outputTokens || 0,
+          thoughtsTokens: usage?.thoughtsTokens || 0,
+          lastUsed: usage?.lastUsed || null,
+        };
+      })
+      .sort((a, b) => b.requests - a.requests || a.id.localeCompare(b.id));
+    return {
+      totalRequests: report?.totalRequests || 0,
+      totalInputTokens: report?.totalInputTokens || 0,
+      totalOutputTokens: report?.totalOutputTokens || 0,
+      totalThoughtsTokens: report?.totalThoughtsTokens || 0,
+      firstUsed: report?.firstUsed || null,
+      lastUsed: report?.lastUsed || null,
+      models,
+    };
   }
 
   /**
@@ -334,6 +368,13 @@ export class BridgeServer {
           }
 
           // Pool API: Status with Live Quotas
+          // Pool API: the bridge's own usage counters per model, for the dashboard
+          if (pathname === "/api/usage" && req.method === "GET") {
+            res.writeHead(200, { "Content-Type": "application/json" });
+            res.end(JSON.stringify(BridgeServer.usageByModel(UsageTracker.getInstance().getUsage())));
+            return;
+          }
+
           if (pathname === "/api/pool" && req.method === "GET") {
             const pool = this.oauth.getPoolStatus();
             const accounts = this.oauth.listAccounts().accounts;

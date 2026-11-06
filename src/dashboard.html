@@ -816,6 +816,110 @@
       border-color: rgba(244, 63, 94, 0.3);
     }
 
+    /* Usage by Model: the bridge's own counters, a ledger rather than a meter wall */
+    .usage-panel {
+      background: var(--surface-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-lg);
+      padding: 0.35rem 0;
+      overflow: hidden;
+    }
+    .usage-row {
+      display: grid;
+      grid-template-columns: minmax(0, 2.4fr) repeat(4, minmax(0, 1fr)) minmax(0, 0.9fr) minmax(0, 1.3fr);
+      align-items: center;
+      gap: 0.75rem;
+      padding: 0.7rem 1.25rem;
+      border-top: 1px solid var(--border-subtle);
+    }
+    .usage-row:first-child { border-top: none; }
+    .usage-row:not(.usage-head):hover { background: var(--surface-card-hover); }
+    .usage-head {
+      font-size: 0.68rem;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--text-faint);
+      padding-top: 0.55rem;
+      padding-bottom: 0.55rem;
+    }
+    .usage-head .usage-num { color: var(--text-faint); }
+    .usage-total { background: var(--surface-input); font-weight: 700; }
+    /* The id is the row's key, so it gets the full width; the chip sits under it. */
+    .usage-model {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 0.3rem;
+      min-width: 0;
+    }
+    .usage-model .usage-id { max-width: 100%; }
+    .usage-id {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.8125rem;
+      font-weight: 600;
+      color: var(--text-main);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .usage-chip {
+      flex-shrink: 0;
+      font-size: 0.66rem;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+      color: var(--text-muted);
+      background: var(--surface-elevated);
+      border: 1px solid var(--border-subtle);
+      border-radius: 9999px;
+      padding: 0.12rem 0.5rem;
+      white-space: nowrap;
+    }
+    /* An estimate is not quota: monochrome and dashed, like Resting, never amber. */
+    .usage-chip-est {
+      background: transparent;
+      border: 1px dashed var(--border-active);
+    }
+    .usage-num {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.8125rem;
+      font-weight: 600;
+      font-variant-numeric: tabular-nums;
+      color: var(--text-main);
+      text-align: right;
+      white-space: nowrap;
+    }
+    .usage-ago { color: var(--text-muted); font-weight: 500; }
+    .usage-share {
+      display: flex;
+      align-items: center;
+      gap: 0.55rem;
+    }
+    .usage-share .meter-track { flex: 1; }
+    .usage-share .usage-num { min-width: 3.4rem; color: var(--text-muted); }
+    .usage-empty {
+      padding: 1.4rem 1.25rem;
+      color: var(--text-muted);
+      font-size: 0.875rem;
+    }
+    .usage-footnote {
+      margin: 0;
+      padding: 0.85rem 1.25rem 0.75rem;
+      border-top: 1px solid var(--border-subtle);
+      font-size: 0.78rem;
+      line-height: 1.55;
+      color: var(--text-faint);
+      text-wrap: pretty;
+    }
+    .usage-footnote strong { color: var(--text-muted); font-weight: 600; }
+    @media (max-width: 900px) {
+      .usage-row { grid-template-columns: minmax(0, 1fr) repeat(3, auto); row-gap: 0.4rem; }
+      .usage-row > :nth-child(5), .usage-row > :nth-child(6) { display: none; }
+      .usage-share { grid-column: 1 / -1; }
+      .usage-head .usage-share { display: none; }
+      .usage-id { white-space: normal; overflow-wrap: anywhere; }
+    }
+
     /* Integration Panel */
     .tabs-wrapper {
       background: var(--surface-card);
@@ -1152,6 +1256,28 @@
       </div>
     </section>
 
+    <!-- Usage by Model: this bridge's own counters, not Google's -->
+    <section aria-labelledby="usageHeading">
+      <div class="section-head">
+        <div class="section-head-title">
+          <h2 id="usageHeading">Usage by Model</h2>
+          <span class="section-head-badge">Bridge counters</span>
+          <span class="section-head-note" id="usageNote"></span>
+        </div>
+        <button class="btn btn-sm" onclick="fetchUsage()">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="23 4 23 10 17 10"></polyline>
+            <polyline points="1 20 1 14 7 14"></polyline>
+            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+          </svg>
+          <span>Refresh</span>
+        </button>
+      </div>
+      <div class="usage-panel" id="usageContainer">
+        <div class="usage-empty">Loading usage…</div>
+      </div>
+    </section>
+
     <!-- Universal Dual-Protocol Connect Guide -->
     <section>
       <div class="section-head">
@@ -1433,6 +1559,118 @@ print(response.choices[0].message.content)</pre>
         renderStitchDashboard(poolCache);
       } catch (err) {
         console.error("Failed to fetch pool status:", err);
+      }
+    }
+
+    /** Text for innerHTML. Model ids are whatever a client asked for, so they never go in raw. */
+    function escapeHtml(value) {
+      return String(value).replace(/[&<>"']/g, function (c) {
+        return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+      });
+    }
+
+    /** 1234 -> "1.2K", 98765432 -> "99M": the full figure goes in the cell's title. */
+    function formatCount(n) {
+      const v = Number(n) || 0;
+      const units = [[1e9, "B"], [1e6, "M"], [1e3, "K"]];
+      for (const [size, suffix] of units) {
+        if (v >= size) return (v / size).toFixed(v >= size * 10 ? 0 : 1) + suffix;
+      }
+      return String(v);
+    }
+
+    /** "just now", "12m ago", "3h ago", "4d ago" from an ISO time; "—" when there is none. */
+    function formatAgo(iso, now) {
+      const t = iso ? new Date(iso).getTime() : NaN;
+      if (!Number.isFinite(t)) return "—";
+      const s = Math.max(0, Math.floor((now - t) / 1000));
+      if (s < 60) return "just now";
+      if (s < 3600) return Math.floor(s / 60) + "m ago";
+      if (s < 86400) return Math.floor(s / 3600) + "h ago";
+      return Math.floor(s / 86400) + "d ago";
+    }
+
+    /**
+     * The usage ledger from /api/usage. These are this bridge's own counters, not Google's
+     * meters, and a Gemini Web row is an estimate (~4 characters per token): Gemini Web
+     * reports no counts. Its limit is the linked Google account's Gemini app quota, which is
+     * separate from the CloudCode quota on the account cards and which the bridge cannot read.
+     */
+    function usageByModelHtml(data, now) {
+      const models = data && Array.isArray(data.models) ? data.models : [];
+      if (models.length === 0) {
+        return '<div class="usage-empty">No requests recorded yet. Counts appear here as clients use this bridge.</div>';
+      }
+      const tokensOf = function (m) {
+        return (Number(m.inputTokens) || 0) + (Number(m.outputTokens) || 0) + (Number(m.thoughtsTokens) || 0);
+      };
+      const allTokens = models.reduce(function (sum, m) { return sum + tokensOf(m); }, 0);
+      const num = function (value, prefix) {
+        const v = Number(value) || 0;
+        return '<div class="usage-num" title="' + v.toLocaleString() + '">' + (prefix || "") + formatCount(v) + '</div>';
+      };
+      const head =
+        '<div class="usage-row usage-head">' +
+          '<div>Model</div>' +
+          '<div class="usage-num">Requests</div>' +
+          '<div class="usage-num">Input</div>' +
+          '<div class="usage-num">Output</div>' +
+          '<div class="usage-num">Reasoning</div>' +
+          '<div class="usage-num">Last</div>' +
+          '<div class="usage-share">Share of tokens</div>' +
+        '</div>';
+      const rows = models.map(function (m) {
+        const share = allTokens > 0 ? Math.round((tokensOf(m) / allTokens) * 1000) / 10 : 0;
+        const est = m.estimated === true;
+        const chip = est
+          ? '<span class="usage-chip usage-chip-est" title="Gemini Web reports no token counts; these are the bridge\'s estimates (~4 characters per token)">Gemini Web · estimate</span>'
+          : '<span class="usage-chip" title="Counts as Google reported them">CloudCode</span>';
+        return '<div class="usage-row">' +
+          '<div class="usage-model"><span class="usage-id" title="' + escapeHtml(m.id) + '">' + escapeHtml(m.id) + '</span>' + chip + '</div>' +
+          num(m.requests) +
+          num(m.inputTokens, est ? "~" : "") +
+          num(m.outputTokens, est ? "~" : "") +
+          num(m.thoughtsTokens) +
+          '<div class="usage-num usage-ago">' + formatAgo(m.lastUsed, now) + '</div>' +
+          '<div class="usage-share"><div class="meter-track"><div class="meter-fill fill-high" style="width: ' + share + '%"></div></div>' +
+            '<span class="usage-num">' + share.toFixed(1) + '%</span></div>' +
+        '</div>';
+      }).join("");
+      const total =
+        '<div class="usage-row usage-total">' +
+          '<div class="usage-model"><span class="usage-id">All models</span></div>' +
+          num(data.totalRequests) +
+          num(data.totalInputTokens) +
+          num(data.totalOutputTokens) +
+          num(data.totalThoughtsTokens) +
+          '<div class="usage-num usage-ago">' + formatAgo(data.lastUsed, now) + '</div>' +
+          '<div class="usage-share"></div>' +
+        '</div>';
+      const footnote = models.some(function (m) { return m.estimated === true; })
+        ? '<p class="usage-footnote"><strong>Gemini Web rows are estimates</strong> (~4 characters per token): Gemini Web reports no token counts. ' +
+          'Their limit is the linked Google account\'s own Gemini app quota — separate from the CloudCode quota on the account cards, and not readable by the bridge.</p>'
+        : "";
+      return head + rows + total + footnote;
+    }
+
+    function renderUsage(data) {
+      const container = document.getElementById("usageContainer");
+      if (container) container.innerHTML = usageByModelHtml(data, Date.now());
+      const note = document.getElementById("usageNote");
+      if (note) {
+        note.textContent = data && data.firstUsed
+          ? "Counted by this bridge since " + new Date(data.firstUsed).toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" })
+          : "";
+      }
+    }
+
+    async function fetchUsage() {
+      try {
+        const res = await apiFetch("/api/usage");
+        if (!res.ok) return;
+        renderUsage(await res.json());
+      } catch (err) {
+        console.error("Failed to fetch usage:", err);
       }
     }
 
@@ -2077,8 +2315,10 @@ print(response.choices[0].message.content)</pre>
     const headerEndpoint = document.getElementById("headerEndpointText");
     if (headerEndpoint) headerEndpoint.textContent = window.location.origin;
 
-    fetchPoolStatus();
+    // Usage after the pool, so a missing key prompts once, not twice.
+    fetchPoolStatus().then(fetchUsage);
     setInterval(fetchPoolStatus, 5000);
+    setInterval(fetchUsage, 15000);
   </script>
 </body>
 </html>
