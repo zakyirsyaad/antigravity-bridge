@@ -161,8 +161,8 @@ export class BridgeServer {
 
   /**
    * The usage counters per model, each labelled with the backend that served it, for the
-   * dashboard. Gemini Web reports no token counts, so its rows are this bridge's estimates
-   * and say so (`estimated`); its limit is the linked Google account's Gemini app quota,
+   * dashboard. Gemini Web reports no token counts, so its rows (backend "gemini-web") are
+   * this bridge's estimates; its limit is the linked Google account's Gemini app quota,
    * which the bridge cannot read, and is separate from the CloudCode quota on the account
    * cards. Only counts and model ids leave here: nothing about the accounts.
    */
@@ -173,7 +173,6 @@ export class BridgeServer {
         return {
           id,
           backend: web ? "gemini-web" : "cloudcode",
-          estimated: web,
           requests: usage?.requests || 0,
           inputTokens: usage?.inputTokens || 0,
           outputTokens: usage?.outputTokens || 0,
@@ -367,7 +366,6 @@ export class BridgeServer {
             return;
           }
 
-          // Pool API: Status with Live Quotas
           // Pool API: the bridge's own usage counters per model, for the dashboard
           if (pathname === "/api/usage" && req.method === "GET") {
             res.writeHead(200, { "Content-Type": "application/json" });
@@ -375,6 +373,7 @@ export class BridgeServer {
             return;
           }
 
+          // Pool API: Status with Live Quotas
           if (pathname === "/api/pool" && req.method === "GET") {
             const pool = this.oauth.getPoolStatus();
             const accounts = this.oauth.listAccounts().accounts;

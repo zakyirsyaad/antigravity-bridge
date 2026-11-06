@@ -1569,12 +1569,20 @@ print(response.choices[0].message.content)</pre>
       });
     }
 
-    /** 1234 -> "1.2K", 98765432 -> "99M": the full figure goes in the cell's title. */
+    /**
+     * 1234 -> "1.2K", 98765432 -> "99M": the full figure goes in the cell's title. The value
+     * is rounded before its unit is chosen, so 9,999 is "10K" (not "10.0K") and 999,950 is
+     * "1.0M" (not "1000K").
+     */
     function formatCount(n) {
       const v = Number(n) || 0;
       const units = [[1e9, "B"], [1e6, "M"], [1e3, "K"]];
-      for (const [size, suffix] of units) {
-        if (v >= size) return (v / size).toFixed(v >= size * 10 ? 0 : 1) + suffix;
+      for (let i = 0; i < units.length; i++) {
+        if (v < units[i][0]) continue;
+        const scaled = v / units[i][0];
+        const text = scaled.toFixed(Number(scaled.toFixed(1)) >= 10 ? 0 : 1);
+        if (Number(text) >= 1000 && i > 0) return (v / units[i - 1][0]).toFixed(1) + units[i - 1][1];
+        return text + units[i][1];
       }
       return String(v);
     }
@@ -1588,6 +1596,54 @@ print(response.choices[0].message.content)</pre>
       if (s < 3600) return Math.floor(s / 60) + "m ago";
       if (s < 86400) return Math.floor(s / 3600) + "h ago";
       return Math.floor(s / 86400) + "d ago";
+    }
+
+    /** One right-aligned figure: compact, with the exact number on hover. */
+    function usageCellHtml(value, prefix) {
+      const v = Number(value) || 0;
+      return '<div class="usage-num" title="' + v.toLocaleString() + '">' + (prefix || "") + formatCount(v) + '</div>';
+    }
+
+    function usageHeadHtml() {
+      return '<div class="usage-row usage-head">' +
+        '<div title="Usage is counted under the id the client asked for: an alias or a retired id is its own row, not the model that served it">Requested model</div>' +
+        '<div class="usage-num">Requests</div>' +
+        '<div class="usage-num">Input</div>' +
+        '<div class="usage-num">Output</div>' +
+        '<div class="usage-num">Reasoning</div>' +
+        '<div class="usage-num">Last</div>' +
+        '<div class="usage-share">Share of tokens</div>' +
+      '</div>';
+    }
+
+    /** One model's row. Its id is whatever a client asked for, so it is escaped. */
+    function usageModelRowHtml(m, share, now) {
+      const est = m.backend === "gemini-web";
+      const chip = est
+        ? '<span class="usage-chip usage-chip-est" title="Gemini Web reports no token counts; these are the bridge\'s estimates (~4 characters per token)">Gemini Web · estimate</span>'
+        : '<span class="usage-chip" title="Google\'s reported counts; when a stream carried none, the bridge estimated its output from the text">CloudCode</span>';
+      return '<div class="usage-row">' +
+        '<div class="usage-model"><span class="usage-id" title="' + escapeHtml(m.id) + '">' + escapeHtml(m.id) + '</span>' + chip + '</div>' +
+        usageCellHtml(m.requests) +
+        usageCellHtml(m.inputTokens, est ? "~" : "") +
+        usageCellHtml(m.outputTokens, est ? "~" : "") +
+        usageCellHtml(m.thoughtsTokens) +
+        '<div class="usage-num usage-ago">' + formatAgo(m.lastUsed, now) + '</div>' +
+        '<div class="usage-share"><div class="meter-track"><div class="meter-fill fill-high" style="width: ' + share + '%"></div></div>' +
+          '<span class="usage-num">' + share.toFixed(1) + '%</span></div>' +
+      '</div>';
+    }
+
+    function usageTotalRowHtml(data, now) {
+      return '<div class="usage-row usage-total">' +
+        '<div class="usage-model"><span class="usage-id">All models</span></div>' +
+        usageCellHtml(data.totalRequests) +
+        usageCellHtml(data.totalInputTokens) +
+        usageCellHtml(data.totalOutputTokens) +
+        usageCellHtml(data.totalThoughtsTokens) +
+        '<div class="usage-num usage-ago">' + formatAgo(data.lastUsed, now) + '</div>' +
+        '<div class="usage-share"></div>' +
+      '</div>';
     }
 
     /**
@@ -1605,72 +1661,57 @@ print(response.choices[0].message.content)</pre>
         return (Number(m.inputTokens) || 0) + (Number(m.outputTokens) || 0) + (Number(m.thoughtsTokens) || 0);
       };
       const allTokens = models.reduce(function (sum, m) { return sum + tokensOf(m); }, 0);
-      const num = function (value, prefix) {
-        const v = Number(value) || 0;
-        return '<div class="usage-num" title="' + v.toLocaleString() + '">' + (prefix || "") + formatCount(v) + '</div>';
-      };
-      const head =
-        '<div class="usage-row usage-head">' +
-          '<div>Model</div>' +
-          '<div class="usage-num">Requests</div>' +
-          '<div class="usage-num">Input</div>' +
-          '<div class="usage-num">Output</div>' +
-          '<div class="usage-num">Reasoning</div>' +
-          '<div class="usage-num">Last</div>' +
-          '<div class="usage-share">Share of tokens</div>' +
-        '</div>';
       const rows = models.map(function (m) {
         const share = allTokens > 0 ? Math.round((tokensOf(m) / allTokens) * 1000) / 10 : 0;
-        const est = m.estimated === true;
-        const chip = est
-          ? '<span class="usage-chip usage-chip-est" title="Gemini Web reports no token counts; these are the bridge\'s estimates (~4 characters per token)">Gemini Web · estimate</span>'
-          : '<span class="usage-chip" title="Counts as Google reported them">CloudCode</span>';
-        return '<div class="usage-row">' +
-          '<div class="usage-model"><span class="usage-id" title="' + escapeHtml(m.id) + '">' + escapeHtml(m.id) + '</span>' + chip + '</div>' +
-          num(m.requests) +
-          num(m.inputTokens, est ? "~" : "") +
-          num(m.outputTokens, est ? "~" : "") +
-          num(m.thoughtsTokens) +
-          '<div class="usage-num usage-ago">' + formatAgo(m.lastUsed, now) + '</div>' +
-          '<div class="usage-share"><div class="meter-track"><div class="meter-fill fill-high" style="width: ' + share + '%"></div></div>' +
-            '<span class="usage-num">' + share.toFixed(1) + '%</span></div>' +
-        '</div>';
+        return usageModelRowHtml(m, share, now);
       }).join("");
-      const total =
-        '<div class="usage-row usage-total">' +
-          '<div class="usage-model"><span class="usage-id">All models</span></div>' +
-          num(data.totalRequests) +
-          num(data.totalInputTokens) +
-          num(data.totalOutputTokens) +
-          num(data.totalThoughtsTokens) +
-          '<div class="usage-num usage-ago">' + formatAgo(data.lastUsed, now) + '</div>' +
-          '<div class="usage-share"></div>' +
-        '</div>';
-      const footnote = models.some(function (m) { return m.estimated === true; })
+      const footnote = models.some(function (m) { return m.backend === "gemini-web"; })
         ? '<p class="usage-footnote"><strong>Gemini Web rows are estimates</strong> (~4 characters per token): Gemini Web reports no token counts. ' +
           'Their limit is the linked Google account\'s own Gemini app quota — separate from the CloudCode quota on the account cards, and not readable by the bridge.</p>'
         : "";
-      return head + rows + total + footnote;
+      return usageHeadHtml() + rows + usageTotalRowHtml(data, now) + footnote;
     }
+
+    /** How often the usage ledger asks for fresh counts. */
+    const USAGE_POLL_MS = 15000;
+    let usageShown = false;
 
     function renderUsage(data) {
       const container = document.getElementById("usageContainer");
       if (container) container.innerHTML = usageByModelHtml(data, Date.now());
       const note = document.getElementById("usageNote");
+      // With nothing recorded the tracker reports "since now", which would move every day.
+      const counted = data && Array.isArray(data.models) && data.models.length > 0 && data.firstUsed;
       if (note) {
-        note.textContent = data && data.firstUsed
+        note.textContent = counted
           ? "Counted by this bridge since " + new Date(data.firstUsed).toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" })
           : "";
       }
     }
 
+    /** Replaces the loading placeholder with why; a ledger already drawn is left as it is. */
+    function showUsageProblem(why) {
+      if (usageShown) return;
+      const container = document.getElementById("usageContainer");
+      if (container) container.innerHTML = '<div class="usage-empty">Usage could not be loaded (' + escapeHtml(why) + '). It retries on its own.</div>';
+    }
+
     async function fetchUsage() {
+      // A background tab skips its turn; the next one after it is shown again catches up.
+      if (document.hidden) return;
       try {
-        const res = await apiFetch("/api/usage");
-        if (!res.ok) return;
+        // A plain fetch with the stored key: the pool poll is what asks for a missing key, so
+        // a dismissed prompt is not followed by another one from here every 15 s.
+        const res = await fetch("/api/usage", { headers: withApiKey({}, storedApiKey()) });
+        if (!res.ok) {
+          showUsageProblem("HTTP " + res.status);
+          return;
+        }
         renderUsage(await res.json());
+        usageShown = true;
       } catch (err) {
         console.error("Failed to fetch usage:", err);
+        showUsageProblem("the request failed");
       }
     }
 
@@ -2315,10 +2356,10 @@ print(response.choices[0].message.content)</pre>
     const headerEndpoint = document.getElementById("headerEndpointText");
     if (headerEndpoint) headerEndpoint.textContent = window.location.origin;
 
-    // Usage after the pool, so a missing key prompts once, not twice.
+    // Usage after the pool: the pool's request is the one that asks for a missing key.
     fetchPoolStatus().then(fetchUsage);
     setInterval(fetchPoolStatus, 5000);
-    setInterval(fetchUsage, 15000);
+    setInterval(fetchUsage, USAGE_POLL_MS);
   </script>
 </body>
 </html>
