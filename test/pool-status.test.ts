@@ -17,6 +17,7 @@
  *
  * Stubbed throughout — no disk, network, credential or quota.
  */
+import { pageFunctions } from "./dashboard-functions";
 import fs from "node:fs";
 import path from "node:path";
 import vm from "node:vm";
@@ -421,23 +422,6 @@ function hang(init: any): Promise<Response> {
       reject(Object.assign(new Error("This operation was aborted"), { name: "AbortError" }))
     );
   });
-}
-/**
- * Lift named top-level `function` declarations out of the dashboard's inline script
- * and evaluate them together, so their behaviour can be checked without a browser.
- */
-function pageFunctions(html: string, names: string[]): Record<string, (...args: any[]) => any> {
-  const sources = names.map((name) => {
-    const start = html.indexOf(`function ${name}(`);
-    if (start < 0) throw new Error(`dashboard.html has no function ${name}()`);
-    let depth = 0;
-    for (let i = html.indexOf("{", start); i < html.length; i++) {
-      if (html[i] === "{") depth++;
-      if (html[i] === "}" && --depth === 0) return html.slice(start, i + 1);
-    }
-    throw new Error(`could not read function ${name}()`);
-  });
-  return new Function(`${sources.join("\n")}\nreturn { ${names.join(", ")} };`)();
 }
 /**
  * A clock element as the browser holds it, taken from the markup's own attributes. The
