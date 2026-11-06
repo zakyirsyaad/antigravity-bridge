@@ -65,7 +65,7 @@ Everything else runs offline — no account, no network, no quota — by stubbin
 | Script | Guards |
 |---|---|
 | `test:stream` | SSE framing: turn terminators, parallel tool-call indices, prompt size in `message_delta`, OpenAI `include_usage` chunk |
-| `test:security` | management API leaks no OAuth tokens; cross-origin rejected |
+| `test:security` | management API leaks no OAuth tokens or Gemini Web cookies (`/api/pool`, and `/api/pool/switch`, which answers a summary); cross-origin rejected, `/v1/usage` and `/usage` included |
 | `test:refresh` | token refresh is bound to its own account, not the active one |
 | `test:launchagent` | project-root resolution; `install()` rejects a bad root |
 | `test:budget` | thinking budget fits inside the caller's `max_tokens`; a dynamic model is pinned to its room in a small window and stays dynamic in a large one; `BRIDGE_TOOL_MIN_OUTPUT_TOKENS` raises a small cap only on requests with tools and never past the model's limit |
@@ -539,13 +539,17 @@ id (`95a4c0abcba24364`, sent at RPC index 79), so the others run Gemini Web's de
 - **Two independent gates, and they cover different attackers.** `authorize()` requires a shared
   secret (`BRIDGE_API_KEY`) from non-loopback callers and fails closed when the key is unset —
   that is what stops `curl`. `isCrossOriginRequest()` additionally blocks foreign web pages from
-  driving `/api/*` and `/oauth/*`, which the key alone would not, since a browser attaches
+  driving `/api/*` and `/oauth/*` — and from reading `/v1/usage` (`/usage`), which names every
+  pooled account and its quota — which the key alone would not, since a browser attaches
   credentials the user already has. Loopback is trusted by both unless `BRIDGE_TRUST_LOCAL=0`.
   Only the dashboard shell (`/`, `/dashboard`, HTML variant) is exempt, so it can load and prompt
   for a key; its JSON variant is not, because that one reports the signed-in account.
 - `getPoolStatus()` returns `PublicAccountSummary`, deliberately without OAuth tokens. Keep it
   that way — the type is the guard — and put new credential-touching routes under `/api/` so they
-  inherit the origin check.
+  inherit the origin check. `OAuthManager` methods that return an `AccountToken`
+  (`switchAccountByEmail()` and friends) hand back the stored record, tokens and `webCookies`
+  included: pass it through `toPublicAccountSummary()` before it reaches a response.
+  `/api/pool/switch` used to answer the whole record to any holder of the key.
 - **`syncZCodeConfig()` runs on every `start` and `login`** and writes a fresh timestamped
   `.backup.<iso>` copy of `~/.zcode/v2/config.json` each time — that directory accumulates files.
 - **Client credentials in `constants.ts`** are the public Antigravity desktop app's, assembled from
