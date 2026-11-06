@@ -12,7 +12,7 @@
  */
 
 import http from "node:http";
-import { formatToolsForPrompt, buildToolBridgePrompt, parseToolBridgeOutput } from "../src/tool-bridge";
+import { formatToolsForPrompt, buildToolBridgePrompt, parseToolBridgeOutput, normalizeToolChoice } from "../src/tool-bridge";
 import { BridgeServer } from "../src/server";
 import { OAuthManager } from "../src/oauth";
 import { GeminiWebClient } from "../src/gemini-web-client";
@@ -122,6 +122,14 @@ async function runTests() {
   expect("extracts tool call from prose", parsed3.finish_reason, "tool_calls");
   expect("extracted function name matches", parsed3.tool_calls[0]?.function?.name, "get_weather");
 
+  console.log("\n[5b] Both protocols' tool_choice shapes ...");
+  expect("Anthropic {type:any} is required", normalizeToolChoice({ type: "any" }).mode, "required");
+  expect("Anthropic {type:tool} names the tool", normalizeToolChoice({ type: "tool", name: "get_weather" }).name, "get_weather");
+  expect("Anthropic {type:none} is none", normalizeToolChoice({ type: "none" }).mode, "none");
+  expect("OpenAI {function:{name}} names the tool", normalizeToolChoice({ type: "function", function: { name: "x" } }).name, "x");
+  expect("OpenAI 'required' is required", normalizeToolChoice("required").mode, "required");
+  expect("Anthropic forced tool reaches the prompt", buildToolBridgePrompt("hi", mockTools, { type: "tool", name: "get_weather" }).includes('name: "get_weather"'), true);
+
   console.log("\n[6/6] End-to-end server route with Gemini Web tool bridge ...");
   const oauth = OAuthManager.getInstance();
   (oauth as any).listAccounts = () => ({
@@ -142,7 +150,8 @@ async function runTests() {
 
   const geminiWeb = GeminiWebClient.getInstance();
   // Stub GeminiWebClient to return tool calling JSON string
-  (geminiWeb as any).generateContent = async () => ({
+  let lastWebArgs: any[] = [];
+  (geminiWeb as any).generateContent = async (...args: any[]) => (lastWebArgs = args, {
     candidates: [
       {
         content: {
@@ -175,6 +184,22 @@ async function runTests() {
     expect("tool call name is get_weather", toolCall?.function?.name, "get_weather");
     const parsedArgs = JSON.parse(toolCall?.function?.arguments || "{}");
     expect("arguments location is Berlin", parsedArgs.location, "Berlin");
+
+    // Claude Code always streams and always sends tools: the stream must bridge them too.
+    const anth = await postJson("/v1/messages", {
+      model: "gemini-argon-4",
+      max_tokens: 1024,
+      stream: true,
+      system: "You are a weather bot.",
+      messages: [{ role: "user", content: "Check weather in Berlin" }],
+      tools: [{ name: "get_weather", description: "Weather", input_schema: { type: "object", properties: { location: { type: "string" } } } }],
+    });
+    expect("Anthropic stream responds 200", anth.status, 200);
+    expect("Anthropic stream emits a tool_use block", anth.raw.includes('"type":"tool_use"'), true);
+    expect("Anthropic stream carries the arguments", anth.raw.includes('Berlin'), true);
+    expect("Anthropic stream stops as tool_use", anth.raw.includes('"stop_reason":"tool_use"'), true);
+    expect("Anthropic stream targets the requested model", lastWebArgs[1], "gemini-argon-4");
+    expect("system prompt reaches Gemini Web", String(lastWebArgs[0]).includes("You are a weather bot."), true);
   } finally {
     await server.stop();
   }

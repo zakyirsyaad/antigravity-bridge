@@ -83,6 +83,54 @@ async function runTests() {
   const textOutput = parsedResp.candidates?.[0]?.content?.parts?.[0]?.text;
   expect("extracts candidate text cleanly", textOutput, "Halo! Ada yang bisa saya bantu?");
 
+  console.log("\n[4b] Model ids, prompt text, and session handling ...");
+  expect("argon resolves to Gemini Web's id", GeminiWebClient.resolveWebModelId("gemini-argon-4"), "95a4c0abcba24364");
+  expect("a bridge name is never sent as a model id", GeminiWebClient.resolveWebModelId("gemini-advanced"), null);
+  expect("a provider prefix is dropped", GeminiWebClient.isGeminiWebModel("open-design-byok/gemini-auto"), true);
+  expect("an unrelated id is not a web model", GeminiWebClient.isGeminiWebModel("gemini-3.8-flash-tiered"), false);
+  const rpcAuto = JSON.parse(JSON.parse(GeminiWebClient.buildRpcPayload("hi", "tok", "gemini-auto").get("f.req")!)[1]);
+  expect("gemini-auto leaves index 79 empty", rpcAuto[79], null);
+  const promptText = GeminiWebClient.requestToPromptText({
+    systemInstruction: { parts: [{ text: "Be terse." }] },
+    contents: [
+      { role: "user", parts: [{ text: "weather?" }] },
+      { role: "model", parts: [{ functionCall: { name: "get_weather", args: { city: "Berlin" } } }] },
+    ],
+  });
+  expect("system instruction is in the prompt", promptText.startsWith("System: Be terse."), true);
+  expect("a prior tool call is in the prompt", promptText.includes('[Tool Call: get_weather({"city":"Berlin"})]'), true);
+
+  const realFetch = globalThis.fetch;
+  const fetched: string[] = [];
+  const page = '<script>{"SNlM0e":"tok-1","cfb2h":"bl-1","FdrFJe":"sid-1"}</script>';
+  globalThis.fetch = (async (url: any) => {
+    const u = String(url);
+    fetched.push(u);
+    if (u.endsWith("/app")) {
+      // The root page fails; the second signed-in account's page works.
+      return u === "https://gemini.google.com/u/1/app"
+        ? new Response(page, { status: 200 })
+        : new Response("nope", { status: 500 });
+    }
+    return new Response("expired", { status: 401 });
+  }) as any;
+  try {
+    const fresh: GeminiWebClient = new (GeminiWebClient as any)();
+    fresh.setCredentials({ rawCookies: "__Secure-1PSID=x" });
+    let threw = false;
+    try {
+      await fresh.generateContent("hi");
+    } catch {
+      threw = true;
+    }
+    expect("a 401 from generate throws", threw, true);
+    const generateUrl = fetched.find((u) => u.includes("StreamGenerate")) || "";
+    expect("generate posts to the account the session came from", generateUrl.startsWith("https://gemini.google.com/u/1/_/"), true);
+    expect("a failed generate drops the cached session", (fresh as any).session, null);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+
   console.log("\n[5/5] AntigravityClient failover loop to Gemini Web on CloudCode exhaustion ...");
   const antigravity = new AntigravityClient();
   const oauth = OAuthManager.getInstance();

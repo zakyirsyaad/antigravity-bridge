@@ -49,6 +49,23 @@ export function formatToolsForPrompt(tools: any[]): string {
 }
 
 /**
+ * Both protocols' tool_choice as one shape. OpenAI: "auto" | "none" | "required" |
+ * {function: {name}}. Anthropic: {type: "auto" | "any" | "none"} | {type: "tool", name}.
+ */
+export function normalizeToolChoice(toolChoice: any): { mode: "auto" | "none" | "required"; name?: string } {
+  if (typeof toolChoice === "string") {
+    const mode = toolChoice.toLowerCase();
+    return { mode: mode === "none" || mode === "required" ? mode : "auto" };
+  }
+  if (!toolChoice || typeof toolChoice !== "object") return { mode: "auto" };
+  if (toolChoice.function?.name) return { mode: "required", name: String(toolChoice.function.name) };
+  if (toolChoice.type === "tool" && toolChoice.name) return { mode: "required", name: String(toolChoice.name) };
+  if (toolChoice.type === "any") return { mode: "required" };
+  if (toolChoice.type === "none") return { mode: "none" };
+  return { mode: "auto" };
+}
+
+/**
  * Builds the complete tool bridge prompt instructing the model to respond in JSON.
  */
 export function buildToolBridgePrompt(
@@ -61,13 +78,13 @@ export function buildToolBridgePrompt(
   }
 
   const toolList = formatToolsForPrompt(tools);
-  const choiceMode = typeof toolChoice === "string" ? toolChoice.toLowerCase() : "auto";
+  const { mode: choiceMode, name: forcedName } = normalizeToolChoice(toolChoice);
 
   let choiceInstruction = "";
-  if (choiceMode === "required") {
+  if (forcedName) {
+    choiceInstruction = `- You must return exactly one tool call with name: "${forcedName}".\n`;
+  } else if (choiceMode === "required") {
     choiceInstruction = "- You must return at least one tool call in the tool_calls array.\n";
-  } else if (toolChoice && typeof toolChoice === "object" && toolChoice.function?.name) {
-    choiceInstruction = `- You must return exactly one tool call with name: "${toolChoice.function.name}".\n`;
   } else if (choiceMode === "none") {
     choiceInstruction = '- Tool calling disabled. Return only {"content": "..."}.\n';
   }

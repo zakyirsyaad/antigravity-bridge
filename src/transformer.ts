@@ -3,6 +3,7 @@ import { SUPPORTED_MODELS, SKIP_THOUGHT_SIGNATURE, findModel, ModelDef } from ".
 import { AntigravityPayload } from "./antigravity-client";
 import { cleanToolDeclarations, cleanJSONSchemaForAntigravity } from "./schema-cleaner";
 import { repairJsonString, parseOrRepairJson } from "./json-repair";
+import { GeminiWebClient } from "./gemini-web-client";
 
 /** A model id the bridge cannot map to anything Google serves. */
 export class UnknownModelError extends Error {
@@ -441,14 +442,9 @@ export class Transformer {
 
     // Gemini Web models (e.g. gemini-argon-4, gemini-auto, gemini-advanced, gemini-web-*)
     // pass through directly to be routed to the Gemini Web engine.
-    if (
-      clean.startsWith("gemini-argon") ||
-      clean === "gemini-auto" ||
-      clean === "gemini-advanced" ||
-      clean.startsWith("gemini-web-") ||
-      clean.includes("argon")
-    ) {
-      return { id: clean };
+    // One predicate for both this and the server's routing, so they cannot disagree.
+    if (GeminiWebClient.isGeminiWebModel(raw)) {
+      return { id: GeminiWebClient.normalizeWebModelName(raw) };
     }
 
     const exact = SUPPORTED_MODELS.find((m) => m.id === clean || m.name.toLowerCase() === raw);

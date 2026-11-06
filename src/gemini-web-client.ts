@@ -11,8 +11,6 @@
  * or when configured with GEMINI_WEB_COOKIES.
  */
 
-import { Readable } from "node:stream";
-
 export interface GeminiWebCredentials {
   psid?: string;
   psidts?: string;
@@ -26,6 +24,24 @@ export interface GeminiWebSession {
   fsid: string; // sessionID (FdrFJe)
   cookies: string;
   expiresAt: number;
+  /** "" or "/u/<n>": the multi-login path the session was read from. Generate must post to the same one. */
+  authPath?: string;
+}
+
+/** Gemini Web's own id for Argon, discovered via otAQ7b. */
+const ARGON_MODEL_ID = "95a4c0abcba24364";
+/** The shape of Gemini Web's model ids; anything else is a bridge name, not one Google knows. */
+const WEB_MODEL_ID_PATTERN = /^[0-9a-f]{16}$/;
+const DEFAULT_WEB_TIMEOUT_MS = 180_000;
+
+/** How long one Gemini Web request may take. The answer arrives whole, so this covers generation too. */
+function webTimeoutMs(): number {
+  const configured = Number(process.env.GEMINI_WEB_TIMEOUT_MS);
+  return Number.isFinite(configured) && configured > 0 ? Math.floor(configured) : DEFAULT_WEB_TIMEOUT_MS;
+}
+
+function authPathFor(authUser: string): string {
+  return authUser && authUser !== "0" ? `/u/${authUser}` : "";
 }
 
 export class GeminiWebClient {
@@ -140,29 +156,31 @@ export class GeminiWebClient {
     }
 
     // Attempt root /app, /u/0/app, and /u/1/app in order to handle Google multi-login accounts
+    // Attempt the configured account first, then /u/0 and /u/1, to handle Google multi-login.
+    // The path that worked is kept on the session: its token is only good for that account.
     const authUser = this.credentials?.authUser || "0";
-    const candidateUrls = [
-      authUser !== "0" ? `https://gemini.google.com/u/${authUser}/app` : "https://gemini.google.com/app",
-      "https://gemini.google.com/u/0/app",
-      "https://gemini.google.com/u/1/app",
-    ];
+    const candidatePaths = Array.from(new Set([authPathFor(authUser), "/u/0", "/u/1"]));
 
     let lastError: any = null;
-    for (const initUrl of candidateUrls) {
+    for (const authPath of candidatePaths) {
       try {
-        const res = await fetch(initUrl, {
+        const res = await fetch(`https://gemini.google.com${authPath}/app`, {
           method: "GET",
           headers: {
             "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Cookie": cookieHeader,
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
           },
+          signal: AbortSignal.timeout(webTimeoutMs()),
         });
 
-        if (!res.ok) continue;
+        if (!res.ok) {
+          lastError = new Error(`Gemini Web session page ${authPath || "/"}app answered HTTP ${res.status}`);
+          continue;
+        }
 
         const html = await res.text();
-        const session = GeminiWebClient.extractSessionParameters(html, cookieHeader);
+        const session = { ...GeminiWebClient.extractSessionParameters(html, cookieHeader), authPath };
         this.session = session;
         return session;
       } catch (err: any) {
@@ -216,20 +234,35 @@ export class GeminiWebClient {
    * Strips routing prefixes (e.g. google/, antigravity-, antigravity/) before testing.
    */
   public static isGeminiWebModel(modelName: string): boolean {
-    if (!modelName || typeof modelName !== "string") return false;
-    const clean = modelName
-      .trim()
-      .toLowerCase()
-      .replace(/^(google|antigravity)\//, "")
-      .replace(/^antigravity-/, "");
-
+    const clean = GeminiWebClient.normalizeWebModelName(modelName);
     return (
       clean.startsWith("gemini-argon") ||
+      clean.startsWith("argon") ||
       clean === "gemini-auto" ||
       clean === "gemini-advanced" ||
-      clean.startsWith("gemini-web-") ||
-      clean.includes("argon")
+      clean.startsWith("gemini-web-")
     );
+  }
+
+  /**
+   * The model name without any `provider/` routing prefix or `antigravity-` prefix,
+   * lowercased. The single place both the server and Transformer read a web id from.
+   */
+  public static normalizeWebModelName(modelName: string): string {
+    if (!modelName || typeof modelName !== "string") return "";
+    const lastSegment = modelName.trim().toLowerCase().split("/").pop() || "";
+    return lastSegment.replace(/^antigravity-/, "");
+  }
+
+  /**
+   * A whole Antigravity request (system instruction plus contents) as one prompt.
+   */
+  public static requestToPromptText(request: any): string {
+    const systemText = Array.isArray(request?.systemInstruction?.parts)
+      ? request.systemInstruction.parts.map((p: any) => p?.text || "").filter(Boolean).join("\n")
+      : "";
+    const conversation = GeminiWebClient.contentsToPromptText(request?.contents || []);
+    return systemText ? `System: ${systemText}\n\n${conversation}` : conversation;
   }
 
   /**
@@ -246,6 +279,8 @@ export class GeminiWebClient {
         for (const p of turn.parts) {
           if (p.text && p.thought !== true) {
             texts.push(p.text);
+          } else if (p.functionCall?.name) {
+            texts.push(`[Tool Call: ${p.functionCall.name}(${JSON.stringify(p.functionCall.args ?? {})})]`);
           } else if (p.functionResponse?.response?.content) {
             texts.push(`[Tool Result: ${p.functionResponse.response.content}]`);
           }
@@ -260,6 +295,18 @@ export class GeminiWebClient {
   }
 
   /**
+   * Gemini Web's own model id for a requested model, or null to leave Gemini Web on its
+   * default. A bridge name such as "gemini-auto" is never sent: Google does not know it.
+   */
+  public static resolveWebModelId(modelId?: string): string | null {
+    if (!modelId) return null;
+    const clean = GeminiWebClient.normalizeWebModelName(modelId);
+    if (clean.includes("argon")) return ARGON_MODEL_ID;
+    if (WEB_MODEL_ID_PATTERN.test(clean)) return clean;
+    return null;
+  }
+
+  /**
    * Builds the double-JSON encoded RPC form payload (`f.req`).
    * Supports specific modelId routing (e.g. Argon: 95a4c0abcba24364) at index 79.
    */
@@ -270,14 +317,9 @@ export class GeminiWebClient {
     innerData[1] = ["en"];
     innerData[2] = ["", "", ""];
 
-    // If targeting Argon or specific model, route via index 79
-    if (modelId) {
-      if (modelId.toLowerCase().includes("argon") || modelId.toLowerCase().includes("gemini-argon")) {
-        innerData[79] = "95a4c0abcba24364"; // Exact Argon Model ID from otAQ7b discovery
-      } else {
-        innerData[79] = modelId;
-      }
-    }
+    // A model Gemini Web knows is routed via index 79; anything else stays on its default.
+    const webModelId = GeminiWebClient.resolveWebModelId(modelId);
+    if (webModelId) innerData[79] = webModelId;
 
     const fReq = JSON.stringify([null, JSON.stringify(innerData)]);
     return new URLSearchParams({
@@ -363,14 +405,13 @@ export class GeminiWebClient {
     const session = await this.ensureSession();
     let prompt = typeof promptOrContents === "string"
       ? promptOrContents
-      : GeminiWebClient.contentsToPromptText(promptOrContents.contents || []);
+      : GeminiWebClient.requestToPromptText(promptOrContents || {});
 
     if (!prompt.trim()) prompt = "Hello";
 
-    const authUser = this.credentials?.authUser || "0";
-    const generateUrl = authUser !== "0"
-      ? `https://gemini.google.com/u/${authUser}/_/BardChatUi/data/assistant.lamda.BardFrontendService/StreamGenerate?bl=${encodeURIComponent(session.bl)}&f.sid=${encodeURIComponent(session.fsid)}&_reqid=${Math.floor(Math.random() * 89999 + 10000)}&rt=c`
-      : `https://gemini.google.com/_/BardChatUi/data/assistant.lamda.BardFrontendService/StreamGenerate?bl=${encodeURIComponent(session.bl)}&f.sid=${encodeURIComponent(session.fsid)}&_reqid=${Math.floor(Math.random() * 89999 + 10000)}&rt=c`;
+    // Post to the account the session's token came from, not the one configured.
+    const authPath = session.authPath ?? authPathFor(this.credentials?.authUser || "0");
+    const generateUrl = `https://gemini.google.com${authPath}/_/BardChatUi/data/assistant.lamda.BardFrontendService/StreamGenerate?bl=${encodeURIComponent(session.bl)}&f.sid=${encodeURIComponent(session.fsid)}&_reqid=${Math.floor(Math.random() * 89999 + 10000)}&rt=c`;
 
     const bodyParams = GeminiWebClient.buildRpcPayload(prompt, session.at, targetModelId);
 
@@ -385,9 +426,13 @@ export class GeminiWebClient {
         "X-Same-Domain": "1",
       },
       body: bodyParams.toString(),
+      signal: AbortSignal.timeout(webTimeoutMs()),
     });
 
     if (!res.ok) {
+      // The token or the rotating 1PSIDTS cookie may have gone stale: fetch a fresh
+      // session next time instead of failing every request until the TTL runs out.
+      if (this.session === session) this.session = null;
       const errText = await res.text();
       throw new Error(`Gemini Web generation failed with HTTP ${res.status}: ${errText.slice(0, 200)}`);
     }
@@ -399,9 +444,9 @@ export class GeminiWebClient {
   /**
    * Streams content chunk by chunk.
    */
-  public async *streamGenerateContent(promptOrContents: any): AsyncIterable<any> {
+  public async *streamGenerateContent(promptOrContents: any, targetModelId?: string): AsyncIterable<any> {
     // Generate complete response and yield as single candidate chunk
-    const full = await this.generateContent(promptOrContents);
+    const full = await this.generateContent(promptOrContents, targetModelId);
     yield {
       response: full,
     };

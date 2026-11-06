@@ -642,97 +642,85 @@ export class BridgeServer {
         return;
       }
 
+      const hasTools = Array.isArray(body.tools) && body.tools.length > 0;
+      const webPrompt: any = hasTools
+        ? buildToolBridgePrompt(GeminiWebClient.requestToPromptText(payload.request), body.tools, body.tool_choice)
+        : payload.request;
+
       if (body.stream) {
+        // Gemini Web answers whole, so the answer is in hand before the 200 goes out and a
+        // failure is still a real HTTP error. With tools it is bridged into tool_use blocks,
+        // as the non-streaming branch below does: Claude Code always streams.
+        let rawText = "";
         try {
-          const stream = geminiWeb.streamGenerateContent(payload.request);
-          res.writeHead(200, {
-            "Content-Type": "text/event-stream; charset=utf-8",
-            "Cache-Control": "no-cache",
-            Connection: "keep-alive",
-          });
-          res.write(
-            `event: message_start\ndata: ${JSON.stringify({
-              type: "message_start",
-              message: {
-                id: msgId,
-                type: "message",
-                role: "assistant",
-                content: [],
-                model: requestedModel,
-                stop_reason: null,
-                stop_sequence: null,
-                usage: { input_tokens: 0, output_tokens: 0 },
-              },
-            })}\n\n`
-          );
-          let started = false;
-          let totalChars = 0;
-          for await (const chunk of stream) {
-            const text = chunk.response?.candidates?.[0]?.content?.parts?.[0]?.text || "";
-            if (text) {
-              if (!started) {
-                res.write(
-                  `event: content_block_start\ndata: ${JSON.stringify({
-                    type: "content_block_start",
-                    index: 0,
-                    content_block: { type: "text", text: "" },
-                  })}\n\n`
-                );
-                started = true;
-              }
-              res.write(
-                `event: content_block_delta\ndata: ${JSON.stringify({
-                  type: "content_block_delta",
-                  index: 0,
-                  delta: { type: "text_delta", text },
-                })}\n\n`
-              );
-              totalChars += text.length;
-            }
-          }
-          if (started) {
-            res.write(
-              `event: content_block_stop\ndata: ${JSON.stringify({
-                type: "content_block_stop",
-                index: 0,
-              })}\n\n`
-            );
-          }
-          const estimatedTokens = Math.max(1, Math.ceil(totalChars / 4));
-          res.write(
-            `event: message_delta\ndata: ${JSON.stringify({
-              type: "message_delta",
-              delta: { stop_reason: "end_turn", stop_sequence: null },
-              usage: { output_tokens: estimatedTokens },
-            })}\n\n`
-          );
-          res.write(`event: message_stop\ndata: {"type":"message_stop"}\n\n`);
-          res.end();
-          return;
+          const resp = await geminiWeb.generateContent(webPrompt, requestedModel);
+          rawText = resp.candidates?.[0]?.content?.parts?.[0]?.text || "";
         } catch (err: any) {
-          if (res.headersSent) {
-            res.write(
-              `event: error\ndata: ${JSON.stringify({
-                type: "error",
-                error: { type: "api_error", message: err.message || "Gemini Web stream failed" },
-              })}\n\n`
-            );
-            res.end();
-          } else {
-            res.writeHead(500, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({ error: { message: err.message || "Gemini Web stream failed" } }));
-          }
+          res.writeHead(500, { "Content-Type": "application/json" });
+          res.end(
+            JSON.stringify({
+              type: "error",
+              error: { type: "api_error", message: err.message || "Gemini Web stream failed" },
+            })
+          );
           return;
         }
+
+        const bridged = hasTools ? parseToolBridgeOutput(rawText, body.tools) : null;
+        const blocks: any[] = [];
+        if (bridged?.finish_reason === "tool_calls") {
+          for (const tc of bridged.tool_calls) {
+            blocks.push({ type: "tool_use", id: tc.id, name: tc.function.name, input: parseOrRepairJson(tc.function.arguments, {}) });
+          }
+        } else {
+          const text = bridged ? bridged.content : rawText;
+          if (text) blocks.push({ type: "text", text });
+        }
+        const sawToolUse = blocks.some((b) => b.type === "tool_use");
+
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream; charset=utf-8",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        res.write(
+          `event: message_start\ndata: ${JSON.stringify({
+            type: "message_start",
+            message: {
+              id: msgId,
+              type: "message",
+              role: "assistant",
+              content: [],
+              model: requestedModel,
+              stop_reason: null,
+              stop_sequence: null,
+              usage: { input_tokens: 0, output_tokens: 0 },
+            },
+          })}\n\n`
+        );
+        blocks.forEach((block, index) => {
+          const start = block.type === "tool_use" ? { ...block, input: {} } : { type: "text", text: "" };
+          const delta =
+            block.type === "tool_use"
+              ? { type: "input_json_delta", partial_json: JSON.stringify(block.input) }
+              : { type: "text_delta", text: block.text };
+          res.write(`event: content_block_start\ndata: ${JSON.stringify({ type: "content_block_start", index, content_block: start })}\n\n`);
+          res.write(`event: content_block_delta\ndata: ${JSON.stringify({ type: "content_block_delta", index, delta })}\n\n`);
+          res.write(`event: content_block_stop\ndata: ${JSON.stringify({ type: "content_block_stop", index })}\n\n`);
+        });
+        res.write(
+          `event: message_delta\ndata: ${JSON.stringify({
+            type: "message_delta",
+            delta: { stop_reason: sawToolUse ? "tool_use" : "end_turn", stop_sequence: null },
+            usage: { output_tokens: Math.max(1, Math.ceil(rawText.length / 4)) },
+          })}\n\n`
+        );
+        res.write(`event: message_stop\ndata: {"type":"message_stop"}\n\n`);
+        res.end();
+        return;
       } else {
         try {
-          let webPromptObj: any = payload.request;
-          if (Array.isArray(body.tools) && body.tools.length > 0) {
-            const rawPrompt = GeminiWebClient.contentsToPromptText(payload.request?.contents || []);
-            webPromptObj = buildToolBridgePrompt(rawPrompt, body.tools, body.tool_choice);
-          }
-
-          const resp = await geminiWeb.generateContent(webPromptObj, requestedModel);
+          const resp = await geminiWeb.generateContent(webPrompt, requestedModel);
           const rawText = resp.candidates?.[0]?.content?.parts?.[0]?.text || "";
 
           if (Array.isArray(body.tools) && body.tools.length > 0) {
@@ -1061,13 +1049,13 @@ export class BridgeServer {
           // If tools are declared, apply tool bridge prompt
           let webPromptObj: any = payload.request;
           if (Array.isArray(body.tools) && body.tools.length > 0) {
-            const rawPrompt = GeminiWebClient.contentsToPromptText(payload.request?.contents || []);
+            const rawPrompt = GeminiWebClient.requestToPromptText(payload.request);
             const bridgedPrompt = buildToolBridgePrompt(rawPrompt, body.tools, body.tool_choice);
             webPromptObj = bridgedPrompt;
           }
 
           let accumulatedText = "";
-          const stream = geminiWeb.streamGenerateContent(webPromptObj);
+          const stream = geminiWeb.streamGenerateContent(webPromptObj, requestedModel);
           for await (const chunk of stream) {
             const text = chunk.response?.candidates?.[0]?.content?.parts?.[0]?.text || "";
             if (text) {
@@ -1163,7 +1151,7 @@ export class BridgeServer {
         try {
           let webPromptObj: any = payload.request;
           if (Array.isArray(body.tools) && body.tools.length > 0) {
-            const rawPrompt = GeminiWebClient.contentsToPromptText(payload.request?.contents || []);
+            const rawPrompt = GeminiWebClient.requestToPromptText(payload.request);
             webPromptObj = buildToolBridgePrompt(rawPrompt, body.tools, body.tool_choice);
           }
 
