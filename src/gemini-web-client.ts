@@ -67,6 +67,25 @@ export function webTimeoutMs(): number {
  * better (gemini-web-rotation.ts). A transport failure or the bridge's own timeout is a
  * plain Error: that is the network, and another account would meet the same one.
  */
+/**
+ * The page-data key only a signed-in Gemini Web page carries, as a non-empty string (seen
+ * 2026-11-06; see GeminiWebClient.isSignedInPage()). Google's private data, not an API.
+ */
+export const SIGNED_IN_MARKER = "WZsZ1e";
+const SIGNED_IN_PATTERN = new RegExp(`"${SIGNED_IN_MARKER}"\\s*:\\s*"[^"]+"`);
+
+/**
+ * GEMINI_WEB_SIGNED_IN_CHECK=0 turns the signed-in check off: the escape hatch for the day
+ * Google drops or renames the marker and every fresh cookie starts failing as signed out.
+ * Off, a stale cookie is answered anonymously again, as it was before the check.
+ */
+function signedInCheckEnabled(): boolean {
+  return process.env.GEMINI_WEB_SIGNED_IN_CHECK !== "0";
+}
+
+/** Where fresh cookies go: the dashboard, or the environment for env-supplied ones. */
+const FRESH_COOKIES_HINT = "link fresh ones in the dashboard (or replace GEMINI_WEB_COOKIES / GEMINI_PSID)";
+
 /** Generate statuses that blame the request, not the account: never rotated. */
 const REQUEST_FAULT_STATUSES = new Set([400, 413]);
 
@@ -331,7 +350,7 @@ export class GeminiWebClient {
 
         if (!res.ok) {
           firstError ??= res.status >= 300 && res.status < 400
-            ? new GeminiWebAccountError(`Gemini Web session page ${page} redirected (HTTP ${res.status}): the browser cookies are signed out; link fresh ones`)
+            ? new GeminiWebAccountError(`Gemini Web session page ${page} redirected (HTTP ${res.status}): the browser cookies are signed out; ${FRESH_COOKIES_HINT}`)
             : new GeminiWebAccountError(`Gemini Web session page ${page} answered HTTP ${res.status}`);
           continue;
         }
@@ -339,12 +358,14 @@ export class GeminiWebClient {
         // gemini.google.com serves signed-out visitors too: an expired, signed-out or bogus
         // cookie gets HTTP 200 and an action token, and the generate is answered
         // anonymously — not this account, not its quota, not Argon. Refuse that page, so a
-        // stale cookie is an error and the rotation moves to another linked session.
-        if (!GeminiWebClient.isSignedInPage(res.text)) {
+        // stale cookie is an error and the rotation moves to another linked session. Stop
+        // there: /u/0 is the first signed-in account, so a visitor signed in to none has no
+        // /u/1 either, and loading it would only spend another ~870 KB page and the deadline.
+        if (signedInCheckEnabled() && !GeminiWebClient.isSignedInPage(res.text)) {
           firstError ??= new GeminiWebAccountError(
-            `Gemini Web session page ${page} was served to a signed-out visitor: the browser cookies are signed out or expired; link fresh ones`
+            `Gemini Web session page ${page} was served to a signed-out visitor: the browser cookies are signed out or expired; ${FRESH_COOKIES_HINT}`
           );
-          continue;
+          break;
         }
         const extracted = GeminiWebClient.extractSessionParameters(res.text, cookieHeader);
         const isFallback = authPath !== candidatePaths[0];
@@ -377,7 +398,7 @@ export class GeminiWebClient {
    * every request starts failing as "signed out" with fresh cookies, check this marker first.
    */
   public static isSignedInPage(html: string): boolean {
-    return /"WZsZ1e"\s*:\s*"[^"]+"/.test(html);
+    return SIGNED_IN_PATTERN.test(html);
   }
 
   /**

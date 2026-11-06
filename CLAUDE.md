@@ -543,10 +543,13 @@ id (`95a4c0abcba24364`, sent at RPC index 79), so the others run Gemini Web's de
   session page is HTTP 200 with an action token (`thykhd`; `SNlM0e` is gone from every page now), and the
   generate answers anonymously — verified 2026-11-06 with a deliberately invalid `__Secure-1PSID`, which
   got "OK" three times. So a stale cookie was a silent success on the wrong account (not Argon, not its
-  quota) and the rotation never moved. `GeminiWebClient.isSignedInPage()` now requires the `WZsZ1e`
-  marker, a non-empty string only a signed-in page carries; without it `ensureSession()` throws a
-  `GeminiWebAccountError` ("served to a signed-out visitor"), which rotates. It is Google's private page
-  data: if fresh cookies all start failing as signed out, check that marker before anything else.
+  quota) and the rotation never moved. `GeminiWebClient.isSignedInPage()` now requires the
+  `SIGNED_IN_MARKER` (`WZsZ1e`), a non-empty string only a signed-in page carries; without it
+  `ensureSession()` throws a `GeminiWebAccountError` ("served to a signed-out visitor"), which rotates,
+  and stops there instead of loading `/u/1`: a visitor signed in to nothing has no second account. It is
+  Google's private page data: if fresh cookies all start failing as signed out, check that marker first;
+  `GEMINI_WEB_SIGNED_IN_CHECK=0` turns the check off without a deploy. The suites build their session
+  pages from that constant (`test/gemini-web-fixtures.ts`), so a new marker is one edit.
 - **The pool fallback is opt-in** (`GEMINI_WEB_FALLBACK=1`), follows the failover switch, runs only when
   the pool ran out (`PoolFailures.ranOut()`: the last account answered 429, 503 or stalled — a 401, 404,
   500 or network error is the caller's to see), and never takes a request with tools or structured
