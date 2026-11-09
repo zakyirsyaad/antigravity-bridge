@@ -1,4 +1,4 @@
-import { SUPPORTED_MODELS, ModelDef } from "./constants";
+import { SUPPORTED_MODELS, ModelDef, getAntigravityHeaders } from "./constants";
 import { OAuthManager } from "./oauth";
 
 const FETCH_MODELS_ENDPOINTS = [
@@ -35,7 +35,8 @@ async function postJson(url: string, token: string, body: object): Promise<any> 
     headers: {
       Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
-      "User-Agent": "antigravity/1.18.3 Darwin/arm64",
+      // The same client version as every other request: Google gates on it.
+      "User-Agent": getAntigravityHeaders()["User-Agent"],
     },
     body: JSON.stringify(body),
   });

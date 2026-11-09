@@ -26,7 +26,25 @@ export const ANTIGRAVITY_ENDPOINTS = [
 ];
 
 export const DEFAULT_PROJECT_ID = "rising-fact-p41fc";
-export const ANTIGRAVITY_VERSION = "1.18.3";
+/**
+ * The Antigravity client version the bridge presents (User-Agent `antigravity/<version>`).
+ * Google gates on it: on 2026-11-09 every streamGenerateContent call from 1.18.3 (the value
+ * since the first release) was answered HTTP 200 with one canned sentence, "This version of
+ * Antigravity is no longer supported. Please download and install the latest version…",
+ * while generateContent still worked. ANTIGRAVITY_CLIENT_VERSION overrides it without a
+ * deploy; keep the default at the current desktop app's version.
+ */
+export const DEFAULT_ANTIGRAVITY_VERSION = "2.29.0";
+
+/**
+ * The version to present: ANTIGRAVITY_CLIENT_VERSION when it is a plain x.y.z (a leading
+ * "v" and surrounding spaces are dropped), else the default. Read per call, so it is the one
+ * place every request's User-Agent comes from.
+ */
+export function antigravityVersion(): string {
+  const configured = (process.env.ANTIGRAVITY_CLIENT_VERSION || "").trim().replace(/^v/i, "");
+  return /^\d+\.\d+\.\d+$/.test(configured) ? configured : DEFAULT_ANTIGRAVITY_VERSION;
+}
 export const SKIP_THOUGHT_SIGNATURE = "skip_thought_signature_validator";
 
 export const USER_HOME = os.homedir();
@@ -41,7 +59,7 @@ export function getAntigravityHeaders() {
   const metaPlatform = isWindows ? "WINDOWS" : "MACOS";
 
   return {
-    "User-Agent": `antigravity/${ANTIGRAVITY_VERSION} ${platform}`,
+    "User-Agent": `antigravity/${antigravityVersion()} ${platform}`,
     "X-Goog-Api-Client": "google-cloud-sdk vscode_cloudshelleditor/0.1",
     "Client-Metadata": JSON.stringify({
       ideType: "ANTIGRAVITY",

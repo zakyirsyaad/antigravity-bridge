@@ -26,6 +26,9 @@ import { QuotaTracker } from "../src/quota-tracker";
 import { UsageTracker } from "../src/usage-tracker";
 import { BridgeServer } from "../src/server";
 import { StreamEndTally } from "../src/stream-diagnostics";
+import { DEFAULT_ANTIGRAVITY_VERSION, antigravityVersion, getAntigravityHeaders } from "../src/constants";
+import fs from "node:fs";
+import path from "node:path";
 
 const TEST_PORT = 52146;
 
@@ -115,6 +118,45 @@ async function runTests() {
   const flat = new StreamEndTally();
   flat.observe({ candidates: [{ content: { parts: [part.text("x")] }, finishReason: "STOP" }] });
   expect("reads the unwrapped chunk shape too", flat.text, 1);
+
+  // Google refusing the presented client version: HTTP 200, this sentence as the answer.
+  const refusal =
+    "This version of Antigravity is no longer supported. Please download and install the latest version at https://antigravity.google/download to continue using the agent.";
+  for (const finish of [{}, { finishReason: "STOP" }]) {
+    const r = new StreamEndTally();
+    r.observe(chunk([part.text(refusal)], finish));
+    const line = r.describe("/v1/chat/completions", "m") || "";
+    const label = (finish as any).finishReason ? "with a clean STOP" : "with no finish reason";
+    expect(`a version refusal is named (${label})`, /cause=client-version-refused/.test(line), true);
+    expect(`and says which setting fixes it (${label})`, /ANTIGRAVITY_CLIENT_VERSION/.test(line), true);
+    expect(`without logging the text itself (${label})`, line.includes("Please download"), false);
+  }
+  const ordinary = new StreamEndTally();
+  ordinary.observe(chunk([part.text("Antigravity is a nice word")], { finishReason: "STOP" }));
+  expect("an ordinary answer is not taken for a refusal", ordinary.describe("/v1/messages", "m"), null);
+
+  // The version presented to Google, and that every request takes it from one place.
+  const saved = process.env.ANTIGRAVITY_CLIENT_VERSION;
+  const ua = () => getAntigravityHeaders()["User-Agent"];
+  delete process.env.ANTIGRAVITY_CLIENT_VERSION;
+  expect("the default is the current desktop app's version", ua().startsWith(`antigravity/${DEFAULT_ANTIGRAVITY_VERSION} `), true);
+  expect("and no longer the refused 1.18.3", String(DEFAULT_ANTIGRAVITY_VERSION) === "1.18.3", false);
+  process.env.ANTIGRAVITY_CLIENT_VERSION = "2.31.4";
+  expect("ANTIGRAVITY_CLIENT_VERSION overrides it", ua().startsWith("antigravity/2.31.4 "), true);
+  process.env.ANTIGRAVITY_CLIENT_VERSION = " v2.31.4 ";
+  expect("a leading v and spaces are dropped", antigravityVersion(), "2.31.4");
+  for (const bad of ["2.31", "latest", "2.31.4-beta; x"]) {
+    process.env.ANTIGRAVITY_CLIENT_VERSION = bad;
+    expect(`a malformed value (${JSON.stringify(bad)}) keeps the default`, antigravityVersion(), DEFAULT_ANTIGRAVITY_VERSION);
+  }
+  if (saved === undefined) delete process.env.ANTIGRAVITY_CLIENT_VERSION;
+  else process.env.ANTIGRAVITY_CLIENT_VERSION = saved;
+  const srcDir = path.join(__dirname, "..", "src");
+  const handWritten = fs
+    .readdirSync(srcDir)
+    .filter((f) => f.endsWith(".ts") && f !== "constants.ts")
+    .filter((f) => /["`']antigravity\/\d/.test(fs.readFileSync(path.join(srcDir, f), "utf8")));
+  expect("no module writes its own antigravity/<version> User-Agent", handWritten.join(",") || "none", "none");
 
   console.log("\n[2/6] A healthy stream leaves nothing behind, on both routes ...");
   for (const route of ["/v1/messages", "/v1/chat/completions"] as const) {

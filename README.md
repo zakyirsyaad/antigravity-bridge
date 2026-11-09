@@ -650,6 +650,7 @@ local install.
 | `BRIDGE_ANSWER_RESERVE_TOKENS` | `8192` | Output tokens held back from thinking for the visible answer |
 | `BRIDGE_TOOL_MIN_OUTPUT_TOKENS` | off | Raises a smaller output cap on requests that carry tools (see [Controlling reasoning](#controlling-reasoning)) |
 | `ANTIGRAVITY_CLIENT_ID` / `ANTIGRAVITY_CLIENT_SECRET` | Antigravity desktop app's | OAuth client used for login and token refresh |
+| `ANTIGRAVITY_CLIENT_VERSION` | the desktop app's version this release was tested against (`DEFAULT_ANTIGRAVITY_VERSION` in `src/constants.ts`) | The Antigravity version (`x.y.z`) the bridge presents to Google. If streamed replies turn into *"This version of Antigravity is no longer supported…"* (the log then says `cause=client-version-refused`), set it to the current desktop app's version. A malformed value is ignored |
 | `GEMINI_WEB_COOKIES` (or `GEMINI_PSID` / `GEMINI_PSIDTS`) | *(none)* | gemini.google.com session cookies, for the Gemini Web models (`gemini-argon-4`, `gemini-auto`, `gemini-advanced`). Cookies linked to an account in the dashboard work too, and take precedence |
 | `GEMINI_AUTH_USER` | default account | Which signed-in Google account (`/u/N`) the cookies use. When set, only that account is used; when unset, the default account is tried, then the second |
 | `GEMINI_WEB_SIGNED_IN_CHECK` | on | `0` stops refusing session pages that were not served to a signed-in account. Only for when Google changes its page and fresh cookies all fail as signed out: off, a stale cookie is answered anonymously again |
