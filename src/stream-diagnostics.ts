@@ -11,8 +11,15 @@
  * counts and Google's own words — never the text the model produced.
  */
 
+import { antigravityVersion } from "./constants";
+
 /** The one finish reason that means the model finished of its own accord. */
 const CLEAN_FINISH = "STOP";
+/**
+ * How Google refuses the client version the bridge presents: HTTP 200 and this sentence as
+ * the "answer" (seen 2026-11-09 on every stream from antigravity/1.18.3). Matched, never logged.
+ */
+const CLIENT_VERSION_REFUSAL = "This version of Antigravity is no longer supported";
 /** Google's own explanation can be long; a prefix names the problem. */
 const MAX_FINISH_MESSAGE = 300;
 
@@ -69,6 +76,8 @@ export class StreamEndTally {
   finishReason: string | null = null;
   finishMessage: string | null = null;
   blockReason: string | null = null;
+  /** Google's refusal of the presented client version came back as the text. */
+  clientVersionRefused = false;
   private usage: any = null;
 
   /** Feed every chunk of the upstream stream, in order. Handles both chunk shapes. */
@@ -85,7 +94,10 @@ export class StreamEndTally {
 
     for (const part of candidate?.content?.parts || []) {
       if (part.thought) this.thinking++;
-      else if (part.text) this.text++;
+      else if (part.text) {
+        this.text++;
+        if (part.text.includes(CLIENT_VERSION_REFUSAL)) this.clientVersionRefused = true;
+      }
       else if (part.functionCall) this.tools++;
     }
   }
@@ -98,7 +110,7 @@ export class StreamEndTally {
   describe(route: string, model: string, sent?: SentGenerationConfig): string | null {
     const usable = this.text > 0 || this.tools > 0;
     const clean = this.finishReason === CLEAN_FINISH && !this.blockReason;
-    if (clean && usable) return null;
+    if (clean && usable && !this.clientVersionRefused) return null;
 
     const figure = (n: unknown) => (typeof n === "number" ? String(n) : "?");
     const fields = [
@@ -112,6 +124,10 @@ export class StreamEndTally {
       `maxOut=${figure(sent?.maxOutputTokens)} think=${figure(sent?.thinkingConfig?.thinking_budget)}`,
       ...(this.finishMessage
         ? [`finishMessage=${JSON.stringify(this.finishMessage.slice(0, MAX_FINISH_MESSAGE))}`]
+        : []),
+      // The reply the client got was Google refusing the bridge's version, not the model.
+      ...(this.clientVersionRefused
+        ? [`cause=client-version-refused (presented antigravity/${antigravityVersion()}; set ANTIGRAVITY_CLIENT_VERSION to the current Antigravity desktop app's version)`]
         : []),
     ];
     return fields.join(" ");

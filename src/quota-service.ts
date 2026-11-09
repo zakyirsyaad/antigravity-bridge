@@ -1,4 +1,5 @@
 import { AccountToken } from "./oauth";
+import { getAntigravityHeaders } from "./constants";
 
 const LOAD_PROJECT_ENDPOINT =
   "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist";
@@ -44,7 +45,8 @@ async function postJson<T>(url: string, token: string, body: object): Promise<T>
     headers: {
       Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
-      "User-Agent": "antigravity/1.18.3 Darwin/arm64",
+      // The same client version as every other request: Google gates on it.
+      "User-Agent": getAntigravityHeaders()["User-Agent"],
     },
     body: JSON.stringify(body),
   });
