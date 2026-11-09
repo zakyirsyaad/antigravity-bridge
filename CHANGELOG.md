@@ -1,5 +1,24 @@
 # Changelog
 
+## 2.7.1
+
+### Fixed: every streamed reply was "This version of Antigravity is no longer supported"
+
+Since 2026-11-09 Google answers every streamed request from the client version the bridge presented,
+`antigravity/1.18.3` (unchanged since the first release), with HTTP 200 and one canned sentence: "This
+version of Antigravity is no longer supported. Please download and install the latest version…".
+Claude Code, chat bots and every other streaming client showed it as the model's reply. Non-streamed
+requests still answered. **Update and restart the bridge** to get answers back.
+
+- The bridge now presents `antigravity/2.29.0`, the current desktop app's version.
+- `ANTIGRAVITY_CLIENT_VERSION` overrides it without an update, for the next time Google raises the
+  bar: set it to the version of the Antigravity desktop app (a plain `x.y.z`; anything else is
+  ignored) and restart.
+- When it happens again, the log says so: the `[Stream End]` line ends with
+  `cause=client-version-refused` and the version that was presented.
+- The quota bars and `npm run bridge:models` now present the same version as chat requests; they
+  had their own `antigravity/1.18.3`.
+
 ## 2.7.0
 
 The first GitHub release since v2.5.0: 2.6.0 to 2.6.4 were never tagged, so `npm run bridge:status`
