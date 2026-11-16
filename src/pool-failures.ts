@@ -8,7 +8,7 @@ import type { FailoverReason } from "./oauth";
  * caller's.
  */
 export type FailureKind =
-  | "quota" // 429: the caller keeps the rate-limited wording
+  | "quota" // 429: a written cooldown keeps the rate-limited wording; reset-less says per-minute
   | "capacity" // 503 "No capacity available for model X on the server"
   | "unavailable" // any other 503
   | "stall" // Google accepted the request and never answered
@@ -99,7 +99,8 @@ function classify(outcome: AttemptOutcome): FailureKind {
  * Please wait for cooldown to reset." whatever happened: gemini-2.5-pro answered
  * 503 "no capacity" on all six accounts and that is what the caller saw, which sent
  * people to the quota file for a cooldown no 503 ever writes. The wording now
- * follows the failure that ended the run; a run that ends on a 429 keeps the old one.
+ * follows the failure that ended the run; a run that ends on a 429 that wrote a
+ * cooldown keeps the old one, while a reset-less 429 says per-minute instead.
  *
  * A stall reached the same message: Google accepted the request and never answered,
  * which writes no quota cooldown, and the pool rotated back to an account that had
