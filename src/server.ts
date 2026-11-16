@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 import { BRIDGE_DEFAULT_PORT, SUPPORTED_MODELS } from "./constants";
 import { OAuthManager, toPublicAccountSummary, type AccountToken } from "./oauth";
 import { AntigravityClient, UpstreamError } from "./antigravity-client";
-import { PoolExhaustedError } from "./pool-failures";
+import { PoolExhaustedError, TRANSIENT_RATE_RETRY_SECONDS } from "./pool-failures";
 import { Transformer, UnknownModelError } from "./transformer";
 import { UsageTracker, UsageReport } from "./usage-tracker";
 import { StreamEndTally } from "./stream-diagnostics";
@@ -64,6 +64,20 @@ function sendUpstreamUnavailable(res: http.ServerResponse, route: string, err: U
   console.warn(`[Bridge] ${route}: ${String(err.message).slice(0, 400)}`);
   res.writeHead(503, { "Content-Type": "application/json" });
   res.end(JSON.stringify({ type: "error", error: { type, message: err.message } }));
+}
+
+/** A pool exhausted on per-minute 429s: a real 429 with a retry hint, not a cooldown promise. */
+function isUpstreamRateLimited(err: unknown): err is PoolExhaustedError {
+  return err instanceof PoolExhaustedError && err.status === 429 && err.retryAfterSeconds !== undefined;
+}
+
+export function sendUpstreamRateLimited(res: http.ServerResponse, route: string, err: PoolExhaustedError): void {
+  console.warn(`[Bridge] ${route}: ${String(err.message).slice(0, 400)}`);
+  res.writeHead(429, {
+    "Content-Type": "application/json",
+    "Retry-After": String(err.retryAfterSeconds ?? TRANSIENT_RATE_RETRY_SECONDS),
+  });
+  res.end(JSON.stringify({ type: "error", error: { type: "rate_limit_error", message: err.message } }));
 }
 
 export class BridgeServer {
@@ -673,6 +687,10 @@ export class BridgeServer {
             sendUpstreamUnavailable(res, pathname, err);
             return;
           }
+          if (isUpstreamRateLimited(err) && !res.headersSent) {
+            sendUpstreamRateLimited(res, pathname, err);
+            return;
+          }
           console.error(`[Bridge Error] ${pathname}:`, err);
           if (!res.headersSent) {
             res.writeHead(500, { "Content-Type": "application/json" });
@@ -1012,6 +1030,10 @@ export class BridgeServer {
           sendUpstreamUnavailable(res, "/v1/messages", streamErr);
           return;
         }
+        if (!res.headersSent && isUpstreamRateLimited(streamErr)) {
+          sendUpstreamRateLimited(res, "/v1/messages", streamErr);
+          return;
+        }
         console.error("[Stream Error]", streamErr);
         if (res.headersSent) {
           res.write(`event: error\ndata: ${JSON.stringify({ type: "error", error: { message: streamErr.message } })}\n\n`);
@@ -1185,6 +1207,10 @@ export class BridgeServer {
         // otherwise saw a success carrying an error.
         if (isUpstreamUnavailable(err)) {
           sendUpstreamUnavailable(res, "/v1/chat/completions", err);
+          return;
+        }
+        if (!res.headersSent && isUpstreamRateLimited(err)) {
+          sendUpstreamRateLimited(res, "/v1/chat/completions", err);
           return;
         }
         // Any other failure keeps the behaviour it has always had: a 200 that

@@ -218,8 +218,10 @@ async function runTests() {
     if (answer && endsAfterFirstAsk.has(email)) limited.delete(email);
     return answer;
   };
-  (QuotaTracker.prototype as any).record429 = (_email: string, _message: string, model?: string) =>
+  (QuotaTracker.prototype as any).record429 = (_email: string, _message: string, model?: string) => {
     wantModel("record429", model);
+    return true;
+  };
   let calls = 0;
   (globalThis as any).fetch = async (url: string, init: any) => {
     streaming = String(url).includes("streamGenerateContent");

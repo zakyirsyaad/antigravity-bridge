@@ -227,6 +227,8 @@ export class AntigravityClient {
       let hit429 = false;
       let hit503 = false;
       let message503 = "";
+      let message429 = "";
+      let cooldownRecorded = false;
       let stalled = false;
       let stallAttempts = 1;
       // Whether this pool has anywhere to go if Google stops answering. When it
@@ -259,8 +261,10 @@ export class AntigravityClient {
 
             if (res.status === 429) {
               hit429 = true;
+              message429 = message;
               if (currentAccount?.email) {
-                QuotaTracker.getInstance().record429(currentAccount.email, message, payload.model);
+                cooldownRecorded =
+                  QuotaTracker.getInstance().record429(currentAccount.email, message, payload.model) || cooldownRecorded;
               }
             } else if (res.status === 503) {
               // "No capacity available for model X on the server" is per project,
@@ -297,7 +301,15 @@ export class AntigravityClient {
         }
       }
 
-      failures.record(currentAccount?.email, { hit429, hit503, message503, stalled, stallAttempts });
+      failures.record(currentAccount?.email, {
+        hit429,
+        hit503,
+        message503,
+        message429,
+        cooldownRecorded,
+        stalled,
+        stallAttempts,
+      });
 
       // Google stopped answering: leave this account for another one, a bounded
       // number of times, rather than spend the request waiting inside the burst.
@@ -369,6 +381,8 @@ export class AntigravityClient {
       let hit429 = false;
       let hit503 = false;
       let message503 = "";
+      let message429 = "";
+      let cooldownRecorded = false;
       let stalled = false;
       let stallAttempts = 1;
       // Whether this pool has anywhere to go if Google stops answering. When it
@@ -402,8 +416,10 @@ export class AntigravityClient {
 
             if (res.status === 429) {
               hit429 = true;
+              message429 = message;
               if (currentAccount?.email) {
-                QuotaTracker.getInstance().record429(currentAccount.email, message, payload.model);
+                cooldownRecorded =
+                  QuotaTracker.getInstance().record429(currentAccount.email, message, payload.model) || cooldownRecorded;
               }
             } else if (res.status === 503) {
               // "No capacity available for model X on the server" is per project,
@@ -443,7 +459,15 @@ export class AntigravityClient {
         }
       }
 
-      failures.record(currentAccount?.email, { hit429, hit503, message503, stalled, stallAttempts });
+      failures.record(currentAccount?.email, {
+        hit429,
+        hit503,
+        message503,
+        message429,
+        cooldownRecorded,
+        stalled,
+        stallAttempts,
+      });
 
       if (stalled && poolRotates && stallRotations < MAX_STALL_ROTATIONS) {
         if (this.restAndRotate(currentAccount?.email, payload.model)) {
