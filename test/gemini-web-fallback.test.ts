@@ -16,6 +16,7 @@ import { GeminiWebClient, GEMINI_WEB_FALLBACK_USAGE_ID, webRequest, webTimeoutMs
 import { parseToolBridgeOutput } from "../src/tool-bridge";
 import { Transformer } from "../src/transformer";
 import { AntigravityClient } from "../src/antigravity-client";
+import { RateLimitRests } from "../src/rate-limit-rest";
 import { OAuthManager } from "../src/oauth";
 import { SIGNED_IN_PAGE } from "./gemini-web-fixtures";
 
@@ -327,17 +328,21 @@ async function runTests() {
   expect("the pool's own error (429) reaches the caller", offErr?.status === 429, true);
 
   process.env.GEMINI_WEB_FALLBACK = "1";
+  RateLimitRests.clear();
   const res = await antigravity.generateContent(plain);
   expect("falls back to Gemini Web when opted in", res.candidates[0].content.parts[0].text, "Fallback response from Gemini Web");
   expect("a fallback answer is marked for its usage", res.servedBy, GEMINI_WEB_FALLBACK_USAGE_ID);
 
+  RateLimitRests.clear();
   const toolsErr = await errorOf(() => antigravity.generateContent(withTools));
   expect("a request with tools is never answered by the fallback", toolsErr?.status === 429, true);
+  RateLimitRests.clear();
   const jsonMode = { model: plain.model, request: { ...plain.request, generationConfig: { responseMimeType: "application/json" } } };
   const jsonErr = await errorOf(() => antigravity.generateContent(jsonMode));
   expect("nor one that asks for structured output", jsonErr?.status === 429, true);
 
   // Only a pool that ran out falls back: one account's 404 is the caller's to see.
+  RateLimitRests.clear();
   const realFetch = (antigravity as any).fetchWithRetry;
   (antigravity as any).fetchWithRetry = async () => ({
     status: 404,
@@ -352,11 +357,13 @@ async function runTests() {
   expect("Gemini Web was not asked", webCalls, callsBefore);
   (antigravity as any).fetchWithRetry = realFetch;
 
+  RateLimitRests.clear();
   (oauth as any).isAutoFailoverEnabled = () => false;
   const failoverOffErr = await errorOf(() => antigravity.generateContent(plain));
   expect("failover off means no fallback", Boolean(failoverOffErr), true);
   (oauth as any).isAutoFailoverEnabled = () => true;
 
+  RateLimitRests.clear();
   const okGenerate = (client as any).generateContent;
   (client as any).generateContent = async () => {
     throw new Error("Gemini Web generation failed with HTTP 401: expired");
@@ -366,6 +373,7 @@ async function runTests() {
   (client as any).generateContent = okGenerate;
 
   // Cookies linked in the dashboard are enough; no Gemini Web model request needed first.
+  RateLimitRests.clear();
   (client as any).credentials = null;
   const linkedAccount = { email: "linked@example.com", webCookies: "__Secure-1PSID=linked" };
   (oauth as any).findAccountWithWebCookies = () => linkedAccount;

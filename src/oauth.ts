@@ -16,6 +16,7 @@ import {
 } from "./constants";
 import { QuotaTracker } from "./quota-tracker";
 import { StallRegistry } from "./upstream-stall";
+import { RateLimitRests } from "./rate-limit-rest";
 
 export interface PoolEvent {
   id: string;
@@ -596,7 +597,9 @@ export class OAuthManager {
       // An account resting after a stall is skipped too, but it is not "limited":
       // it is not out of quota, and nothing about it is written to the quota file.
       const isLimited = candidate.email
-        ? tracker.isAccountRateLimited(candidate.email, model) || StallRegistry.isResting(candidate.email)
+        ? tracker.isAccountRateLimited(candidate.email, model) ||
+          StallRegistry.isResting(candidate.email) ||
+          RateLimitRests.isResting(candidate.email)
         : false;
       if (!isLimited) {
         storage.activeAccountIndex = candidateIdx;
@@ -652,9 +655,11 @@ export class OAuthManager {
       const email = acc.email || `Account #${idx + 1}`;
       const isActive = idx === activeIndex;
       const cooldown = tracker.getAccountCooldownRemaining(email);
-      // A stall rest is skipped by failover just like a cooldown, but it is not
-      // quota, so it is its own status rather than another kind of "cooling".
-      const restEnd = StallRegistry.restEndsAt(acc.email, now);
+      // A stall rest or a per-minute rate rest is skipped by failover just like a
+      // cooldown, but neither is quota, so they share their own "resting" status.
+      const stallEnd = StallRegistry.restEndsAt(acc.email, now);
+      const rateEnd = RateLimitRests.restEndsAt(acc.email, now);
+      const restEnd = stallEnd === null ? rateEnd : rateEnd === null ? stallEnd : Math.max(stallEnd, rateEnd);
       const resting: RestingWindow | null =
         restEnd === null ? null : { remainingMs: restEnd - now, resetsAt: new Date(restEnd).toISOString() };
 

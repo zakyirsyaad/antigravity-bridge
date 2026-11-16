@@ -188,6 +188,11 @@ export class PoolFailures {
     }
   }
 
+  /** The accounts this run tried, once each, for resting after a transient exhaustion. */
+  triedAccounts(): string[] {
+    return [...this.tried];
+  }
+
   /** "all 6 accounts tried", "both accounts tried", "2 of 3 accounts tried". */
   private describe(kind: FailureKind): string {
     const hits = this.byKind.get(kind)?.size ?? 0;
