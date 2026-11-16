@@ -22,9 +22,16 @@ export interface AttemptOutcome {
   stalled: boolean;
   /** For a stall, how many attempts waited out the full timeout (1 when unset). */
   stallAttempts?: number;
+  /** Whether the 429 wrote a quota cooldown (its message carried a parseable reset). */
+  cooldownRecorded?: boolean;
+  /** Google's own message for the 429, when there was one. */
+  message429?: string;
 }
 
 const NO_CAPACITY = /no capacity/i;
+
+/** A per-minute 429 clears within a minute; there is no cooldown to wait out. */
+export const TRANSIENT_RATE_RETRY_SECONDS = 60;
 
 /**
  * The failover event's name for each way an attempt can end; `null` is one the pool does not move
@@ -50,11 +57,14 @@ export function rotationReason(hit429: boolean, message503: string): FailoverRea
  */
 export class PoolExhaustedError extends UpstreamError {
   public readonly kind: FailureKind;
+  /** Seconds the client should wait before retrying; set only for a per-minute 429. */
+  public readonly retryAfterSeconds?: number;
 
-  constructor(kind: FailureKind, status: number, message: string) {
+  constructor(kind: FailureKind, status: number, message: string, retryAfterSeconds?: number) {
     super(status, message);
     this.name = "PoolExhaustedError";
     this.kind = kind;
+    this.retryAfterSeconds = retryAfterSeconds;
   }
 }
 
@@ -101,6 +111,8 @@ function classify(outcome: AttemptOutcome): FailureKind {
 export class PoolFailures {
   private readonly tried = new Set<string>();
   private readonly byKind = new Map<FailureKind, Set<string>>();
+  private cooldownWritten = false;
+  private lastMessage429 = "";
   private last: { kind: FailureKind; message503: string; stallAttempts: number } | null = null;
 
   record(email: string | undefined, outcome: AttemptOutcome): void {
@@ -108,6 +120,8 @@ export class PoolFailures {
     const kind = classify(outcome);
     this.tried.add(account);
     this.byKind.set(kind, new Set(this.byKind.get(kind)).add(account));
+    if (outcome.cooldownRecorded) this.cooldownWritten = true;
+    if (outcome.message429) this.lastMessage429 = outcome.message429;
     this.last = { kind, message503: outcome.message503, stallAttempts: outcome.stallAttempts ?? 1 };
   }
 
@@ -154,6 +168,20 @@ export class PoolFailures {
             `cooldown, and there is no cooldown to wait out. Retry in a few minutes.`
         );
       }
+      case "quota":
+        // A 429 whose message carried no reset wrote no cooldown: the limit is
+        // per-minute, so telling the caller to wait for a cooldown reset sends
+        // them to a file that will never change.
+        if (this.cooldownWritten) return null;
+        return new PoolExhaustedError(
+          "quota",
+          429,
+          `Google answered HTTP 429 (per-minute rate limit) for model ${model}: ${this.describe("quota")}. ` +
+            `No quota cooldown was recorded — this limit resets within a minute, not hours. Wait about ` +
+            `${TRANSIENT_RATE_RETRY_SECONDS}s before retrying, or send a smaller request.` +
+            (this.lastMessage429 ? ` (Google: ${this.lastMessage429})` : ""),
+          TRANSIENT_RATE_RETRY_SECONDS,
+        );
       default:
         return null;
     }

@@ -106,6 +106,7 @@ const originalSelect = (OAuthManager.prototype as any).selectNextAvailableAccoun
 (QuotaTracker.prototype as any).isAccountRateLimited = () => false;
 (QuotaTracker.prototype as any).record429 = () => {
   cooldownsRecorded++;
+  return true;
 };
 
 (globalThis as any).fetch = async (_url: string, init: any) => {

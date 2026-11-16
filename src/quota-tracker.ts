@@ -103,10 +103,12 @@ export class QuotaTracker {
    * Call this whenever a 429 error is received.
    * @param email  The Google account email
    * @param errorMessage  The error message string from the 429 response
+   * @returns true when a cooldown window was written; false when the message
+   * carried no parseable reset — a per-minute limit, not a quota window.
    */
-  public record429(email: string, errorMessage: string, model?: string) {
+  public record429(email: string, errorMessage: string, model?: string): boolean {
     const resetsAtMs = parseResetDuration(errorMessage);
-    if (!resetsAtMs) return; // can't parse, skip
+    if (!resetsAtMs) return false; // can't parse, skip
 
     const windowType = detectWindowType(errorMessage, resetsAtMs);
     const now = new Date().toISOString();
@@ -148,6 +150,7 @@ export class QuotaTracker {
     state.perAccount[email].lastUpdated = now;
 
     this.save(state);
+    return true;
   }
 
   /**

@@ -57,6 +57,7 @@ let respond: (account: any) => Response = () => new Response("{}", { status: 200
 (QuotaTracker.prototype as any).isAccountRateLimited = () => false;
 (QuotaTracker.prototype as any).record429 = () => {
   cooldownsRecorded++;
+  return true;
 };
 
 (globalThis as any).fetch = async () => {
