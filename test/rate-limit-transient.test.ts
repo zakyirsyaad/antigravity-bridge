@@ -19,7 +19,7 @@ import { AntigravityClient, UpstreamError } from "../src/antigravity-client";
 import { OAuthManager } from "../src/oauth";
 import { QuotaTracker } from "../src/quota-tracker";
 import { PoolExhaustedError } from "../src/pool-failures";
-import { sendUpstreamRateLimited } from "../src/server";
+import { BridgeServer, sendUpstreamRateLimited } from "../src/server";
 
 const A = { email: "a@example.com", projectId: "p", refreshToken: "r" };
 const B = { email: "b@example.com", projectId: "p", refreshToken: "r" };
@@ -44,6 +44,9 @@ let respond: (account: any) => Response = () => new Response("{}", { status: 200
 // record429 stays real; only its disk is stubbed, so the message parse decides.
 (QuotaTracker.prototype as any).load = () => ({ perAccount: {} });
 (QuotaTracker.prototype as any).save = () => {};
+
+// The suite's own HTTP calls to the bridge must bypass the upstream fetch stub.
+const realFetch = globalThis.fetch;
 
 (globalThis as any).fetch = async () => {
   attempts.push(current.email);
@@ -113,36 +116,36 @@ async function runTests() {
 
   const client = new AntigravityClient();
 
-  console.log("[1/7] A pool exhausted on reset-less 429s says per-minute, not cooldown ...");
+  console.log("[1/9] A pool exhausted on reset-less 429s says per-minute, not cooldown ...");
   reset(() => fail(429, TRANSIENT));
   let err = await caught(() => client.generateContent(payload as any));
   expectTransientError("generateContent", err);
   expect("every account was tried", attempts.length, 3);
 
-  console.log("\n[2/7] ... on the streaming path too ...");
+  console.log("\n[2/9] ... on the streaming path too ...");
   reset(() => fail(429, TRANSIENT));
   err = await caught(() => client.streamGenerateContent(payload as any));
   expectTransientError("streamGenerateContent", err);
 
-  console.log("\n[3/7] A 429 that wrote a cooldown keeps the quota wording ...");
+  console.log("\n[3/9] A 429 that wrote a cooldown keeps the quota wording ...");
   reset(() => fail(429, QUOTA));
   err = await caught(() => client.generateContent(payload as any));
   expect("wording unchanged", err?.message, RATE_LIMITED);
   expect("no 429 status invented", err?.status, undefined);
   expect("no retry-after invented", err?.retryAfterSeconds, undefined);
 
-  console.log("\n[4/7] ... even when a later account's 429 carried no reset ...");
+  console.log("\n[4/9] ... even when a later account's 429 carried no reset ...");
   reset((acct) => (acct === A ? fail(429, QUOTA) : fail(429, TRANSIENT)));
   err = await caught(() => client.generateContent(payload as any));
   expect("one real cooldown keeps the quota wording", err?.message, RATE_LIMITED);
   expect("no retry-after when a cooldown exists", err?.retryAfterSeconds, undefined);
 
-  console.log("\n[5/7] record429 reports whether it wrote a window ...");
+  console.log("\n[5/9] record429 reports whether it wrote a window ...");
   const tracker = QuotaTracker.getInstance();
   expect("reset-less message writes nothing", tracker.record429(A.email, TRANSIENT, payload.model), false);
   expect("reset-bearing message writes a window", tracker.record429(A.email, QUOTA, payload.model), true);
 
-  console.log("\n[6/7] The server answers a real 429 with Retry-After ...");
+  console.log("\n[6/9] The server answers a real 429 with Retry-After ...");
   expect("helper is exported", typeof sendUpstreamRateLimited, "function");
   if (typeof sendUpstreamRateLimited === "function") {
     const captured: any = { headers: null, body: "" };
@@ -165,13 +168,47 @@ async function runTests() {
     expect("message reaches the client", JSON.parse(captured.body)?.error?.message, err.message);
   }
 
-  console.log("\n[7/7] A capacity exhaustion carries no retry-after ...");
+  console.log("\n[7/9] A capacity exhaustion carries no retry-after ...");
   reset(() => fail(503, "No capacity available for model gemini-3.8-flash-tiered on the server"));
   err = await caught(() => client.generateContent(payload as any));
   expect("capacity kind", err?.kind, "capacity");
   expect("capacity has no retry-after", err?.retryAfterSeconds, undefined);
   expect("capacity stays 503", err?.status, 503);
   expect("is an UpstreamError", err instanceof UpstreamError, true);
+
+  console.log("\n[8/9] The wire answers a real 429 with Retry-After on OpenAI routes ...");
+  reset(() => fail(429, TRANSIENT));
+  const server = new BridgeServer(52143);
+  await server.start();
+  try {
+    const res = await realFetch("http://127.0.0.1:52143/v1/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: payload.model, messages: [{ role: "user", content: "hi" }] }),
+    });
+    expect("openai non-stream status", res.status, 429);
+    expect("openai Retry-After", res.headers.get("retry-after"), "60");
+    const body: any = await res.json();
+    expect("openai error type", body?.error?.type, "rate_limit_error");
+
+    console.log("\n[9/9] ... and on Anthropic streams ...");
+    reset(() => fail(429, TRANSIENT));
+    const ares = await realFetch("http://127.0.0.1:52143/v1/messages", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: payload.model,
+        max_tokens: 64,
+        stream: true,
+        messages: [{ role: "user", content: "hi" }],
+      }),
+    });
+    expect("anthropic stream status", ares.status, 429);
+    expect("anthropic Retry-After", ares.headers.get("retry-after"), "60");
+    await ares.text();
+  } finally {
+    await server.stop();
+  }
 
   if (failures > 0) {
     throw new Error(`${failures} transient rate-limit check(s) failed`);

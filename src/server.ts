@@ -1209,7 +1209,7 @@ export class BridgeServer {
           sendUpstreamUnavailable(res, "/v1/chat/completions", err);
           return;
         }
-        if (isUpstreamRateLimited(err)) {
+        if (!res.headersSent && isUpstreamRateLimited(err)) {
           sendUpstreamRateLimited(res, "/v1/chat/completions", err);
           return;
         }
