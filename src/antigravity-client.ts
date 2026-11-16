@@ -154,43 +154,55 @@ export class AntigravityClient {
    * family or resting after a stall. The quota file is read once: the answer that decides the move
    * is also the reason it gives. When both hold, the family's own cooldown is the more specific
    * reason (a rest covers every family).
+   *
+   * Returns the seconds a per-minute rest still blocks this request when every account rests and
+   * none is free to move to; null otherwise. A blocked request skips upstream attempts but still
+   * gets the opt-in Gemini Web fallback: a different provider, outside this per-minute limit.
    */
-  private skipUnavailableActive(model: string): void {
+  private skipUnavailableActive(model: string): number | null {
     const account = this.oauth.loadSavedAccount();
-    if (!account?.email) return;
+    if (!account?.email) return null;
     // A per-minute rest covers the whole pool that just burned: with nowhere free
-    // to move, fail fast rather than spend another attempt per account in the same minute.
+    // to move, block upstream attempts rather than spend another one per account.
     const rateRestEnd = RateLimitRests.restEndsAt(account.email);
     if (rateRestEnd !== null) {
       const nextAcc = this.oauth.isAutoFailoverEnabled()
         ? this.oauth.selectNextAvailableAccount(account.email, model, "resting")
         : null;
-      if (!nextAcc) {
-        const retry = Math.max(1, Math.ceil((rateRestEnd - Date.now()) / 1000));
-        throw new PoolExhaustedError(
-          "quota",
-          429,
-          `All pooled accounts are resting after a per-minute 429 for model ${model}; the limit clears ` +
-            `within a minute. Retry after ${retry}s, or send a smaller request.`,
-          retry,
+      if (nextAcc) {
+        console.log(
+          `[AutoPool] Active account ${account.email} is resting after a per-minute 429. Switched to ${nextAcc.email}`
         );
+        return null;
       }
-      console.log(
-        `[AutoPool] Active account ${account.email} is resting after a per-minute 429. Switched to ${nextAcc.email}`
-      );
-      return;
+      return Math.max(1, Math.ceil((rateRestEnd - Date.now()) / 1000));
     }
-    if (!this.oauth.isAutoFailoverEnabled()) return;
+    if (!this.oauth.isAutoFailoverEnabled()) return null;
     const why = QuotaTracker.getInstance().isAccountRateLimited(account.email, model)
       ? "cooling_down"
       : StallRegistry.isResting(account.email)
         ? "resting"
         : null;
-    if (!why) return;
+    if (!why) return null;
     const nextAcc = this.oauth.selectNextAvailableAccount(account.email, model, why);
-    if (!nextAcc) return;
+    if (!nextAcc) return null;
     console.log(
       `[AutoPool] Active account ${account.email} is ${why === "resting" ? "resting after a stall" : "cooling down"}. Switched to ${nextAcc.email}`
+    );
+    return null;
+  }
+
+  /** The fail-fast error for a request whose whole pool is resting after a per-minute 429. */
+  private rateRestError(model: string, retrySeconds: number): PoolExhaustedError {
+    console.warn(
+      `[AutoPool] Every pooled account is resting after a per-minute 429 for ${model}; failing fast for ${retrySeconds}s.`
+    );
+    return new PoolExhaustedError(
+      "quota",
+      429,
+      `All pooled accounts are resting after a per-minute 429 for model ${model}; the limit clears ` +
+        `within a minute. Retry after ${retrySeconds}s, or send a smaller request.`,
+      retrySeconds,
     );
   }
 
@@ -242,13 +254,14 @@ export class AntigravityClient {
     let stallRotations = 0;
     // Why each account failed, so the pool running out can say which it was.
     const failures = new PoolFailures();
+    let rateBlocked: number | null = null;
 
     while (attempts < totalAccounts) {
       attempts++;
 
       // Proactive check: if current account is in cooldown, or resting after a
       // stall, switch proactively
-      this.skipUnavailableActive(payload.model);
+      rateBlocked = this.skipUnavailableActive(payload.model);
 
       const accessToken = await this.oauth.getValidAccessToken();
       const currentAccount = this.oauth.loadSavedAccount();
@@ -273,7 +286,7 @@ export class AntigravityClient {
       // all there is.
       const poolRotates = this.oauth.isAutoFailoverEnabled() && totalAccounts > 1;
 
-      for (const endpoint of ANTIGRAVITY_ENDPOINTS) {
+      for (const endpoint of rateBlocked === null ? ANTIGRAVITY_ENDPOINTS : []) {
         const url = `${endpoint}/v1internal:generateContent`;
         try {
           const res = await this.fetchWithRetry(url, {
@@ -373,14 +386,16 @@ export class AntigravityClient {
 
       // Only a pool that ran out falls back. Any other failure (401, 404, 500, the
       // network) is the caller's to see, and used to be answered by Gemini Web instead.
-      const webFallback = failures.ranOut() ? await this.tryGeminiWebFallback(payload) : null;
+      const webFallback = failures.ranOut() || rateBlocked !== null ? await this.tryGeminiWebFallback(payload) : null;
       if (webFallback) return webFallback;
+      if (rateBlocked !== null) throw this.rateRestError(payload.model, rateBlocked);
 
       throw this.exhaustedWithRest(failures, payload.model) ?? lastError ?? new Error("All Antigravity endpoints failed.");
     }
 
-    const webFallback = failures.ranOut() ? await this.tryGeminiWebFallback(payload) : null;
+    const webFallback = failures.ranOut() || rateBlocked !== null ? await this.tryGeminiWebFallback(payload) : null;
     if (webFallback) return webFallback;
+    if (rateBlocked !== null) throw this.rateRestError(payload.model, rateBlocked);
 
     throw this.exhaustedWithRest(failures, payload.model) ?? new Error(POOL_RATE_LIMITED);
   }
@@ -396,13 +411,14 @@ export class AntigravityClient {
     let stallRotations = 0;
     // Why each account failed, so the pool running out can say which it was.
     const failures = new PoolFailures();
+    let rateBlocked: number | null = null;
 
     while (attempts < totalAccounts) {
       attempts++;
 
       // Proactive check: if current account is in cooldown, or resting after a
       // stall, switch proactively
-      this.skipUnavailableActive(payload.model);
+      rateBlocked = this.skipUnavailableActive(payload.model);
 
       const accessToken = await this.oauth.getValidAccessToken();
       const currentAccount = this.oauth.loadSavedAccount();
@@ -427,7 +443,7 @@ export class AntigravityClient {
       // all there is.
       const poolRotates = this.oauth.isAutoFailoverEnabled() && totalAccounts > 1;
 
-      for (const endpoint of ANTIGRAVITY_ENDPOINTS) {
+      for (const endpoint of rateBlocked === null ? ANTIGRAVITY_ENDPOINTS : []) {
         const url = `${endpoint}/v1internal:streamGenerateContent?alt=sse`;
         try {
           const res = await this.fetchWithRetry(url, {
@@ -526,14 +542,16 @@ export class AntigravityClient {
         }
       }
 
-      const webFallback = failures.ranOut() ? await this.tryGeminiWebFallback(payload) : null;
+      const webFallback = failures.ranOut() || rateBlocked !== null ? await this.tryGeminiWebFallback(payload) : null;
       if (webFallback) return singleChunkStream(webFallback);
+      if (rateBlocked !== null) throw this.rateRestError(payload.model, rateBlocked);
 
       throw this.exhaustedWithRest(failures, payload.model) ?? lastError ?? new Error("All Antigravity streaming endpoints failed.");
     }
 
-    const webFallback = failures.ranOut() ? await this.tryGeminiWebFallback(payload) : null;
+    const webFallback = failures.ranOut() || rateBlocked !== null ? await this.tryGeminiWebFallback(payload) : null;
     if (webFallback) return singleChunkStream(webFallback);
+    if (rateBlocked !== null) throw this.rateRestError(payload.model, rateBlocked);
 
     throw this.exhaustedWithRest(failures, payload.model) ?? new Error(POOL_RATE_LIMITED);
   }

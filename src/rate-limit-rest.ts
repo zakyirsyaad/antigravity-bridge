@@ -8,7 +8,8 @@
  */
 import { RestBook, restSecondsFromEnv } from "./rest-book";
 
-const DEFAULT_REST_SECONDS = 45;
+/** Matches the Retry-After hint a transient 429 gives, so a client honoring it arrives after the rest. */
+const DEFAULT_REST_SECONDS = 60;
 
 /** How long accounts rest after a transient pool exhaustion (at most a year). */
 export function rateRestSeconds(): number {

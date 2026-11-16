@@ -655,8 +655,8 @@ export class OAuthManager {
       const email = acc.email || `Account #${idx + 1}`;
       const isActive = idx === activeIndex;
       const cooldown = tracker.getAccountCooldownRemaining(email);
-      // A stall rest is skipped by failover just like a cooldown, but it is not
-      // quota, so it is its own status rather than another kind of "cooling".
+      // A stall rest or a per-minute rate rest is skipped by failover just like a
+      // cooldown, but neither is quota, so they share their own "resting" status.
       const stallEnd = StallRegistry.restEndsAt(acc.email, now);
       const rateEnd = RateLimitRests.restEndsAt(acc.email, now);
       const restEnd = stallEnd === null ? rateEnd : rateEnd === null ? stallEnd : Math.max(stallEnd, rateEnd);
