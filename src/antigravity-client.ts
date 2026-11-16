@@ -12,7 +12,8 @@ import { networkRetryDelayMs } from "./network";
 import { UpstreamError } from "./upstream-error";
 // Its home is upstream-error.ts; callers and tests have always imported it from here.
 export { UpstreamError };
-import { PoolFailures, rotationReason } from "./pool-failures";
+import { PoolExhaustedError, PoolFailures, rotationReason } from "./pool-failures";
+import { RateLimitRests, rateRestSeconds } from "./rate-limit-rest";
 import { GeminiWebClient, GEMINI_WEB_FALLBACK_USAGE_ID } from "./gemini-web-client";
 import { generateWithLinkedSessions, preferredLinkedSession } from "./gemini-web-rotation";
 
@@ -136,6 +137,19 @@ export class AntigravityClient {
   }
 
   /**
+   * The pool's own error, resting every tried account when the exhaustion was a
+   * per-minute 429: a retry inside the rest fails fast instead of burning one
+   * upstream attempt per account inside the same saturated minute.
+   */
+  private exhaustedWithRest(failures: PoolFailures, model: string): Error | null {
+    const err = failures.exhaustedError(model);
+    if (err instanceof PoolExhaustedError && err.retryAfterSeconds !== undefined) {
+      for (const email of failures.triedAccounts()) RateLimitRests.rest(email, rateRestSeconds());
+    }
+    return err;
+  }
+
+  /**
    * Before a request goes out, move off the active account when it is cooling down for this model's
    * family or resting after a stall. The quota file is read once: the answer that decides the move
    * is also the reason it gives. When both hold, the family's own cooldown is the more specific
@@ -143,7 +157,30 @@ export class AntigravityClient {
    */
   private skipUnavailableActive(model: string): void {
     const account = this.oauth.loadSavedAccount();
-    if (!this.oauth.isAutoFailoverEnabled() || !account?.email) return;
+    if (!account?.email) return;
+    // A per-minute rest covers the whole pool that just burned: with nowhere free
+    // to move, fail fast rather than spend another attempt per account in the same minute.
+    const rateRestEnd = RateLimitRests.restEndsAt(account.email);
+    if (rateRestEnd !== null) {
+      const nextAcc = this.oauth.isAutoFailoverEnabled()
+        ? this.oauth.selectNextAvailableAccount(account.email, model, "resting")
+        : null;
+      if (!nextAcc) {
+        const retry = Math.max(1, Math.ceil((rateRestEnd - Date.now()) / 1000));
+        throw new PoolExhaustedError(
+          "quota",
+          429,
+          `All pooled accounts are resting after a per-minute 429 for model ${model}; the limit clears ` +
+            `within a minute. Retry after ${retry}s, or send a smaller request.`,
+          retry,
+        );
+      }
+      console.log(
+        `[AutoPool] Active account ${account.email} is resting after a per-minute 429. Switched to ${nextAcc.email}`
+      );
+      return;
+    }
+    if (!this.oauth.isAutoFailoverEnabled()) return;
     const why = QuotaTracker.getInstance().isAccountRateLimited(account.email, model)
       ? "cooling_down"
       : StallRegistry.isResting(account.email)
@@ -339,13 +376,13 @@ export class AntigravityClient {
       const webFallback = failures.ranOut() ? await this.tryGeminiWebFallback(payload) : null;
       if (webFallback) return webFallback;
 
-      throw failures.exhaustedError(payload.model) ?? lastError ?? new Error("All Antigravity endpoints failed.");
+      throw this.exhaustedWithRest(failures, payload.model) ?? lastError ?? new Error("All Antigravity endpoints failed.");
     }
 
     const webFallback = failures.ranOut() ? await this.tryGeminiWebFallback(payload) : null;
     if (webFallback) return webFallback;
 
-    throw failures.exhaustedError(payload.model) ?? new Error(POOL_RATE_LIMITED);
+    throw this.exhaustedWithRest(failures, payload.model) ?? new Error(POOL_RATE_LIMITED);
   }
 
   /**
@@ -492,13 +529,13 @@ export class AntigravityClient {
       const webFallback = failures.ranOut() ? await this.tryGeminiWebFallback(payload) : null;
       if (webFallback) return singleChunkStream(webFallback);
 
-      throw failures.exhaustedError(payload.model) ?? lastError ?? new Error("All Antigravity streaming endpoints failed.");
+      throw this.exhaustedWithRest(failures, payload.model) ?? lastError ?? new Error("All Antigravity streaming endpoints failed.");
     }
 
     const webFallback = failures.ranOut() ? await this.tryGeminiWebFallback(payload) : null;
     if (webFallback) return singleChunkStream(webFallback);
 
-    throw failures.exhaustedError(payload.model) ?? new Error(POOL_RATE_LIMITED);
+    throw this.exhaustedWithRest(failures, payload.model) ?? new Error(POOL_RATE_LIMITED);
   }
 
   /**

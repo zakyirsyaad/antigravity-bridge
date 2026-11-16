@@ -36,6 +36,7 @@
     "test:signature": "tsx test/thought-signature.test.ts",
     "test:capacity": "tsx test/capacity-failover.test.ts",
     "test:rate-limit": "tsx test/rate-limit-transient.test.ts",
+    "test:rate-rest": "tsx test/rate-limit-rest.test.ts",
     "test:quota": "tsx test/quota-family.test.ts",
     "test:updater": "tsx test/updater.test.ts",
     "test:effort": "tsx test/anthropic-effort.test.ts",
