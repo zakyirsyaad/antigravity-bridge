@@ -41,6 +41,8 @@ const realRealpathSync = fs.realpathSync;
 
 /** The fake accounts file, so a re-login is observable without touching ~/.zcode. */
 let accountsContent = JSON.stringify({ accounts: [], activeAccountIndex: 0 });
+/** Writes attempted against the quota file: a 403 must never record a cooldown. */
+let quotaWrites = 0;
 const isAccounts = (p: unknown) => String(p) === ACCOUNTS_STORAGE_PATH;
 const isQuota = (p: unknown) => String(p) === QUOTA_PATH;
 
@@ -55,7 +57,10 @@ const isQuota = (p: unknown) => String(p) === QUOTA_PATH;
     accountsContent = String(data);
     return;
   }
-  if (isQuota(p)) return;
+  if (isQuota(p)) {
+    quotaWrites++;
+    return;
+  }
   return (realWriteFileSync as any)(p, ...rest);
 };
 // A write tightens the file's mode first; left alone, that would reach the real file.
@@ -137,12 +142,12 @@ async function runTests() {
       return e;
     }
   };
-  const googleReplies = (status: number) => {
+  const googleReplies = (status: number, message403 = VERIFY) => {
     (globalThis as any).fetch = async (url: any) => {
       const ok = String(url).includes("streamGenerateContent")
         ? `data: ${JSON.stringify({ candidates: [{ content: { parts: [{ text: "ok" }] } }] })}\n\n`
         : JSON.stringify({ candidates: [{ content: { parts: [{ text: "ok" }] } }] });
-      const body = status === 403 ? JSON.stringify({ error: { message: VERIFY } }) : ok;
+      const body = status === 403 ? JSON.stringify({ error: { message: message403 } }) : ok;
       return new Response(body, { status });
     };
   };
@@ -165,7 +170,15 @@ async function runTests() {
     flagVerification(EMAIL);
     await caught(() => realStream.call(client, payload));
     expect("the stream path clears it as well", isVerificationFlagged(EMAIL), false);
-    expect("a flag never became a quota cooldown", JSON.parse(accountsContent).accounts.length, 0);
+    expect("a 403 wrote no quota cooldown", quotaWrites, 0);
+
+    // A 403 can also be plain permission denial. The badge claims a verification
+    // challenge, so it must only appear when Google actually asked for one.
+    clearVerification(EMAIL);
+    googleReplies(403, "Permission denied on the requested project.");
+    const plainErr = await caught(() => realGenerate.call(client, payload));
+    expect("a non-verification 403 keeps its status", plainErr?.status, 403);
+    expect("but does not claim a verification challenge", isVerificationFlagged(EMAIL), false);
   } finally {
     (globalThis as any).fetch = realFetch;
   }
@@ -181,6 +194,11 @@ async function runTests() {
   } as any);
   expect("re-login clears the flag", isVerificationFlagged(EMAIL), false);
   expect("re-login upserts, it does not duplicate the card", JSON.parse(accountsContent).accounts.length, 1);
+
+  // The flag is keyed by email, so removing the account must take its flag with it.
+  flagVerification(EMAIL);
+  expect("the account is removed", OAuthManager.getInstance().deleteAccountByEmail(EMAIL), true);
+  expect("removing an account clears its flag", isVerificationFlagged(EMAIL), false);
 
   console.log("\n[4/6] /api/pool tells the page which account needs verification ...");
   flagVerification(EMAIL);
@@ -238,6 +256,26 @@ async function runTests() {
     expect("it keeps Google's own words", String(deniedJson?.error?.message).includes(VERIFY), true);
     expect("it names the dashboard", /dashboard/i.test(String(deniedJson?.error?.message)), true);
     expect("it does not send the caller to a CLI", /npm run/.test(String(deniedJson?.error?.message)), false);
+
+    // A 403 that is not the verification challenge must not tell the caller to go
+    // and verify anything: it is still a refused account, but a different reason.
+    (AntigravityClient.prototype as any).generateContent = async () => {
+      throw new UpstreamError(403, "Antigravity https://example.invalid (403): Permission denied on the requested project.");
+    };
+    const plainDenied = await fetch(`http://127.0.0.1:${TEST_PORT}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "gemini-3.8-flash-tiered",
+        max_tokens: 16,
+        messages: [{ role: "user", content: "x" }],
+      }),
+    });
+    const plainJson: any = await plainDenied.json();
+    expect("a plain permission 403 is still a 403", plainDenied.status, 403);
+    expect("and still permission_error", plainJson?.error?.type, "permission_error");
+    expect("it keeps Google's own words", String(plainJson?.error?.message).includes("Permission denied"), true);
+    expect("it does not claim a verification prompt", /verification prompt/i.test(String(plainJson?.error?.message)), false);
     (AntigravityClient.prototype as any).generateContent = realGenerate;
 
     const html = realReadFileSync(path.join(__dirname, "..", "src", "dashboard.html"), "utf-8") as string;

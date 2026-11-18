@@ -516,6 +516,8 @@ export class OAuthManager {
     }
     this.writeStorage(storage);
     memoryToken = storage.accounts[storage.activeAccountIndex] || null;
+    // The verification flag is keyed by email: a removed account must not keep its sign.
+    clearVerification(email);
 
     this.recordPoolEvent({
       type: "info",

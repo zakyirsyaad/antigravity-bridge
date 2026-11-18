@@ -14,7 +14,7 @@ import { UpstreamError } from "./upstream-error";
 export { UpstreamError };
 import { PoolExhaustedError, PoolFailures, rotationReason } from "./pool-failures";
 import { RateLimitRests, rateRestSeconds } from "./rate-limit-rest";
-import { clearVerification, flagVerification } from "./account-verification";
+import { clearVerification, flagVerification, isVerificationChallenge } from "./account-verification";
 import { GeminiWebClient, GEMINI_WEB_FALLBACK_USAGE_ID } from "./gemini-web-client";
 import { generateWithLinkedSessions, preferredLinkedSession } from "./gemini-web-rotation";
 
@@ -325,11 +325,11 @@ export class AntigravityClient {
               hit503 = true;
               message503 = message;
             } else if (res.status === 403) {
-              // Google is challenging the account itself ("Verify your account to
-              // continue."). Name it here, because the client-facing 403 carries no
-              // email. No record429(): a verification challenge is not quota.
+              // Google refused the account. Name it here, because the client-facing
+              // 403 carries no email. No record429(): a refusal is not quota. Only the
+              // verification challenge raises the dashboard sign, which claims exactly that.
               console.warn(`[Upstream 403] ${currentAccount?.email ?? "the active account"}: ${message}`);
-              flagVerification(currentAccount?.email);
+              if (isVerificationChallenge(message)) flagVerification(currentAccount?.email);
             }
 
             lastError = new UpstreamError(res.status, `Antigravity ${endpoint} (${res.status}): ${message}`);
@@ -491,10 +491,10 @@ export class AntigravityClient {
               hit503 = true;
               message503 = message;
             } else if (res.status === 403) {
-              // Same account-level challenge as the non-stream path; the email goes
-              // to the log only, never into the 403 the client receives.
+              // Same account-level refusal as the non-stream path; the email goes to
+              // the log only, never into the 403 the client receives.
               console.warn(`[Upstream 403] ${currentAccount?.email ?? "the active account"}: ${message}`);
-              flagVerification(currentAccount?.email);
+              if (isVerificationChallenge(message)) flagVerification(currentAccount?.email);
             }
 
             lastError = new UpstreamError(res.status, `Antigravity stream ${endpoint} (${res.status}): ${message}`);

@@ -4,6 +4,7 @@ import { BRIDGE_DEFAULT_PORT, SUPPORTED_MODELS } from "./constants";
 import { OAuthManager, toPublicAccountSummary, type AccountToken } from "./oauth";
 import { AntigravityClient, UpstreamError } from "./antigravity-client";
 import { PoolExhaustedError, TRANSIENT_RATE_RETRY_SECONDS } from "./pool-failures";
+import { isVerificationChallenge } from "./account-verification";
 import { Transformer, UnknownModelError } from "./transformer";
 import { UsageTracker, UsageReport } from "./usage-tracker";
 import { StreamEndTally } from "./stream-diagnostics";
@@ -93,22 +94,23 @@ function isUpstreamPermissionDenied(err: unknown): err is UpstreamError {
 }
 
 /**
- * Google's own message is kept, because it names the challenge. The guidance says
- * whose problem it is and what clears it; the account's email stays in the bridge
- * log (`[Upstream 403]`), never in a reply a client could forward.
+ * Google's own message is kept, because it names the refusal. The guidance says
+ * whose problem it is and what clears it, and only claims a verification prompt
+ * when Google actually asked for one; the account's email stays in the bridge log
+ * (`[Upstream 403]`), never in a reply a client could forward.
  */
 function sendUpstreamPermissionDenied(res: http.ServerResponse, route: string, err: UpstreamError): void {
   console.warn(`[Bridge] ${route}: Google refused the account (403): ${String(err.message).slice(0, 400)}`);
+  const recovery = isVerificationChallenge(err.message)
+    ? "Open the bridge dashboard and click Re-login on that account, then complete Google's verification prompt in the browser tab that opens. No terminal needed."
+    : "Open the bridge dashboard and re-login that account, or check its access to this model. No terminal needed.";
   res.writeHead(403, { "Content-Type": "application/json" });
   res.end(
     JSON.stringify({
       type: "error",
       error: {
         type: "permission_error",
-        message:
-          `${err.message} Google is refusing the pooled account, not this request; retrying will not help. ` +
-          `Open the bridge dashboard and click Re-login on that account, then complete Google's verification ` +
-          `prompt in the browser tab that opens. No terminal needed.`,
+        message: `${err.message} Google is refusing the pooled account, not this request; retrying will not help. ${recovery}`,
       },
     })
   );
