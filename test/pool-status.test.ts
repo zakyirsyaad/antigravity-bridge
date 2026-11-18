@@ -354,6 +354,19 @@ async function runTests() {
   expect("Ready for Gemini leaves both resting accounts out", page.text("kpiGeminiReady"), "1 / 3");
   expect("a rest is not a quota cooldown: no Clear Cooldown button", restCard.includes("Clear Cooldown"), false);
   expect("a real cooldown still has one", bothCard.includes("Clear Cooldown"), true);
+
+  // An account Google refused with a verification challenge: the card names the state and
+  // offers the browser recovery, so the operator never has to reach for a CLI login.
+  const [refusedCard] = page.draw(
+    poolOf([{ ...readyAcc, email: "refused@example.com", status: "ready", needsVerification: true }])
+  );
+  expect("a refused account's card says Verification needed", refusedCard.includes("Verification needed"), true);
+  expect("and offers Re-login", refusedCard.includes("Re-login"), true);
+  expect("Re-login targets that account", refusedCard.includes("/api/pool/auth-url?email=refused%40example.com"), true);
+  expect("it opens in a new tab", refusedCard.includes('target="_blank"'), true);
+  expect("a healthy card has no verification badge", readyCard.includes("Verification needed"), false);
+  // Re-login is offered on every card, not only a flagged one: an expired token needs it too.
+  expect("a healthy card still offers Re-login", readyCard.includes("Re-login"), true);
   const restClockAt = new Date(rows(restCard)[0].match(/data-reset="([^"]*)"/)?.[1] ?? "").getTime();
   expect("a rest's clock counts down to about two minutes from now", Math.abs(restClockAt - (Date.now() + 120_000)) < 2_000, true);
   const chipTag = restCard.match(/<span class="status-chip chip-resting"[^>]*>/)?.[0] ?? "";

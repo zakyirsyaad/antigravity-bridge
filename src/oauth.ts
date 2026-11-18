@@ -17,6 +17,7 @@ import {
 import { QuotaTracker } from "./quota-tracker";
 import { StallRegistry } from "./upstream-stall";
 import { RateLimitRests } from "./rate-limit-rest";
+import { clearVerification, isVerificationFlagged } from "./account-verification";
 
 export interface PoolEvent {
   id: string;
@@ -274,6 +275,8 @@ export class OAuthManager {
       }
 
       this.writeStorage(storage);
+      // Fresh tokens for this account: Google's verification sign comes down.
+      clearVerification(token.email);
     } catch (e) {
       console.warn("Failed to persist accounts to storage file:", e);
     }
@@ -513,6 +516,8 @@ export class OAuthManager {
     }
     this.writeStorage(storage);
     memoryToken = storage.accounts[storage.activeAccountIndex] || null;
+    // The verification flag is keyed by email: a removed account must not keep its sign.
+    clearVerification(email);
 
     this.recordPoolEvent({
       type: "info",
@@ -642,6 +647,8 @@ export class OAuthManager {
       status: PoolAccountStatus;
       cooldown: { remainingMs: number; resetMessage: string; resetsAt: string } | null;
       resting: RestingWindow | null;
+      /** Google refused this account with a verification challenge; the card offers Re-login. */
+      needsVerification: boolean;
       quota: any;
     }>;
     recentEvents: PoolEvent[];
@@ -681,6 +688,7 @@ export class OAuthManager {
         hasWebCookies: Boolean(acc.webCookies && acc.webCookies.includes("__Secure-1PSID")),
         cooldown,
         resting,
+        needsVerification: isVerificationFlagged(acc.email),
         quota: tracker.getQuotaForAccount(email),
       };
     });
@@ -965,9 +973,11 @@ export class OAuthManager {
   private activeVerifier: string | null = null;
 
   /**
-   * Start web-based OAuth login flow: generates authUrl and binds callback listener
+   * Start web-based OAuth login flow: generates authUrl and binds callback listener.
+   * `loginHint` preselects one Google account, so re-logging a flagged card does not
+   * depend on which account the browser offers first.
    */
-  public getWebOAuthUrl(): string {
+  public getWebOAuthUrl(loginHint?: string): string {
     const { verifier, challenge } = generatePKCE();
     this.activeVerifier = verifier;
     const state = base64URLEncode(Buffer.from(JSON.stringify({ verifier })));
@@ -982,6 +992,7 @@ export class OAuthManager {
     authUrl.searchParams.set("state", state);
     authUrl.searchParams.set("access_type", "offline");
     authUrl.searchParams.set("prompt", "consent");
+    if (loginHint) authUrl.searchParams.set("login_hint", loginHint);
 
     if (this.activeOAuthServer) {
       try {
