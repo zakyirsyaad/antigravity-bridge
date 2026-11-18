@@ -362,8 +362,8 @@ async function runTests() {
   );
   expect("a refused account's card says Verification needed", refusedCard.includes("Verification needed"), true);
   expect("and offers Re-login", refusedCard.includes("Re-login"), true);
-  expect("Re-login targets that account", refusedCard.includes("/api/pool/auth-url?email=refused%40example.com"), true);
-  expect("it opens in a new tab", refusedCard.includes('target="_blank"'), true);
+  expect("Re-login goes through the keyed fetch handler", refusedCard.includes("reloginAccount("), true);
+  expect("it names that account", refusedCard.includes("refused@example.com"), true);
   expect("a healthy card has no verification badge", readyCard.includes("Verification needed"), false);
   // Re-login is offered on every card, not only a flagged one: an expired token needs it too.
   expect("a healthy card still offers Re-login", readyCard.includes("Re-login"), true);

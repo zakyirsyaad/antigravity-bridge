@@ -236,6 +236,42 @@ async function runTests() {
     const withoutEmail = await fetch(authUrl, { redirect: "manual" });
     expect("Add Account keeps working with no email", withoutEmail.status, 302);
     expect("no email passes no hint", seenHint, null);
+
+    // A browser navigation cannot send the API key header, so the dashboard asks for
+    // JSON and opens the consent URL itself. Without this variant a key-protected
+    // remote install answers 401 to a Re-login link.
+    const asJson = await fetch(`${authUrl}?email=${encodeURIComponent(EMAIL)}`, {
+      headers: { Accept: "application/json" },
+      redirect: "manual",
+    });
+    expect("the JSON variant answers 200, not a redirect", asJson.status, 200);
+    const jsonText = await asJson.text();
+    let jsonBody: any = null;
+    try {
+      jsonBody = JSON.parse(jsonText);
+    } catch {
+      jsonBody = null;
+    }
+    expect("it carries the consent URL", jsonBody?.url, "https://accounts.google.com/o/oauth2/v2/auth?response_type=code");
+    expect("and still passes the hint", seenHint, EMAIL);
+
+    // The reported bug: a key-protected install answered 401 to the Re-login link.
+    // A forwarding header revokes loopback trust, so the key is genuinely required.
+    process.env.BRIDGE_API_KEY = "test-key-not-a-real-secret";
+    try {
+      const remote = { "x-forwarded-for": "203.0.113.9", Accept: "application/json" };
+      const noKey = await fetch(`${authUrl}?email=${encodeURIComponent(EMAIL)}`, { headers: remote, redirect: "manual" });
+      expect("a keyless remote caller is refused", noKey.status, 401);
+      const withKey = await fetch(`${authUrl}?email=${encodeURIComponent(EMAIL)}`, {
+        headers: { ...remote, "x-api-key": "test-key-not-a-real-secret" },
+        redirect: "manual",
+      });
+      expect("the same caller with the key gets the JSON URL", withKey.status, 200);
+      const keyedBody: any = await withKey.json().catch(() => null);
+      expect("and it is the consent URL", typeof keyedBody?.url, "string");
+    } finally {
+      delete process.env.BRIDGE_API_KEY;
+    }
     (OAuthManager.prototype as any).getWebOAuthUrl = realGetWebOAuthUrl;
 
     console.log("\n[6/6] The 403 reply and the card both point at the page, not a terminal ...");
@@ -290,10 +326,58 @@ async function runTests() {
       expect("no badge on an account that is fine", ui.verificationBadge({ needsVerification: false }), "");
       expect("a flagged account gets a badge", String(ui.verificationBadge({ needsVerification: true })).includes("Verification needed"), true);
       const btn = String(ui.reloginButton({ email: "a+tag@example.com" }));
-      expect("the button targets that account", btn.includes("email=a%2Btag%40example.com"), true);
-      expect("it opens the consent in a new tab", btn.includes('target="_blank"'), true);
+      expect("the button goes through the keyed fetch handler", btn.includes("reloginAccount("), true);
+      expect("it names that account", btn.includes("a+tag@example.com"), true);
+      expect("it is a button, not a keyless link", btn.includes("<button"), true);
+      expect("no bare href that would drop the API key", btn.includes("href="), false);
       expect("it says Re-login", btn.includes("Re-login"), true);
     }
+
+    // The handler itself: the key must ride along via apiFetch, and the tab must be
+    // opened before the await so a popup blocker still sees the user gesture.
+    let reloginSrc = "";
+    try {
+      reloginSrc = pageFunctionSource(html, "reloginAccount");
+    } catch {
+      reloginSrc = "";
+    }
+    expect("the page has a reloginAccount handler", reloginSrc !== "", true);
+    if (reloginSrc) {
+      const makeRelogin = (deps: any) =>
+        new Function("window", "apiFetch", "alert", `${reloginSrc}\nreturn reloginAccount;`)(
+          deps.window,
+          deps.apiFetch,
+          deps.alert
+        );
+      const calls: Array<{ path: string; accept: unknown }> = [];
+      const tab: any = { location: null, closed: false, close() { this.closed = true; } };
+      const alerts: string[] = [];
+      const reloginOk = makeRelogin({
+        window: { open: () => tab },
+        apiFetch: async (p: string, opts: any) => {
+          calls.push({ path: p, accept: opts?.headers?.Accept });
+          return { ok: true, status: 200, json: async () => ({ url: "https://accounts.google.com/consent" }) };
+        },
+        alert: (m: string) => alerts.push(m),
+      });
+      await reloginOk("a+tag@example.com");
+      expect("re-login asks for the JSON variant", calls[0]?.accept, "application/json");
+      expect("it encodes the account email", calls[0]?.path, "/api/pool/auth-url?email=a%2Btag%40example.com");
+      expect("the opened tab lands on the consent URL", tab.location, "https://accounts.google.com/consent");
+      expect("no error alert on success", alerts.length, 0);
+
+      const badTab: any = { location: null, closed: false, close() { this.closed = true; } };
+      const badAlerts: string[] = [];
+      const reloginBad = makeRelogin({
+        window: { open: () => badTab },
+        apiFetch: async () => ({ ok: false, status: 401, json: async () => ({}) }),
+        alert: (m: string) => badAlerts.push(m),
+      });
+      await reloginBad("a@example.com");
+      expect("a refused fetch closes the blank tab", badTab.closed, true);
+      expect("and tells the operator instead of failing silently", badAlerts.length, 1);
+    }
+    expect("the header Add Account no longer navigates keyless", html.includes('href="/api/pool/auth-url"'), false);
     const card = pageFunctionSource(html, "renderStitchDashboard");
     expect("the card draws the badge", card.includes("verificationBadge(acc)"), true);
     expect("the card draws the Re-login button", card.includes("reloginButton(acc)"), true);

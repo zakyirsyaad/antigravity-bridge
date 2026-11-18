@@ -1185,13 +1185,13 @@
         </svg>
         <span>Push Token</span>
       </button>
-      <a href="/api/pool/auth-url" class="btn btn-primary" target="_blank">
+      <button type="button" class="btn btn-primary" onclick="reloginAccount('')" title="Add a Google account through the browser sign-in flow">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
           <line x1="12" y1="5" x2="12" y2="19"></line>
           <line x1="5" y1="12" x2="19" y2="12"></line>
         </svg>
         <span>Add Account</span>
-      </a>
+      </button>
     </div>
   </header>
 
@@ -1827,11 +1827,33 @@ print(response.choices[0].message.content)</pre>
 
     /**
      * Re-login this account in the browser: the same OAuth flow Add Account uses, with
-     * login_hint preselecting this email. A link, not a button, because it navigates.
+     * login_hint preselecting this email. A button, not a link: a navigation cannot
+     * carry the API key header, and a key-protected remote install answered 401.
      */
     function reloginButton(acc) {
-      return '<a class="btn btn-sm btn-secondary" href="/api/pool/auth-url?email=' + encodeURIComponent(acc.email || '') +
-        '" target="_blank" rel="noopener" title="Sign in to Google again as this account and complete its verification prompt. No terminal needed.">Re-login</a>';
+      return '<button type="button" class="btn btn-sm btn-secondary" onclick="reloginAccount(\'' + acc.email + '\')" title="Sign in to Google again as this account and complete its verification prompt. No terminal needed.">Re-login</button>';
+    }
+
+    /**
+     * Ask the bridge for the consent URL through apiFetch, so the key rides along and
+     * a 401 raises the dashboard's own key prompt. The tab opens before the await so a
+     * popup blocker still sees the user gesture; on failure it is closed again.
+     */
+    async function reloginAccount(email) {
+      const tab = window.open("", "_blank");
+      try {
+        const res = await apiFetch("/api/pool/auth-url?email=" + encodeURIComponent(email || ""), {
+          headers: { Accept: "application/json" }
+        });
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        const data = await res.json();
+        if (!data || !data.url) throw new Error("the bridge returned no consent URL");
+        if (tab) tab.location = data.url;
+        else window.location = data.url;
+      } catch (err) {
+        if (tab) tab.close();
+        alert("Failed to start re-login: " + err.message);
+      }
     }
 
     function renderStitchDashboard(data) {
