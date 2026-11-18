@@ -18,6 +18,13 @@
  *
  * A Google 503 (no capacity, or unavailable) is likewise HTTP 503
  * `overloaded_error` on all four paths, the OpenAI stream included.
+ *
+ * A Google 403 — "Verify your account to continue." — is HTTP 403
+ * `permission_error` on all four paths. Google is refusing the account, not the
+ * request and not the pool's quota, so it is permanent until someone verifies or
+ * replaces that account. It used to be the generic retryable 500, which sent
+ * Hermes (`retryable: true, code: unknown`) back to the same flagged account.
+ *
  * Every other failure keeps exactly the behaviour it had, and a failure after
  * streaming has begun cannot become a status code at all.
  *
@@ -127,7 +134,7 @@ async function runTests() {
   console.log(" An upstream 400 reaches the client as a 400");
   console.log("=================================================\n");
 
-  console.log("[1/6] The Google client keeps the status as data, not only inside its message ...");
+  console.log("[1/7] The Google client keeps the status as data, not only inside its message ...");
   const realFetch = globalThis.fetch;
   const googleReplies = (status: number, text: string) => {
     (globalThis as any).fetch = async () => new Response(JSON.stringify({ error: { message: text } }), { status });
@@ -211,7 +218,7 @@ async function runTests() {
   await server.start();
 
   try {
-    console.log("\n[2/6] A request Google rejects is a 400 on every path ...");
+    console.log("\n[2/7] A request Google rejects is a 400 on every path ...");
     failure = upstream(400, GOOGLE_400);
     const paths: Array<[string, string, boolean]> = [
       ["OpenAI non-stream", OPENAI, false],
@@ -227,7 +234,7 @@ async function runTests() {
       expect(`${label}: error type`, reply.json?.error?.type, "invalid_request_error");
     }
 
-    console.log("\n[3/6] ... carrying Google's own message, as plain JSON rather than a stream ...");
+    console.log("\n[3/7] ... carrying Google's own message, as plain JSON rather than a stream ...");
     for (const [label] of paths) {
       const reply = replies[label];
       expect(`${label}: names the cause`, String(reply.json?.error?.message).includes("TYPE_STRING"), true);
@@ -235,7 +242,7 @@ async function runTests() {
     }
     expect("Anthropic clients get the Anthropic envelope", replies["Anthropic stream"].json?.type, "error");
 
-    console.log("\n[4/6] A Google 503 is a 503; every other failure keeps the behaviour it had ...");
+    console.log("\n[4/7] A Google 503 is a 503; every other failure keeps the behaviour it had ...");
     // A 503 used to be a 500 like everything else (and a 200 on the OpenAI stream). It
     // is Google-side — not the caller's mistake, not ours, not quota — so every path
     // says 503 before streaming begins. Only "no capacity" is `overloaded_error`: a
@@ -284,7 +291,7 @@ async function runTests() {
     expect("stall, OpenAI stream: still in-band", stalledStream.status, 200);
     expect("stall, OpenAI stream: the event says Google stopped answering", stalledStream.text.includes("stopped answering"), true);
 
-    console.log("\n[5/6] A failure after streaming has begun cannot become a status, and must not crash ...");
+    console.log("\n[5/7] A failure after streaming has begun cannot become a status, and must not crash ...");
     failure = upstream(400, GOOGLE_400);
     failAfterFirstChunk = true;
     const midOpenAI = await post(OPENAI, true);
@@ -297,7 +304,7 @@ async function runTests() {
     expect("Anthropic: failure is an error event", midAnthropic.text.includes("event: error"), true);
     failAfterFirstChunk = false;
 
-    console.log("\n[6/6] A healthy request is unaffected by when the 200 is written ...");
+    console.log("\n[6/7] A healthy request is unaffected by when the 200 is written ...");
     failure = null;
     const okStream = await post(OPENAI, true);
     expect("OpenAI stream: 200", okStream.status, 200);
@@ -308,6 +315,48 @@ async function runTests() {
     expect("OpenAI non-stream: 200", (await post(OPENAI, false)).status, 200);
     expect("Anthropic stream: 200", (await post(ANTHROPIC, true)).status, 200);
     expect("Anthropic non-stream: 200", (await post(ANTHROPIC, false)).status, 200);
+
+    console.log("\n[7/7] Google's account-verification 403 is a 403, not a retryable 500 ...");
+    // "Verify your account to continue." is Google refusing the ACCOUNT, not the
+    // request and not the pool's quota: no retry, no cooldown wait and no model
+    // change clears it. It fell through to the generic 500, which Hermes labelled
+    // `retryable: true, code: unknown` and retried against the same flagged account.
+    const VERIFY = "Verify your account to continue.";
+    const realFetch403 = globalThis.fetch;
+    (globalThis as any).fetch = async () => new Response(JSON.stringify({ error: { message: VERIFY } }), { status: 403 });
+    try {
+      const client = new AntigravityClient();
+      const payload403: any = { model: "gemini-3.8-flash-tiered", request: { contents: [{ role: "user", parts: [{ text: "hi" }] }] } };
+      let denied: any = null;
+      try {
+        await realStream.call(client, payload403);
+      } catch (e) {
+        denied = e;
+      }
+      expect("stream: a 403 keeps Google's status as data", denied?.status, 403);
+      expect("stream: the message keeps Google's own words", String(denied?.message).includes(`(403): ${VERIFY}`), true);
+    } finally {
+      (globalThis as any).fetch = realFetch403;
+    }
+
+    // A 403 is that account's standing, not the pool running out: no quota wording,
+    // no cooldown, no rest, and no Gemini Web substitution.
+    const refused = new PoolFailures();
+    refused.record("a@example.com", { hit429: false, hit503: false, message503: "", stalled: false });
+    expect("a 403 is not the pool running out", refused.ranOut(), false);
+    expect("a 403 gets no pool wording", refused.exhaustedError("gemini-3.8-flash-tiered"), null);
+
+    failure = upstream(403, VERIFY);
+    for (const [label, path, stream] of paths) {
+      const reply = await post(path, stream);
+      expect(`403 ${label}: status`, reply.status, 403);
+      expect(`403 ${label}: permission_error`, reply.json?.error?.type, "permission_error");
+      expect(`403 ${label}: JSON, not an event stream`, reply.contentType.includes("application/json"), true);
+      expect(`403 ${label}: Anthropic envelope`, reply.json?.type, "error");
+      expect(`403 ${label}: keeps Google's words`, String(reply.json?.error?.message).includes(VERIFY), true);
+      expect(`403 ${label}: says retrying cannot help`, /retrying will not help/i.test(String(reply.json?.error?.message)), true);
+      expect(`403 ${label}: names the account, not the caller's request`, /account/i.test(String(reply.json?.error?.message)), true);
+    }
 
     if (failures > 0) {
       throw new Error(`${failures} upstream error check(s) failed`);

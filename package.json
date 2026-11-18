@@ -56,6 +56,7 @@
     "test:hybrid": "tsx test/hybrid-accounts.test.ts",
     "test:tool-bridge": "tsx test/tool-bridge.test.ts",
     "test:usage-panel": "tsx test/usage-panel.test.ts",
+    "test:verification": "tsx test/account-verification.test.ts",
     "build": "tsc"
   },
   "keywords": [

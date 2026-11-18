@@ -794,6 +794,8 @@
     .card-footer {
       display: flex;
       align-items: center;
+      /* Re-login is a fifth control on a flagged card; without wrap it would overflow the card. */
+      flex-wrap: wrap;
       gap: 0.5rem;
       margin-top: auto;
       padding-top: 0.25rem;
@@ -1813,6 +1815,25 @@ print(response.choices[0].message.content)</pre>
       return '<span class="status-chip chip-ready">Ready</span>';
     }
 
+    /**
+     * Google refused this account with a verification challenge (403). Rose, not amber:
+     * DESIGN.md reserves amber for quota, and this is a fatal account state, not a cooldown.
+     * A sign, not a rest: the bridge keeps trying the account, and Re-login is what clears it.
+     */
+    function verificationBadge(acc) {
+      if (!acc.needsVerification) return '';
+      return '<span class="tier-chip" style="background: rgba(244, 63, 94, 0.15); color: var(--rose); border-color: rgba(244, 63, 94, 0.35);" title="Google answered 403 and asked to verify this account. Use Re-login and complete the prompt in the browser.">Verification needed</span>';
+    }
+
+    /**
+     * Re-login this account in the browser: the same OAuth flow Add Account uses, with
+     * login_hint preselecting this email. A link, not a button, because it navigates.
+     */
+    function reloginButton(acc) {
+      return '<a class="btn btn-sm btn-secondary" href="/api/pool/auth-url?email=' + encodeURIComponent(acc.email || '') +
+        '" target="_blank" rel="noopener" title="Sign in to Google again as this account and complete its verification prompt. No terminal needed.">Re-login</a>';
+    }
+
     function renderStitchDashboard(data) {
       document.getElementById("kpiTotalAccounts").textContent = data.totalAccounts;
       document.getElementById("kpiPoolMultiplier").textContent = data.totalAccounts + "x Combined Pool";
@@ -1977,6 +1998,7 @@ print(response.choices[0].message.content)</pre>
               '<div class="acc-badges">' +
                 '<span class="tier-chip">' + tierName + '</span>' +
                 webBadge +
+                verificationBadge(acc) +
               '</div>' +
             '</div>' +
           '</div>' +
@@ -1990,6 +2012,7 @@ print(response.choices[0].message.content)</pre>
             '<button class="btn btn-sm btn-primary btn-action" onclick="switchAccount(\'' + acc.email + '\')">Set Active</button>'
           ) +
           '<button class="btn btn-sm btn-secondary" onclick="openLinkWebModal(\'' + acc.email + '\')" title="Link Gemini Web session cookies to access Gemini Argon 4 and web models">🔗 Link Web</button>' +
+          reloginButton(acc) +
           (acc.status === "cooling_down" ?
             '<button class="btn btn-sm" onclick="clearCooldown(\'' + acc.email + '\')">Clear Cooldown</button>' : ''
           ) +

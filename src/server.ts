@@ -80,6 +80,40 @@ export function sendUpstreamRateLimited(res: http.ServerResponse, route: string,
   res.end(JSON.stringify({ type: "error", error: { type: "rate_limit_error", message: err.message } }));
 }
 
+/**
+ * Google refused the account (HTTP 403) — "Verify your account to continue." is its
+ * account-verification challenge. Not the caller's request, not quota and not
+ * capacity: no retry, cooldown wait or reworded prompt clears it, so it is a 403
+ * rather than the generic 500 it used to be. That 500 told Hermes `retryable: true,
+ * code: unknown`, which sent it back to the same flagged account; the OpenAI stream
+ * delivered it as an error event inside a 200.
+ */
+function isUpstreamPermissionDenied(err: unknown): err is UpstreamError {
+  return err instanceof UpstreamError && err.status === 403;
+}
+
+/**
+ * Google's own message is kept, because it names the challenge. The guidance says
+ * whose problem it is and what clears it; the account's email stays in the bridge
+ * log (`[Upstream 403]`), never in a reply a client could forward.
+ */
+function sendUpstreamPermissionDenied(res: http.ServerResponse, route: string, err: UpstreamError): void {
+  console.warn(`[Bridge] ${route}: Google refused the account (403): ${String(err.message).slice(0, 400)}`);
+  res.writeHead(403, { "Content-Type": "application/json" });
+  res.end(
+    JSON.stringify({
+      type: "error",
+      error: {
+        type: "permission_error",
+        message:
+          `${err.message} Google is refusing the pooled account, not this request; retrying will not help. ` +
+          `Open the bridge dashboard and click Re-login on that account, then complete Google's verification ` +
+          `prompt in the browser tab that opens. No terminal needed.`,
+      },
+    })
+  );
+}
+
 export class BridgeServer {
   private server: http.Server | null = null;
   private client: AntigravityClient;
@@ -532,7 +566,10 @@ export class BridgeServer {
 
           // Pool API: Add Google Account via OAuth
           if (pathname === "/api/pool/auth-url" && req.method === "GET") {
-            const authUrl = this.oauth.getWebOAuthUrl();
+            // ?email= comes from an account card's Re-login button. The header's
+            // Add Account sends none and keeps the plain consent flow.
+            const email = (url.searchParams.get("email") || "").trim();
+            const authUrl = this.oauth.getWebOAuthUrl(email || undefined);
             res.writeHead(302, { Location: authUrl });
             res.end();
             return;
@@ -689,6 +726,10 @@ export class BridgeServer {
           }
           if (isUpstreamRateLimited(err) && !res.headersSent) {
             sendUpstreamRateLimited(res, pathname, err);
+            return;
+          }
+          if (isUpstreamPermissionDenied(err) && !res.headersSent) {
+            sendUpstreamPermissionDenied(res, pathname, err);
             return;
           }
           console.error(`[Bridge Error] ${pathname}:`, err);
@@ -1034,6 +1075,10 @@ export class BridgeServer {
           sendUpstreamRateLimited(res, "/v1/messages", streamErr);
           return;
         }
+        if (!res.headersSent && isUpstreamPermissionDenied(streamErr)) {
+          sendUpstreamPermissionDenied(res, "/v1/messages", streamErr);
+          return;
+        }
         console.error("[Stream Error]", streamErr);
         if (res.headersSent) {
           res.write(`event: error\ndata: ${JSON.stringify({ type: "error", error: { message: streamErr.message } })}\n\n`);
@@ -1211,6 +1256,12 @@ export class BridgeServer {
         }
         if (!res.headersSent && isUpstreamRateLimited(err)) {
           sendUpstreamRateLimited(res, "/v1/chat/completions", err);
+          return;
+        }
+        // A refused account is permanent too: a real 403 here, not an error event
+        // inside a 200 that a client reads as a transient fault.
+        if (!res.headersSent && isUpstreamPermissionDenied(err)) {
+          sendUpstreamPermissionDenied(res, "/v1/chat/completions", err);
           return;
         }
         // Any other failure keeps the behaviour it has always had: a 200 that
