@@ -3,14 +3,17 @@
  * test the page (pool-status, usage-panel) so a fix here reaches both.
  */
 
-/** The source of one named top-level `function` in the page. */
+/** The source of one named top-level `function` in the page, keeping an `async` modifier. */
 export function pageFunctionSource(html: string, name: string): string {
   const start = html.indexOf(`function ${name}(`);
   if (start < 0) throw new Error(`dashboard.html has no function ${name}()`);
+  // Dropping `async` would lift a body containing await into a plain function,
+  // which is a syntax error rather than the page's behaviour.
+  const modifier = html.slice(Math.max(0, start - 6), start) === "async " ? "async " : "";
   let depth = 0;
   for (let i = html.indexOf("{", start); i < html.length; i++) {
     if (html[i] === "{") depth++;
-    if (html[i] === "}" && --depth === 0) return html.slice(start, i + 1);
+    if (html[i] === "}" && --depth === 0) return modifier + html.slice(start, i + 1);
   }
   throw new Error(`could not read function ${name}()`);
 }

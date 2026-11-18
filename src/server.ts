@@ -572,6 +572,14 @@ export class BridgeServer {
             // Add Account sends none and keeps the plain consent flow.
             const email = (url.searchParams.get("email") || "").trim();
             const authUrl = this.oauth.getWebOAuthUrl(email || undefined);
+            // A browser navigation cannot carry the API key header, so on a
+            // key-protected install the redirect answered 401. The dashboard asks
+            // for JSON and opens the URL itself; a plain link still gets the 302.
+            if (wantsJson) {
+              res.writeHead(200, { "Content-Type": "application/json" });
+              res.end(JSON.stringify({ url: authUrl }));
+              return;
+            }
             res.writeHead(302, { Location: authUrl });
             res.end();
             return;
