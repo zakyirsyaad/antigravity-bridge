@@ -57,6 +57,7 @@
     "test:tool-bridge": "tsx test/tool-bridge.test.ts",
     "test:usage-panel": "tsx test/usage-panel.test.ts",
     "test:verification": "tsx test/account-verification.test.ts",
+    "test:oauth-exchange": "tsx test/oauth-exchange.test.ts",
     "build": "tsc"
   },
   "keywords": [

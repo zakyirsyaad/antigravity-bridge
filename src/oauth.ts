@@ -917,18 +917,24 @@ export class OAuthManager {
     return DEFAULT_PROJECT_ID;
   }
 
-  /** Exchange an authorization code for tokens for local bridge clients. */
-  public async exchangeAuthorizationCode(code: string): Promise<AccountToken> {
+  /**
+   * Exchange an authorization code for tokens for local bridge clients.
+   * `codeVerifier` is required for any auth URL built with PKCE (all of them are):
+   * Google rejects the code without it, so a paste flow must carry it too.
+   */
+  public async exchangeAuthorizationCode(code: string, codeVerifier?: string): Promise<AccountToken> {
+    const params = new URLSearchParams({
+      client_id: ANTIGRAVITY_CLIENT_ID,
+      client_secret: ANTIGRAVITY_CLIENT_SECRET,
+      code,
+      grant_type: "authorization_code",
+      redirect_uri: OAUTH_REDIRECT_URI,
+    });
+    if (codeVerifier) params.set("code_verifier", codeVerifier);
     const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        client_id: ANTIGRAVITY_CLIENT_ID,
-        client_secret: ANTIGRAVITY_CLIENT_SECRET,
-        code,
-        grant_type: "authorization_code",
-        redirect_uri: OAUTH_REDIRECT_URI,
-      }).toString(),
+      body: params.toString(),
     });
 
     if (!tokenRes.ok) {
