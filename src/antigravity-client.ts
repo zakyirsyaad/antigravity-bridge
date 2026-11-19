@@ -14,7 +14,7 @@ import { UpstreamError } from "./upstream-error";
 export { UpstreamError };
 import { PoolExhaustedError, PoolFailures, rotationReason } from "./pool-failures";
 import { RateLimitRests, rateRestSeconds } from "./rate-limit-rest";
-import { clearVerification, flagVerification, isVerificationChallenge } from "./account-verification";
+import { clearVerification, flagVerification, isVerificationChallenge, isVerificationFlagged } from "./account-verification";
 import { GeminiWebClient, GEMINI_WEB_FALLBACK_USAGE_ID } from "./gemini-web-client";
 import { generateWithLinkedSessions, preferredLinkedSession } from "./gemini-web-rotation";
 
@@ -179,6 +179,18 @@ export class AntigravityClient {
       return Math.max(1, Math.ceil((rateRestEnd - Date.now()) / 1000));
     }
     if (!this.oauth.isAutoFailoverEnabled()) return null;
+    // A Google-refused active account is moved off before a request is spent on it.
+    // With nowhere free to go the request still proceeds: stranding a one-account
+    // pool would be worse than the honest 403 it already answers.
+    if (isVerificationFlagged(account.email)) {
+      const nextAcc = this.oauth.selectNextAvailableAccount(account.email, model, "refused");
+      if (nextAcc) {
+        console.log(
+          `[AutoPool] Active account ${account.email} was refused by Google (403). Switched to ${nextAcc.email}`
+        );
+      }
+      return null;
+    }
     const why = QuotaTracker.getInstance().isAccountRateLimited(account.email, model)
       ? "cooling_down"
       : StallRegistry.isResting(account.email)
@@ -277,6 +289,7 @@ export class AntigravityClient {
       let lastError: any = null;
       let hit429 = false;
       let hit503 = false;
+      let hit403 = false;
       let message503 = "";
       let message429 = "";
       let cooldownRecorded = false;
@@ -329,6 +342,7 @@ export class AntigravityClient {
               // 403 carries no email. No record429(): a refusal is not quota. Only the
               // verification challenge raises the dashboard sign, which claims exactly that.
               console.warn(`[Upstream 403] ${currentAccount?.email ?? "the active account"}: ${message}`);
+              hit403 = true;
               if (isVerificationChallenge(message)) flagVerification(currentAccount?.email);
             }
 
@@ -379,14 +393,16 @@ export class AntigravityClient {
         }
       }
 
-      // If rate limited or starved of capacity, auto-failover to next available account
-      if ((hit429 || hit503) && this.oauth.isAutoFailoverEnabled()) {
-        const why = rotationReason(hit429, message503);
+      // If rate limited, starved of capacity, or refused by Google, auto-failover to
+      // the next available account. A 403 is per-account, so another card is a real
+      // second chance; no cooldown is written for it.
+      if ((hit429 || hit503 || hit403) && this.oauth.isAutoFailoverEnabled()) {
+        const why = hit403 ? "refused" : rotationReason(hit429, message503);
         const nextAccount = this.oauth.selectNextAvailableAccount(currentAccount?.email, payload.model, why);
         if (nextAccount) {
           console.log(
             `[AutoPool] Failover from ${currentAccount?.email} to ${nextAccount.email} due to ${
-              hit429 ? "429 rate limit" : why === "no_capacity" ? "503 no capacity" : "503 service unavailable"
+              hit403 ? "403 account refused" : hit429 ? "429 rate limit" : why === "no_capacity" ? "503 no capacity" : "503 service unavailable"
             }.`
           );
           continue;
@@ -442,6 +458,7 @@ export class AntigravityClient {
       let lastError: any = null;
       let hit429 = false;
       let hit503 = false;
+      let hit403 = false;
       let message503 = "";
       let message429 = "";
       let cooldownRecorded = false;
@@ -494,6 +511,7 @@ export class AntigravityClient {
               // Same account-level refusal as the non-stream path; the email goes to
               // the log only, never into the 403 the client receives.
               console.warn(`[Upstream 403] ${currentAccount?.email ?? "the active account"}: ${message}`);
+              hit403 = true;
               if (isVerificationChallenge(message)) flagVerification(currentAccount?.email);
             }
 
@@ -544,13 +562,13 @@ export class AntigravityClient {
         }
       }
 
-      if ((hit429 || hit503) && this.oauth.isAutoFailoverEnabled()) {
-        const why = rotationReason(hit429, message503);
+      if ((hit429 || hit503 || hit403) && this.oauth.isAutoFailoverEnabled()) {
+        const why = hit403 ? "refused" : rotationReason(hit429, message503);
         const nextAccount = this.oauth.selectNextAvailableAccount(currentAccount?.email, payload.model, why);
         if (nextAccount) {
           console.log(
             `[AutoPool] Stream failover from ${currentAccount?.email} to ${nextAccount.email} due to ${
-              hit429 ? "429 rate limit" : why === "no_capacity" ? "503 no capacity" : "503 service unavailable"
+              hit403 ? "403 account refused" : hit429 ? "429 rate limit" : why === "no_capacity" ? "503 no capacity" : "503 service unavailable"
             }.`
           );
           continue;

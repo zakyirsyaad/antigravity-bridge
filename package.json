@@ -58,6 +58,7 @@
     "test:usage-panel": "tsx test/usage-panel.test.ts",
     "test:verification": "tsx test/account-verification.test.ts",
     "test:oauth-exchange": "tsx test/oauth-exchange.test.ts",
+    "test:refused-rotation": "tsx test/refused-rotation.test.ts",
     "build": "tsc"
   },
   "keywords": [
