@@ -33,7 +33,7 @@ export interface PoolEvent {
  * Why the pool moved off an account. Failover used to log only "switched from A to
  * B", and a 429, a 503 and a stall all read the same in the activity stream.
  */
-export type FailoverReason = "quota" | "no_capacity" | "unavailable" | "stall" | "cooling_down" | "resting";
+export type FailoverReason = "quota" | "no_capacity" | "unavailable" | "stall" | "cooling_down" | "resting" | "refused";
 
 const FAILOVER_REASON_TEXT: Record<FailoverReason, string> = {
   quota: "429 quota reached",
@@ -42,6 +42,7 @@ const FAILOVER_REASON_TEXT: Record<FailoverReason, string> = {
   stall: "no response from Google (stall)",
   cooling_down: "it was cooling down",
   resting: "it was resting after a stall",
+  refused: "Google refused the account (403)",
 };
 
 /** An account the pool skips for a while after a stall: in memory, not a quota cooldown. */
@@ -601,10 +602,13 @@ export class OAuthManager {
 
       // An account resting after a stall is skipped too, but it is not "limited":
       // it is not out of quota, and nothing about it is written to the quota file.
+      // A Google-refused account (403) is skipped the same way: the challenge is
+      // per-account, so another card is a genuine second chance.
       const isLimited = candidate.email
         ? tracker.isAccountRateLimited(candidate.email, model) ||
           StallRegistry.isResting(candidate.email) ||
-          RateLimitRests.isResting(candidate.email)
+          RateLimitRests.isResting(candidate.email) ||
+          isVerificationFlagged(candidate.email)
         : false;
       if (!isLimited) {
         storage.activeAccountIndex = candidateIdx;
