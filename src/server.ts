@@ -116,6 +116,21 @@ function sendUpstreamPermissionDenied(res: http.ServerResponse, route: string, e
   );
 }
 
+/**
+ * The PKCE verifier travels inside the OAuth `state` parameter as base64url JSON.
+ * A pasted redirect URL is the only place a remote browser can hand it over, so the
+ * exchange reads it back out here. Anything unreadable yields no verifier, and the
+ * handler then refuses the request rather than sending a code Google will reject.
+ */
+function verifierFromState(state: string): string {
+  try {
+    const parsed = JSON.parse(Buffer.from(state, "base64url").toString("utf8"));
+    return typeof parsed?.verifier === "string" ? parsed.verifier : "";
+  } catch {
+    return "";
+  }
+}
+
 export class BridgeServer {
   private server: http.Server | null = null;
   private client: AntigravityClient;
@@ -585,17 +600,59 @@ export class BridgeServer {
             return;
           }
 
-          // Local OAuth exchange for the standalone GUI. The bridge owns the
-          // client secret so it never needs to be embedded in the GUI binary.
+          // Local OAuth exchange for the standalone GUI and for the dashboard's paste
+          // box. The bridge owns the client secret so it never needs to be embedded in
+          // the GUI binary. A remote browser cannot deliver the callback to the bridge's
+          // localhost listener, so the operator pastes the dead tab's whole address and
+          // the code plus PKCE verifier are read out of it here.
           if (pathname === "/oauth/exchange" && req.method === "POST") {
             const body = await this.parseBody(req);
-            if (typeof body.code !== "string" || !body.code.trim()) {
+            let code = typeof body.code === "string" ? body.code.trim() : "";
+            let verifier = typeof body.codeVerifier === "string" ? body.codeVerifier.trim() : "";
+            if (typeof body.redirectUrl === "string" && body.redirectUrl.trim()) {
+              let parsed: URL;
+              try {
+                parsed = new URL(body.redirectUrl.trim());
+              } catch {
+                res.writeHead(400, { "Content-Type": "application/json" });
+                res.end(JSON.stringify({ error: { message: "redirectUrl is not a URL; paste the whole address bar", type: "invalid_request" } }));
+                return;
+              }
+              code = code || (parsed.searchParams.get("code") || "").trim();
+              verifier = verifier || verifierFromState(parsed.searchParams.get("state") || "");
+            } else if (!verifier && typeof body.state === "string") {
+              verifier = verifierFromState(body.state);
+            }
+            if (!code) {
               res.writeHead(400, { "Content-Type": "application/json" });
-              res.end(JSON.stringify({ error: { message: "OAuth code is required", type: "invalid_request" } }));
+              res.end(JSON.stringify({ error: { message: "OAuth code is required; paste the full redirect URL", type: "invalid_request" } }));
+              return;
+            }
+            if (!verifier) {
+              res.writeHead(400, { "Content-Type": "application/json" });
+              res.end(JSON.stringify({ error: { message: "PKCE verifier is required; paste the full redirect URL including its state", type: "invalid_request" } }));
               return;
             }
 
-            const account = await this.oauth.exchangeAuthorizationCode(body.code);
+            // Re-logging an existing card must not hijack the active slot; adding a
+            // genuinely new account still activates it, as saveAccount does.
+            const before = this.oauth.listAccounts();
+            const previousActive = before.accounts[before.activeIndex]?.email;
+            let account;
+            try {
+              account = await this.oauth.exchangeAuthorizationCode(code, verifier);
+            } catch (err: any) {
+              res.writeHead(400, { "Content-Type": "application/json" });
+              res.end(JSON.stringify({ error: { message: String(err.message || err), type: "invalid_request" } }));
+              return;
+            }
+            const existed = before.accounts.some((a) => a.email && a.email === account.email);
+            // The paste flow has no GUI behind it to push the tokens, so the bridge
+            // stores them itself; saveAccount upserts by email and keeps webCookies.
+            this.oauth.saveAccount(account);
+            if (existed && previousActive && previousActive !== account.email) {
+              this.oauth.switchAccountByEmail(previousActive);
+            }
             res.writeHead(200, { "Content-Type": "application/json" });
             res.end(
               JSON.stringify({

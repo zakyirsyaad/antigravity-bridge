@@ -344,16 +344,17 @@ async function runTests() {
     expect("the page has a reloginAccount handler", reloginSrc !== "", true);
     if (reloginSrc) {
       const makeRelogin = (deps: any) =>
-        new Function("window", "apiFetch", "alert", `${reloginSrc}\nreturn reloginAccount;`)(
+        new Function("window", "apiFetch", "alert", "openPasteRedirectModal", `${reloginSrc}\nreturn reloginAccount;`)(
           deps.window,
           deps.apiFetch,
-          deps.alert
+          deps.alert,
+          deps.openPasteRedirectModal || (() => {})
         );
       const calls: Array<{ path: string; accept: unknown }> = [];
       const tab: any = { location: null, closed: false, close() { this.closed = true; } };
       const alerts: string[] = [];
       const reloginOk = makeRelogin({
-        window: { open: () => tab },
+        window: { open: () => tab, location: { hostname: "bridge.example" } },
         apiFetch: async (p: string, opts: any) => {
           calls.push({ path: p, accept: opts?.headers?.Accept });
           return { ok: true, status: 200, json: async () => ({ url: "https://accounts.google.com/consent" }) };
@@ -369,7 +370,7 @@ async function runTests() {
       const badTab: any = { location: null, closed: false, close() { this.closed = true; } };
       const badAlerts: string[] = [];
       const reloginBad = makeRelogin({
-        window: { open: () => badTab },
+        window: { open: () => badTab, location: { hostname: "bridge.example" } },
         apiFetch: async () => ({ ok: false, status: 401, json: async () => ({}) }),
         alert: (m: string) => badAlerts.push(m),
       });

@@ -1488,6 +1488,40 @@ print(response.choices[0].message.content)</pre>
     </div>
   </div>
 
+  <!-- Finish sign-in by pasting the redirect URL (remote installs) -->
+  <div id="pasteRedirectModal" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.8); backdrop-filter: blur(6px); z-index: 1000; align-items: center; justify-content: center;">
+    <div style="background: var(--surface-card); border: 1px solid var(--border-hover); border-radius: var(--radius-lg); width: 90%; max-width: 520px; padding: 24px; box-shadow: 0 20px 40px rgba(0,0,0,0.8);">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">
+        <h3 style="margin: 0; font-size: 1.1rem; font-weight: 600; color: var(--text-main);">Finish sign-in</h3>
+        <button type="button" onclick="closePasteRedirectModal()" style="background: transparent; border: none; color: var(--text-muted); cursor: pointer; font-size: 1.2rem; padding: 4px;">&times;</button>
+      </div>
+
+      <p style="font-size: 0.82rem; color: var(--text-muted); margin-bottom: 12px; line-height: 1.45;">
+        Google sends the sign-in result to <code>localhost:51121</code>, which lives on the bridge host, so that tab
+        shows a page this computer cannot open. This is expected. Copy the <strong>whole address</strong> from that
+        tab's address bar and paste it below; the bridge finishes the sign-in itself.
+      </p>
+
+      <div style="display: flex; flex-direction: column; gap: 12px; margin-bottom: 16px;">
+        <div>
+          <label style="display: block; font-size: 0.78rem; font-weight: 500; color: var(--text-muted); margin-bottom: 4px;">Account</label>
+          <input type="text" id="pasteRedirectEmail" readonly style="width: 100%; box-sizing: border-box; background: var(--surface-input); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 10px 12px; color: var(--text-faint); font-family: var(--font-mono); font-size: 0.85rem; cursor: not-allowed;" />
+        </div>
+        <div>
+          <label style="display: block; font-size: 0.78rem; font-weight: 500; color: var(--text-muted); margin-bottom: 4px;">Redirect URL from the tab Google opened (required)</label>
+          <textarea id="pasteRedirectUrl" rows="3" placeholder="http://localhost:51121/oauth-callback?state=...&code=..." style="width: 100%; box-sizing: border-box; background: var(--surface-input); border: 1px solid var(--border-hover); border-radius: var(--radius-md); padding: 10px 12px; color: var(--text-main); font-family: var(--font-mono); font-size: 0.82rem; resize: vertical; outline: none;" onfocus="this.style.borderColor='var(--border-active)'" onblur="this.style.borderColor='var(--border-hover)'"></textarea>
+        </div>
+      </div>
+
+      <div id="pasteRedirectErrorMsg" style="display: none; font-size: 0.8rem; margin-bottom: 16px;"></div>
+
+      <div style="display: flex; justify-content: flex-end; gap: 8px;">
+        <button type="button" class="btn btn-secondary" onclick="closePasteRedirectModal()">Cancel</button>
+        <button type="button" id="pasteRedirectSubmitBtn" class="btn btn-primary" onclick="submitPasteRedirect()">Finish sign-in</button>
+      </div>
+    </div>
+  </div>
+
   <script>
     let poolCache = null;
 
@@ -1850,9 +1884,64 @@ print(response.choices[0].message.content)</pre>
         if (!data || !data.url) throw new Error("the bridge returned no consent URL");
         if (tab) tab.location = data.url;
         else window.location = data.url;
+        // On the bridge's own machine the callback tab completes by itself, so the
+        // paste box is only needed when the dashboard is served from another host.
+        const host = (window.location && window.location.hostname) || "";
+        if (!/^(localhost|127\.0\.0\.1|\[::1\]|::1)$/.test(host)) openPasteRedirectModal(email);
       } catch (err) {
         if (tab) tab.close();
         alert("Failed to start re-login: " + err.message);
+      }
+    }
+
+    function openPasteRedirectModal(email) {
+      const modal = document.getElementById("pasteRedirectModal");
+      const emailInput = document.getElementById("pasteRedirectEmail");
+      const urlInput = document.getElementById("pasteRedirectUrl");
+      const errEl = document.getElementById("pasteRedirectErrorMsg");
+      emailInput.value = email || "whichever account Google signs in";
+      urlInput.value = "";
+      errEl.style.display = "none";
+      errEl.textContent = "";
+      modal.style.display = "flex";
+      urlInput.focus();
+    }
+
+    function closePasteRedirectModal() {
+      document.getElementById("pasteRedirectModal").style.display = "none";
+    }
+
+    /** Hand the dead tab's address to the bridge; it parses code and verifier and finishes. */
+    async function submitPasteRedirect() {
+      const urlInput = document.getElementById("pasteRedirectUrl");
+      const errEl = document.getElementById("pasteRedirectErrorMsg");
+      const btn = document.getElementById("pasteRedirectSubmitBtn");
+      const value = (urlInput.value || "").trim();
+      errEl.style.display = "none";
+      if (!value) {
+        errEl.textContent = "Paste the whole address from the tab Google redirected to.";
+        errEl.style.display = "block";
+        return;
+      }
+      btn.disabled = true;
+      try {
+        const res = await apiFetch("/oauth/exchange", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ redirectUrl: value })
+        });
+        const data = await res.json().catch(function () { return null; });
+        if (!res.ok) {
+          throw new Error(data && data.error && data.error.message ? data.error.message : "HTTP " + res.status);
+        }
+        closePasteRedirectModal();
+        fetchPoolStatus();
+        alert("Signed in as " + (data && data.email ? data.email : "the account") + ".");
+      } catch (err) {
+        errEl.textContent = err.message;
+        errEl.style.display = "block";
+      } finally {
+        btn.disabled = false;
       }
     }
 
