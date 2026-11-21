@@ -32,6 +32,7 @@ let respond: (account: any) => Response = () => new Response("{}", { status: 200
 
 (OAuthManager.prototype as any).loadSavedAccount = () => current;
 (OAuthManager.prototype as any).getValidAccessToken = async () => "token";
+(OAuthManager.prototype as any).getValidAccessTokenForAccount = async () => "token";
 (OAuthManager.prototype as any).isAutoFailoverEnabled = () => true;
 (OAuthManager.prototype as any).listAccounts = () => ({ accounts: pool, activeIndex: pool.indexOf(current) });
 (OAuthManager.prototype as any).selectNextAvailableAccount = () => {
@@ -48,8 +49,12 @@ let respond: (account: any) => Response = () => new Response("{}", { status: 200
 // The suite's own HTTP calls to the bridge must bypass the upstream fetch stub.
 const realFetch = globalThis.fetch;
 
-(globalThis as any).fetch = async () => {
-  attempts.push(current.email);
+// A pool that runs out on reset-less 429s asks Google to count the request and then sends one
+// comparison request (request-refusal.ts). Here both get the same answer as everything else, so
+// the run stays a per-minute exhaustion; `attempts` counts the pool's own tries only.
+(globalThis as any).fetch = async (url: unknown, init?: any) => {
+  const aside = String(url).endsWith(":countTokens") || String(init?.body ?? "").includes("Reply with the single word OK.");
+  if (!aside) attempts.push(current.email);
   return respond(current);
 };
 

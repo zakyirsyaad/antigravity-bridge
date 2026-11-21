@@ -30,6 +30,7 @@ let respond: (account: any) => Response = () => ok();
 
 (OAuthManager.prototype as any).loadSavedAccount = () => current;
 (OAuthManager.prototype as any).getValidAccessToken = async () => "token";
+(OAuthManager.prototype as any).getValidAccessTokenForAccount = async () => "token";
 (OAuthManager.prototype as any).isAutoFailoverEnabled = () => failoverEnabled;
 (OAuthManager.prototype as any).listAccountsWithWebCookies = () => [];
 (OAuthManager.prototype as any).listAccounts = () => ({ accounts: pool, activeIndex: pool.indexOf(current) });
@@ -47,8 +48,12 @@ let respond: (account: any) => Response = () => ok();
 (QuotaTracker.prototype as any).load = () => ({ perAccount: {} });
 (QuotaTracker.prototype as any).save = () => {};
 
-(globalThis as any).fetch = async () => {
-  attempts.push(current.email);
+// A pool that runs out on reset-less 429s asks Google to count the request and then sends one
+// comparison request (request-refusal.ts). Here both get the same answer as everything else, so
+// the run stays a per-minute exhaustion; `attempts` counts the pool's own tries only.
+(globalThis as any).fetch = async (url: unknown, init?: any) => {
+  const aside = String(url).endsWith(":countTokens") || String(init?.body ?? "").includes("Reply with the single word OK.");
+  if (!aside) attempts.push(current.email);
   return respond(current);
 };
 

@@ -411,6 +411,13 @@ hermes --provider antigravity -m gemini-3.8-flash-tiered -z "Check workspace fil
 hermes --provider antigravity -m gemini-3.8-flash-tiered --tui
 ```
 
+> **Hermes's default prompt is refused by Google (seen 2026-11-21).** Google answers HTTP 429
+> `Resource has been exhausted` to any request whose system prompt opens with Hermes Agent's identity
+> line, on every account and model, even with quota left. The bridge reports it as HTTP 400 *"Google
+> refused this request"* (see [Error responses](#error-responses)) and does not alter the prompt to
+> get around it. Waiting or adding accounts does not help; use another provider for Hermes while
+> this lasts.
+
 ---
 
 ### 3. Cursor IDE & Continue.dev
@@ -557,8 +564,11 @@ top-level `type: "error"` that the Anthropic SDKs expect. The message says which
 | Status | `error.type` | What happened | What to do |
 | :--- | :--- | :--- | :--- |
 | `400` | `invalid_request_error` | Google rejected the request itself (a tool schema or parameter it cannot take), the model id matches nothing, or a Gemini Web model was requested with no cookies linked or configured. Google's own message is kept | Fix the request, or link cookies (see [Gemini Web](#-gemini-web-argon)); retrying will not help |
+| `400` | `invalid_request_error` | Google answered this request 429 on every account tried, then answered a neutral request of the same size on one of them. It refuses something in the request, most often its system prompt (it refuses some third-party agents' prompts this way). The message starts *"Google refused this request"*. No account rests or cools down | Change the request; waiting, retrying or adding accounts will not help |
 | `401` | `unauthorized` | A non-loopback caller sent no key or the wrong one, or the bridge has no `BRIDGE_API_KEY` set at all | Send the key, or set one on the bridge |
 | `403` | `forbidden` | A web page on another origin called the management API | Use the dashboard on the bridge's own host |
+| `403` | `permission_error` | Google refused the account itself, for example *"Verify your account to continue."* | Re-login that account in the dashboard and complete Google's prompt |
+| `429` | `rate_limit_error` | Every account tried answered a 429 that names no reset: a per-minute limit. Comes with `Retry-After`; no quota cooldown is recorded, and the accounts rest in memory until then | Retry after the `Retry-After` seconds |
 | `503` | `overloaded_error` | Google has no capacity for the model on every account tried. Not quota: nothing cools down | Retry shortly, or use another model |
 | `503` | `api_error` | Google answered some other 503 (an outage) on every account tried | Retry shortly |
 | `500` | `api_error` | Gemini Web failed: signed-out cookies, a timeout, an error page (possibly its limit, which the bridge does not recognize as such), or an answer with nothing usable (for example only a tool call the request does not allow) | Read the message; see [Gemini Web](#-gemini-web-argon) |
@@ -566,8 +576,8 @@ top-level `type: "error"` that the Anthropic SDKs expect. The message says which
 
 Two exceptions, both from how streaming works:
 
-- On `/v1/chat/completions` with `stream: true` and a CloudCode model, only a `400` or `503` is sent as
-  a real status. Every other failure before the first chunk comes back as HTTP `200` with a
+- On `/v1/chat/completions` with `stream: true` and a CloudCode model, only the `400`, `403`, `429`
+  and `503` in this table are sent as a real status. Every other failure before the first chunk comes back as HTTP `200` with a
   `data: {"error": …}` event, so a `200` on that route does not by itself mean success. (A Gemini Web
   model's answer is in hand before anything is written, so its failures are always a real status.)
 - Once a stream has started, a failure on either route can only be an in-band error event.
@@ -646,6 +656,7 @@ local install.
 | `BRIDGE_TRUST_LOCAL` | trusted | `0` requires the key from loopback callers too |
 | `BRIDGE_UPSTREAM_TIMEOUT_MS` | `60000` | How long to wait for Google's first response before treating it as a stall |
 | `BRIDGE_STALL_REST_SECONDS` | `300` | How long a stalled account is skipped (in memory only, not a quota cooldown); at most one year |
+| `BRIDGE_RATE_REST_SECONDS` | `60` | How long the accounts tried are skipped after a per-minute 429 exhausted the pool (in memory only, not a quota cooldown); at most one year |
 | `BRIDGE_CONNECT_ATTEMPT_TIMEOUT_MS` | `2000` | Time each of Google's addresses gets to connect |
 | `BRIDGE_ANSWER_RESERVE_TOKENS` | `8192` | Output tokens held back from thinking for the visible answer |
 | `BRIDGE_TOOL_MIN_OUTPUT_TOKENS` | off | Raises a smaller output cap on requests that carry tools (see [Controlling reasoning](#controlling-reasoning)) |
