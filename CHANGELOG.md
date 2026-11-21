@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Fixed: a 500 when the last account tried was one Google wants verified
+
+When every usable account answered 429 or 503 and the run happened to end on an account Google
+refuses with 403 *"Verify your account to continue."*, the bridge read only that last attempt and
+answered HTTP 500 *"All accounts in the pool are currently rate limited"*. It showed on the first
+request after a restart, which forgets which account is flagged. The answer now follows the accounts
+that could have served: the 400, 429 or 503 the run earned.
+
 ## 2.7.2
 
 Fixes only, from failures seen on a shared bridge between 2026-11-16 and 2026-11-21. **Update and
