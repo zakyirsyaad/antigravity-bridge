@@ -20,7 +20,8 @@
 import { AntigravityClient } from "../src/antigravity-client";
 import { OAuthManager } from "../src/oauth";
 import { QuotaTracker } from "../src/quota-tracker";
-import { PoolExhaustedError } from "../src/pool-failures";
+import { PoolExhaustedError, PoolFailures } from "../src/pool-failures";
+import { clearVerification } from "../src/account-verification";
 import { RateLimitRests } from "../src/rate-limit-rest";
 import {
   COMPARISON_MAX_CHARS,
@@ -362,6 +363,35 @@ async function runTests() {
   expect("is refused", err instanceof RequestRefusedError, true);
   expect("says the account tried", String(err?.message).includes("the account tried"), true);
   expect("the account does not rest", resting(), 0);
+
+  // Seen on the VPS on 2026-11-21, on the first request after a restart: three accounts answered
+  // 429 and the run ended on the one Google wants verified (403). Only the last attempt was read,
+  // so the 429s were dropped and the client got a 500 naming a cooldown nobody recorded.
+  const lastRefused = () => (current === C ? fail(403, "Verify your account to continue.") : fail(429, TRANSIENT));
+  reset(lastRefused);
+  err = await caught(() => client.generateContent(payload as any));
+  clearVerification(C.email);
+  expect("a run ending on a refused account: still a refused request", err instanceof RequestRefusedError, true);
+  expect("it counts the accounts that answered 429", String(err?.message).includes("2 of 3 accounts tried"), true);
+  expect("the comparison goes to the last account that answered 429", comparisons()[0]?.account, B.email);
+  reset(lastRefused, () => fail(429, TRANSIENT));
+  err = await caught(() => client.streamGenerateContent(payload as any));
+  clearVerification(C.email);
+  expect("with a rate limited comparison: a per-minute exhaustion, not a 500", err instanceof PoolExhaustedError && err.retryAfterSeconds === 60, true);
+  const blank = { hit429: false, hit503: false, message503: "", stalled: false };
+  const mixed = new PoolFailures();
+  mixed.record("a", { ...blank, hit503: true, message503: "No capacity available for model x on the server" });
+  mixed.record("b", { ...blank, hit403: true });
+  expect("a 503 before the refused account is still no capacity", (mixed.exhaustedError("m") as any)?.kind, "capacity");
+  expect("and the pool still ran out", mixed.ranOut(), true);
+  const onlyRefused = new PoolFailures();
+  onlyRefused.record("b", { ...blank, hit403: true });
+  expect("only refused accounts: the 403 itself is the answer", onlyRefused.exhaustedError("m"), null);
+  expect("and that is not the pool running out", onlyRefused.ranOut(), false);
+  const otherLast = new PoolFailures();
+  otherLast.record("a", { ...blank, hit429: true });
+  otherLast.record("b", blank);
+  expect("a run ending on some other failure keeps that failure", otherLast.exhaustedError("m"), null);
 
   console.log("\n[9/11] The streaming path decides the same way ...");
   reset(() => fail(429, TRANSIENT));

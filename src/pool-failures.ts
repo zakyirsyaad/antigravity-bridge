@@ -27,6 +27,8 @@ export interface AttemptOutcome {
   cooldownRecorded?: boolean;
   /** Google's own message for the 429, when there was one. */
   message429?: string;
+  /** Google refused the account itself (403). It says nothing about the accounts that can serve. */
+  hit403?: boolean;
 }
 
 const NO_CAPACITY = /no capacity/i;
@@ -117,6 +119,9 @@ export class PoolFailures {
   private lastMessage429 = "";
   private lastAccount429: string | null = null;
   private last: { kind: FailureKind; message503: string; stallAttempts: number } | null = null;
+  /** Whether the latest attempt was an account Google refused, and how the one before those ended. */
+  private endedOnRefusedAccount = false;
+  private lastBeforeRefusal: { kind: FailureKind; message503: string; stallAttempts: number } | null = null;
 
   record(email: string | undefined, outcome: AttemptOutcome): void {
     const account = email || "(active account)";
@@ -126,7 +131,20 @@ export class PoolFailures {
     if (outcome.cooldownRecorded) this.cooldownWritten = true;
     if (outcome.message429) this.lastMessage429 = outcome.message429;
     if (kind === "quota" && email) this.lastAccount429 = email;
-    this.last = { kind, message503: outcome.message503, stallAttempts: outcome.stallAttempts ?? 1 };
+    const ended = { kind, message503: outcome.message503, stallAttempts: outcome.stallAttempts ?? 1 };
+    this.endedOnRefusedAccount = kind === "other" && outcome.hit403 === true;
+    if (!this.endedOnRefusedAccount) this.lastBeforeRefusal = ended;
+    this.last = ended;
+  }
+
+  /**
+   * How the run ended, for wording it. A refused account (403) is that account's own trouble: when
+   * the run happens to end on one, the verdict is the accounts that could have served. Reading
+   * only the last attempt turned three 429s and a closing 403 into a 500 that named a cooldown
+   * nobody recorded. A run of nothing but refused accounts keeps its 403.
+   */
+  private verdict(): { kind: FailureKind; message503: string; stallAttempts: number } | null {
+    return this.endedOnRefusedAccount ? (this.lastBeforeRefusal ?? this.last) : this.last;
   }
 
   /**
@@ -135,14 +153,16 @@ export class PoolFailures {
    * which is that account's problem and says nothing about the pool.
    */
   ranOut(): boolean {
-    return this.last !== null && this.last.kind !== "other";
+    const last = this.verdict();
+    return last !== null && last.kind !== "other";
   }
 
   /** The error to end the run with, or null to keep the caller's own. */
   exhaustedError(model: string): PoolExhaustedError | PoolStalledError | null {
-    if (!this.last) return null;
-    const google = this.last.message503 ? ` (Google: ${this.last.message503})` : "";
-    switch (this.last.kind) {
+    const last = this.verdict();
+    if (!last) return null;
+    const google = last.message503 ? ` (Google: ${last.message503})` : "";
+    switch (last.kind) {
       case "capacity":
         return new PoolExhaustedError(
           "capacity",
@@ -164,7 +184,7 @@ export class PoolFailures {
         // rested nothing. A pool that retried in place waited more than once, so
         // the wait is said as it happened.
         const seconds = Math.round(upstreamTimeoutMs() / 1000);
-        const attempts = this.last.stallAttempts;
+        const attempts = last.stallAttempts;
         const waited = attempts > 1 ? `to ${attempts} attempts of ${seconds}s each` : `within ${seconds}s`;
         return new PoolStalledError(
           `Google stopped answering requests for model ${model}: ${this.describe("stall")} gave no ` +

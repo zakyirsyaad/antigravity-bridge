@@ -459,6 +459,7 @@ export class AntigravityClient {
         cooldownRecorded,
         stalled,
         stallAttempts,
+        hit403,
       });
 
       // Google stopped answering: leave this account for another one, a bounded
@@ -630,6 +631,7 @@ export class AntigravityClient {
         cooldownRecorded,
         stalled,
         stallAttempts,
+        hit403,
       });
 
       if (stalled && poolRotates && stallRotations < MAX_STALL_ROTATIONS) {
