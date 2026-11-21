@@ -94,7 +94,7 @@ Everything else runs offline — no account, no network, no quota — by stubbin
 | `test:usage-panel` | `/api/usage` reports the bridge's counters per model, each labelled with its backend (`gemini-web` for Gemini Web, `gemini-web-fallback` included), sorted by requests, carrying only counts and the id, and refused to a foreign page; the dashboard's ledger escapes model ids (a client chooses them), labels the column as the requested id, marks Gemini Web counts with `~` and an estimate chip, does not claim CloudCode counts are all Google's, shows shares of all tokens and relative last use, rounds compact counts before choosing the unit, adds the footnote only when a Gemini Web row exists, shows no "since" note before anything is counted, has an empty state, and its poll never prompts for a key and says when it could not load |
 | `test:rate-limit` | a pool that runs out on 429s with no reset says per-minute rate limit and answers HTTP 429 `rate_limit_error` with `Retry-After: 60`, on the wire too; a 429 that wrote a cooldown keeps the rate-limited wording; a capacity exhaustion carries no retry hint |
 | `test:rate-rest` | after a per-minute exhaustion every account tried rests in memory, and a retry inside the rest fails fast with a retry hint and no upstream attempt |
-| `test:request-refused` | a pool that runs out on reset-less 429s asks one comparison request: neutral, as large as the request, same model, on the account that last answered 429, non-streaming, carrying none of the request's text or tools; when it is answered the request is refused (`RequestRefusedError`: no Google status, no retry hint, the model named, the accounts counted, no email), no account rests and the next request goes upstream; a comparison that is rate limited too, answers anything else, fails to connect or times out leaves the per-minute handling as it was; none is asked for a 429 that wrote a cooldown, a 503, a request past `COMPARISON_MAX_CHARS`, or a resting pool; one account and the stream path decide the same way; all four paths answer HTTP 400 `invalid_request_error` with no `Retry-After`, and a real per-minute limit is still a 429 with one |
+| `test:request-refused` | a pool that runs out on reset-less 429s has Google count the request (`countTokens`, as text, inline data left out) and then asks one comparison request, once: neutral, a quarter more tokens than the count plus an allowance per inline part, same model, the request's own `generationConfig` and none invented, on the account that last answered 429, streamed and dropped as soon as it opens, carrying none of the request's text or tools; when it is answered the request is refused (`RequestRefusedError`: no Google status, no retry hint, the model named, the accounts counted, no email), no account rests and the next request goes upstream; a comparison that is rate limited too, answers anything else, fails to connect or times out leaves the per-minute handling as it was, and so does a token that cannot be refreshed or a count that fails, has no total or cannot connect (no count, no comparison); none is asked for a 429 that wrote a cooldown, a 503, a request counted past `COMPARISON_MAX_TOKENS` or too long to count, or a resting pool; one account and the stream path decide the same way; all four paths answer HTTP 400 `invalid_request_error` with no `Retry-After`, and a real per-minute limit is still a 429 with one |
 
 When stubbing, keep side effects off the real `~/.zcode` files and off `launchctl` — several suites
 assert that explicitly, and that is deliberate. A suite that stubs `fs` for the accounts path stubs
@@ -185,17 +185,33 @@ Two nested loops per request: an outer loop bounded by pool size, an inner loop 
 - **A 429 with no reset is a per-minute limit, or Google refusing the request.** Both arrive as
   `Resource has been exhausted (e.g. check quota).` with nothing for `record429()` to parse, so no
   cooldown is written. When the pool runs out on those, `exhaustedWithRest()` first asks one
-  comparison request (`request-refusal.ts`): neutral filler as large as the request, for the same
-  model, on the account that last answered 429. If Google answers it, neither that account's rate
-  limit nor the request's size explains the 429, which leaves the request's content: the run ends
+  comparison request (`request-refusal.ts`): neutral filler of at least as many tokens as the
+  request, with the request's own `generationConfig`, for the same model, on the account that last
+  answered 429. If Google answers it, neither that account's rate limit nor the request's size or
+  output settings explain the 429, which leaves the request's content: the run ends
   as a `RequestRefusedError`, nobody rests, and the server answers HTTP 400 `invalid_request_error`
   with no `Retry-After`. Anything else (another 429, any other status, no connection, the timeout)
   proves nothing: the accounts tried rest in memory for `BRIDGE_RATE_REST_SECONDS` (60 s,
   `RateLimitRests`, its own `RestBook`), the client gets HTTP 429 with `Retry-After`, and a retry
-  inside the rest fails fast without asking Google. The comparison must stay the same size as the
+  inside the rest fails fast without asking Google. The comparison must never be smaller than the
   request: a real tokens-per-minute limit lets a small request through while refusing a large one,
   so a small comparison would call every large request refused and tell Claude Code not to retry.
-  Past `COMPARISON_MAX_CHARS` (400,000) it is not asked, because it costs that many input tokens.
+  Size is tokens, and characters do not predict them: Google counted prose at 4.5 characters per
+  token, a real request with tools at 4.06, JSON data at 2.4, minified code at 1.5 and CSV numbers
+  at 1.0. So Google counts the request first (`v1internal:countTokens`) and the filler (two-letter
+  words, 3.00 characters per token on Gemini and Claude ids alike) is built to that count; with no
+  count, no comparison is sent. `countTokens` accepts `tools` and `systemInstruction` and ignores
+  them, so the request is counted as its JSON text, which ran 3.7% under what a request with 20
+  tools cost when sent: `comparisonTokens()` adds a quarter. Measure with
+  `usageMetadata.promptTokenCount` before changing either number. The comparison is streamed and
+  dropped as soon as it opens, because only its status is read and a full answer under the
+  request's own output settings took up to 17 s. It goes to the account that answered 429 *last*,
+  at once: a limit that clears
+  between that 429 and the comparison reads as a refusal, so do not move it to the active account
+  (after rotation, the first one tried), delay it or retry it. Past `COMPARISON_MAX_TOKENS`
+  (120,000) it is not asked, because it costs that many input tokens, and that cost is not in
+  `bridge:usage`. A request over `COMPARISON_MAX_CHARS` (a million characters, inline data aside)
+  is not even counted.
   **`RequestRefusedError` is not an `UpstreamError` and has no status**, for the reason
   `PoolStalledError` has none: Google's status was 429, and code that reads Google's status would
   take it for a rate limit, the one thing it is known not to be. Before this, one refused request

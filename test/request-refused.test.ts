@@ -22,7 +22,14 @@ import { OAuthManager } from "../src/oauth";
 import { QuotaTracker } from "../src/quota-tracker";
 import { PoolExhaustedError } from "../src/pool-failures";
 import { RateLimitRests } from "../src/rate-limit-rest";
-import { COMPARISON_MAX_CHARS, RequestRefusedError } from "../src/request-refusal";
+import {
+  COMPARISON_MAX_CHARS,
+  COMPARISON_MAX_TOKENS,
+  RequestRefusedError,
+  comparisonRequest,
+  comparisonTokens,
+  countableText,
+} from "../src/request-refusal";
 import { BridgeServer } from "../src/server";
 
 const A = { email: "a@example.com", projectId: "p", refreshToken: "ra" };
@@ -31,6 +38,8 @@ const C = { email: "c@example.com", projectId: "p", refreshToken: "rc" };
 
 interface Call {
   account: string;
+  /** The token count asked before the comparison. */
+  count: boolean;
   comparison: boolean;
   url: string;
   body: any;
@@ -42,10 +51,18 @@ let current: any = A;
 let calls: Call[] = [];
 let respond: () => Response | Promise<Response> = () => ok();
 let respondComparison: (init: any) => Response | Promise<Response> = () => ok();
+/** What Google "counts": two characters per token here, denser than any filler assumes. */
+const countedFor = (body: any) => Math.ceil(String(body?.request?.contents?.[0]?.parts?.[0]?.text ?? "").length / 2);
+const defaultCount = (body: any) => new Response(JSON.stringify({ totalTokens: countedFor(body) }), { status: 200 });
+let respondCount: (body: any) => Response | Promise<Response> = defaultCount;
 
 (OAuthManager.prototype as any).loadSavedAccount = () => current;
 (OAuthManager.prototype as any).getValidAccessToken = async () => `token:${current.email}`;
-(OAuthManager.prototype as any).getValidAccessTokenForAccount = async (account: any) => `token:${account.email}`;
+let tokenRefreshFails = false;
+(OAuthManager.prototype as any).getValidAccessTokenForAccount = async (account: any) => {
+  if (tokenRefreshFails) throw new Error("Token refresh failed (400)");
+  return `token:${account.email}`;
+};
 (OAuthManager.prototype as any).isAutoFailoverEnabled = () => true;
 (OAuthManager.prototype as any).listAccountsWithWebCookies = () => [];
 (OAuthManager.prototype as any).listAccounts = () => ({ accounts: pool, activeIndex: pool.indexOf(current) });
@@ -66,17 +83,23 @@ let respondComparison: (init: any) => Response | Promise<Response> = () => ok();
 // The suite's own HTTP calls to the bridge must bypass the upstream fetch stub.
 const realFetch = globalThis.fetch;
 
-/** The request under test always carries a system instruction; the comparison never does. */
+/**
+ * Three kinds of upstream call: the pool's attempts (always with a system instruction here), the
+ * token count of the request, and the comparison (neither has a system instruction).
+ */
 (globalThis as any).fetch = async (url: string, init: any) => {
   const body = JSON.parse(init.body);
-  const comparison = body.request?.systemInstruction === undefined;
+  const count = String(url).endsWith(":countTokens");
+  const comparison = !count && body.request?.systemInstruction === undefined;
   calls.push({
     account: String(init.headers.Authorization).replace("Bearer token:", ""),
+    count,
     comparison,
     url: String(url),
     body,
     userAgent: String(init.headers["User-Agent"]),
   });
+  if (count) return respondCount(body);
   return comparison ? respondComparison(init) : respond();
 };
 
@@ -95,6 +118,7 @@ function payloadWith(userText: string) {
       systemInstruction: { parts: [{ text: "You are Example Agent, a third-party harness." }] },
       contents: [{ role: "user", parts: [{ text: userText }] }],
       tools: [{ functionDeclarations: [{ name: "read_file", description: "Read a file", parameters: { type: "OBJECT" } }] }],
+      generationConfig: { maxOutputTokens: 64000, thinkingConfig: { include_thoughts: true, thinking_budget: 4000 } },
     },
   };
 }
@@ -130,10 +154,15 @@ function reset(
   calls = [];
   respond = responder;
   respondComparison = comparisonResponder;
+  respondCount = defaultCount;
   RateLimitRests.clear();
 }
 
 const comparisons = () => calls.filter((c) => c.comparison);
+const counts = () => calls.filter((c) => c.count);
+/** The filler is two-letter words, one token per three characters; the closing question is not counted. */
+const fillerTokens = (request: any) =>
+  Math.floor(String(request?.contents?.[0]?.parts?.[0]?.text ?? "").replace("Reply with the single word OK.", "").length / 3);
 const resting = () => pool.filter((a) => RateLimitRests.isResting(a.email)).length;
 
 async function runTests() {
@@ -165,23 +194,77 @@ async function runTests() {
   expect("reached upstream", calls.length, 1);
   expect("answered", answer?.response?.candidates?.[0]?.content?.parts?.[0]?.text, "ok");
 
-  console.log("\n[3/11] The comparison: one neutral request of the same size, same model, same account ...");
+  console.log("\n[3/11] The comparison: Google counts the request, then answers a neutral one of that size ...");
   reset(() => fail(429, TRANSIENT));
   await caught(() => client.generateContent(payload as any));
   const only = comparisons();
-  expect("three attempts and one comparison", calls.length, 4);
+  const counted = counts();
+  expect("three attempts, one count, one comparison", calls.length, 5);
+  expect("the count comes after the attempts", calls[3].count, true);
+  expect("the comparison comes last", calls[4].comparison, true);
+  expect("exactly one count", counted.length, 1);
   expect("exactly one comparison", only.length, 1);
-  expect("after the attempts", calls[3].comparison, true);
-  expect("on an account that answered 429", only[0]?.account, C.email);
+  expect("the count is asked of the account that answered 429 last", counted[0]?.account, C.email);
+  expect("the count names the model", counted[0]?.body?.request?.model, MODEL);
+  expect("the count is of the request itself", JSON.stringify(counted[0]?.body).includes("Example Agent"), true);
+  expect("the count presents the Antigravity client", counted[0]?.userAgent.startsWith("antigravity/"), true);
+  expect("the comparison is asked of the same account", only[0]?.account, C.email);
   expect("to the same model", only[0]?.body?.model, MODEL);
-  expect("non-streaming", only[0]?.url.endsWith("/v1internal:generateContent"), true);
+  expect("streaming, so the status is known before the answer", only[0]?.url.endsWith("/v1internal:streamGenerateContent?alt=sse"), true);
   expect("carries no tools", only[0]?.body?.request?.tools, undefined);
-  expect("asks for a short answer", (only[0]?.body?.request?.generationConfig?.maxOutputTokens ?? 1e9) <= 64, true);
+  expect(
+    "carries the request's own generation settings",
+    JSON.stringify(only[0]?.body?.request?.generationConfig),
+    JSON.stringify(payload.request.generationConfig)
+  );
   expect("presents the Antigravity client", only[0]?.userAgent.startsWith("antigravity/"), true);
-  const original = JSON.stringify(payload.request).length;
-  const compared = JSON.stringify(only[0]?.body?.request ?? {}).length;
-  expect("is about as large as the request", Math.abs(compared - original) / original < 0.1, true);
+  // The count is of the request as text. Google counted a real request with 20 tools 3.7% above
+  // its text (2026-11-21), so the comparison is a quarter larger than the count.
+  const wanted = Math.ceil(countedFor(counted[0]?.body) * 1.25);
+  const sent = fillerTokens(only[0]?.body?.request);
+  expect("is a quarter more tokens than Google counted, never fewer", sent >= wanted, true);
+  expect("and not many more", sent < wanted + 8, true);
+  expect("the margin is applied to the count", comparisonTokens(8000, 0), 10000);
+  expect("an inline part adds a flat allowance", comparisonTokens(8000, 2), 12000);
   expect("carries none of the request's text", JSON.stringify(only[0]?.body).includes("Example Agent"), false);
+
+  // Inline data is base64: its length says nothing about its tokens, and it is megabytes to send twice.
+  const image = payloadWith("hi");
+  (image.request.contents[0].parts as any[]).unshift({ inlineData: { mimeType: "image/png", data: "QUJD".repeat(500_000) } });
+  const countable = countableText(image.request);
+  expect("inline data is left out of what is counted", countable.text.includes("QUJDQUJD"), false);
+  expect("and remembered as one inline part", countable.inlineParts, 1);
+  reset(() => fail(429, TRANSIENT));
+  await caught(() => client.generateContent(image as any));
+  expect("a request with a large image is still compared", comparisons().length, 1);
+  expect("the count carries no base64", JSON.stringify(counts()[0]?.body).includes("QUJDQUJD"), false);
+  expect(
+    "the image gets an allowance on top of the count",
+    fillerTokens(comparisons()[0]?.body?.request) >= Math.ceil(countedFor(counts()[0]?.body) * 1.25) + 1000,
+    true
+  );
+  const plain = { contents: [{ role: "user", parts: [{ text: "hi" }] }] };
+  expect("filler for 1000 tokens is 1000 tokens", fillerTokens(comparisonRequest(1000, plain)), 1000);
+  expect("no generation settings are invented", "generationConfig" in comparisonRequest(1000, plain), false);
+
+  // Only the status matters: the stream is dropped as soon as it opens, however long the answer runs.
+  let pulled = 0;
+  const endless = () =>
+    new Response(
+      new ReadableStream({
+        pull(controller) {
+          pulled++;
+          controller.enqueue(new TextEncoder().encode("data: {}\n\n"));
+        },
+      }),
+      { status: 200 }
+    );
+  reset(() => fail(429, TRANSIENT), endless);
+  const before = Date.now();
+  err = await caught(() => client.generateContent(payload as any));
+  expect("an answer that never ends is still an answer", err instanceof RequestRefusedError, true);
+  expect("decided at once", Date.now() - before < 1000, true);
+  expect("without reading it through", pulled < 5, true);
 
   console.log("\n[4/11] The comparison is rate limited too: a per-minute limit, as before ...");
   reset(() => fail(429, TRANSIENT), () => fail(429, TRANSIENT));
@@ -190,6 +273,7 @@ async function runTests() {
   expect("retry hint", err?.retryAfterSeconds, 60);
   expect("says per-minute", String(err?.message).includes("per-minute rate limit"), true);
   expect("every account rests", resting(), 3);
+  expect("the comparison was asked once", comparisons().length, 1);
 
   console.log("\n[5/11] A comparison that proves nothing changes nothing ...");
   const inconclusive: Array<[string, (init: any) => Response | Promise<Response>]> = [
@@ -202,6 +286,28 @@ async function runTests() {
     reset(() => fail(429, TRANSIENT), responder);
     err = await caught(() => client.generateContent(payload as any));
     expect(`${label}: still a per-minute exhaustion`, err instanceof PoolExhaustedError && err.retryAfterSeconds === 60, true);
+    expect(`${label}: every account rests`, resting(), 3);
+  }
+
+  reset(() => fail(429, TRANSIENT));
+  tokenRefreshFails = true;
+  err = await caught(() => client.generateContent(payload as any));
+  tokenRefreshFails = false;
+  expect("a token that cannot be refreshed: still a per-minute exhaustion", err instanceof PoolExhaustedError && err.retryAfterSeconds === 60, true);
+  expect("a token that cannot be refreshed: nothing was asked", comparisons().length, 0);
+
+  // Without a count the comparison's size cannot be vouched for, so none is sent.
+  const uncounted: Array<[string, (body: any) => Response | Promise<Response>]> = [
+    ["a count Google refuses", () => fail(500, "Internal error")],
+    ["a count with no total", () => new Response("{}", { status: 200 })],
+    ["a count that cannot connect", () => Promise.reject(new TypeError("fetch failed"))],
+  ];
+  for (const [label, responder] of uncounted) {
+    reset(() => fail(429, TRANSIENT));
+    respondCount = responder;
+    err = await caught(() => client.generateContent(payload as any));
+    expect(`${label}: still a per-minute exhaustion`, err instanceof PoolExhaustedError && err.retryAfterSeconds === 60, true);
+    expect(`${label}: no comparison`, comparisons().length, 0);
     expect(`${label}: every account rests`, resting(), 3);
   }
 
@@ -232,11 +338,18 @@ async function runTests() {
   expect("no capacity: no comparison", comparisons().length, 0);
   expect("no capacity: still capacity", err?.kind, "capacity");
 
+  reset(() => fail(429, TRANSIENT));
+  respondCount = () => new Response(JSON.stringify({ totalTokens: COMPARISON_MAX_TOKENS }), { status: 200 });
+  err = await caught(() => client.generateContent(payload as any));
+  expect("a request counted past the token cap: no comparison", comparisons().length, 0);
+  expect("a request counted past the token cap: per-minute, as before", err instanceof PoolExhaustedError && err.retryAfterSeconds === 60, true);
+
   const huge = payloadWith("x".repeat(COMPARISON_MAX_CHARS + 1));
   reset(() => fail(429, TRANSIENT));
   err = await caught(() => client.generateContent(huge as any));
-  expect("a request past the size cap: no comparison", comparisons().length, 0);
-  expect("a request past the size cap: per-minute, as before", err instanceof PoolExhaustedError && err.retryAfterSeconds === 60, true);
+  expect("a request too long to count: not even counted", counts().length, 0);
+  expect("a request too long to count: no comparison", comparisons().length, 0);
+  expect("a request too long to count: per-minute, as before", err instanceof PoolExhaustedError && err.retryAfterSeconds === 60, true);
 
   calls = [];
   err = await caught(() => client.generateContent(payload as any));

@@ -14,7 +14,14 @@ import { UpstreamError } from "./upstream-error";
 export { UpstreamError };
 import { PoolExhaustedError, PoolFailures, rotationReason } from "./pool-failures";
 import { RateLimitRests, rateRestSeconds } from "./rate-limit-rest";
-import { comparisonRequest, comparisonTimeoutMs } from "./request-refusal";
+import {
+  COMPARISON_MAX_CHARS,
+  COMPARISON_MAX_TOKENS,
+  comparisonRequest,
+  comparisonTimeoutMs,
+  comparisonTokens,
+  countableText,
+} from "./request-refusal";
 import { clearVerification, flagVerification, isVerificationChallenge, isVerificationFlagged } from "./account-verification";
 import { GeminiWebClient, GEMINI_WEB_FALLBACK_USAGE_ID } from "./gemini-web-client";
 import { generateWithLinkedSessions, preferredLinkedSession } from "./gemini-web-rotation";
@@ -148,10 +155,15 @@ export class AntigravityClient {
     if (!(err instanceof PoolExhaustedError) || err.retryAfterSeconds === undefined) return err;
     // A reset-less 429 is also how Google refuses a request for what it says. Resting the
     // pool for that fails every other client for a minute over one request nobody can send.
+    //
+    // The account asked is the one that answered 429 last, and it is asked at once. A real
+    // limit that clears between that 429 and the comparison reads as a refusal, so the gap
+    // has to stay as short as it can be: not the active account (after rotation that is the
+    // first one tried, seconds earlier), no delay, no retry.
     if (await this.comparisonAnswered(payload, failures.lastRateLimitedAccount())) {
       console.warn(
-        `[AutoPool] Google answered 429 to a request for ${payload.model} on every account tried, then answered ` +
-          `a neutral request of the same size: the request is refused, not rate limited. No account rests.`
+        `[AutoPool] Google answered 429 to a request for ${payload.model}, then answered a neutral request of ` +
+          `the same size on the same account: the request is refused, not rate limited. No account rests.`
       );
       return failures.refusedError(payload.model);
     }
@@ -160,39 +172,58 @@ export class AntigravityClient {
   }
 
   /**
-   * Whether Google answers a neutral request as large as `payload`'s, for the same model, on the
-   * account that just answered 429 (see request-refusal.ts). Asked once, never retried: anything
-   * but an answer (another 429, any other status, the network, the timeout) proves nothing and
-   * is false, which leaves the per-minute handling as it was.
+   * Whether Google answers a neutral request of as many tokens as `payload`'s, for the same model,
+   * on the account that just answered 429 (see request-refusal.ts). Google counts the request
+   * first; with no count there is no comparison. Each is asked once, never retried: anything but
+   * an answer (another 429, any other status, the network, the timeout) proves nothing and is
+   * false, which leaves the per-minute handling as it was.
+   *
+   * The comparison is streamed and dropped as soon as it opens. Its status is the whole result,
+   * and it runs under the request's own output settings, where a full answer took up to 17 s.
    */
   private async comparisonAnswered(payload: AntigravityPayload, email: string | null): Promise<boolean> {
-    const request = comparisonRequest(payload.request);
     const account = email ? this.oauth.listAccounts().accounts.find((a) => a.email === email) : undefined;
-    if (!request || !account) return false;
+    const countable = countableText(payload.request);
+    if (!account || countable.text.length > COMPARISON_MAX_CHARS) return false;
+    const inconclusive = (why: string) => {
+      // Said every time: a 429 confirms the limit, anything else is why detection is off.
+      console.warn(`[AutoPool] The comparison for ${payload.model} ${why}; treating the 429 as a rate limit.`);
+      return false;
+    };
     try {
       const accessToken = await this.oauth.getValidAccessTokenForAccount(account);
-      const res = await fetch(`${ANTIGRAVITY_ENDPOINTS[0]}/v1internal:generateContent`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          "Content-Type": "application/json",
-          ...getAntigravityHeaders(),
-        },
-        body: JSON.stringify({
-          project: payload.project || account.projectId || DEFAULT_PROJECT_ID,
-          model: payload.model,
-          request,
-        }),
-        signal: AbortSignal.timeout(comparisonTimeoutMs()),
+      // One budget for the count and the comparison together.
+      const signal = AbortSignal.timeout(comparisonTimeoutMs());
+      const ask = (method: string, body: unknown) =>
+        fetch(`${ANTIGRAVITY_ENDPOINTS[0]}/v1internal:${method}`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            "Content-Type": "application/json",
+            Accept: "text/event-stream",
+            ...getAntigravityHeaders(),
+          },
+          body: JSON.stringify(body),
+          signal,
+        });
+      const counted = await ask("countTokens", {
+        request: { model: payload.model, contents: [{ role: "user", parts: [{ text: countable.text }] }] },
       });
-      await res.arrayBuffer();
-      return res.ok;
+      const total = counted.ok ? Number((await counted.json())?.totalTokens) : NaN;
+      if (!counted.ok) await counted.arrayBuffer();
+      if (!Number.isFinite(total) || total <= 0) return inconclusive(`could not be sized (count answered HTTP ${counted.status})`);
+      const tokens = comparisonTokens(total, countable.inlineParts);
+      if (tokens > COMPARISON_MAX_TOKENS) return inconclusive(`was not asked (the request is ${tokens} tokens)`);
+
+      const res = await ask("streamGenerateContent?alt=sse", {
+        project: payload.project || account.projectId || DEFAULT_PROJECT_ID,
+        model: payload.model,
+        request: comparisonRequest(tokens, payload.request),
+      });
+      await res.body?.cancel().catch(() => {});
+      return res.ok || inconclusive(`was answered HTTP ${res.status}`);
     } catch (e: any) {
-      console.warn(
-        `[AutoPool] The comparison request for ${payload.model} got no answer (${e?.cause?.code ?? e?.name ?? "error"}); ` +
-          `treating the 429 as a rate limit.`
-      );
-      return false;
+      return inconclusive(`got no answer (${e?.cause?.code ?? e?.name ?? "error"})`);
     }
   }
 

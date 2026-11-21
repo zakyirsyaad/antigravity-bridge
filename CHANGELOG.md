@@ -8,7 +8,7 @@ Google refuses some requests for what they say and answers them HTTP 429 `Resour
 (e.g. check quota).`, the same reply as a per-minute rate limit. On 2026-11-21 it did so to every
 request from Hermes Agent, whose system prompt opens "You are Hermes Agent,", on every account and
 model with the quota meters at 100%. The bridge called that a per-minute limit: the client was told to
-wait 60 seconds and retried six times, and each try rested the whole pool for a minute, so every other
+wait 60 seconds and sent the request six times, and each try rested the whole pool for a minute, so every other
 client's requests failed fast in the meantime.
 
 - When a pool runs out on 429s that name no reset, the bridge now asks Google one more thing: a
@@ -17,8 +17,9 @@ client's requests failed fast in the meantime.
 - The request is then answered HTTP 400 `invalid_request_error`, *"Google refused this request"*, with
   no `Retry-After`. No account rests, so other clients are not affected.
 - A real per-minute limit is unchanged: HTTP 429 with `Retry-After`, and the accounts rest until then.
-- The comparison costs one request's worth of input tokens, once per refused request, and is skipped
-  for requests over 400,000 characters.
+- Google counts the request's tokens first, and the comparison is a quarter larger than that count
+  so it is never the smaller of the two. It costs that many input tokens once per refused request,
+  is skipped above 120,000 tokens, and does not appear in `npm run bridge:usage`.
 - The bridge does not rewrite a refused prompt. Hermes Agent with its default prompt does not work
   through this backend while Google refuses it.
 
