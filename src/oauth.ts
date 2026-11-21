@@ -17,7 +17,7 @@ import {
 import { QuotaTracker } from "./quota-tracker";
 import { StallRegistry } from "./upstream-stall";
 import { RateLimitRests } from "./rate-limit-rest";
-import { clearVerification, isVerificationFlagged } from "./account-verification";
+import { clearVerification, isAccountDisabled, isAccountRefused, isVerificationFlagged } from "./account-verification";
 
 export interface PoolEvent {
   id: string;
@@ -608,7 +608,7 @@ export class OAuthManager {
         ? tracker.isAccountRateLimited(candidate.email, model) ||
           StallRegistry.isResting(candidate.email) ||
           RateLimitRests.isResting(candidate.email) ||
-          isVerificationFlagged(candidate.email)
+          isAccountRefused(candidate.email)
         : false;
       if (!isLimited) {
         storage.activeAccountIndex = candidateIdx;
@@ -653,6 +653,8 @@ export class OAuthManager {
       resting: RestingWindow | null;
       /** Google refused this account with a verification challenge; the card offers Re-login. */
       needsVerification: boolean;
+      /** Google answered that it has disabled this account; only its appeal restores it. */
+      disabledByGoogle: boolean;
       quota: any;
     }>;
     recentEvents: PoolEvent[];
@@ -693,6 +695,7 @@ export class OAuthManager {
         cooldown,
         resting,
         needsVerification: isVerificationFlagged(acc.email),
+        disabledByGoogle: isAccountDisabled(acc.email),
         quota: tracker.getQuotaForAccount(email),
       };
     });
