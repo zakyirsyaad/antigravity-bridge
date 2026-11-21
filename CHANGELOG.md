@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## 2.7.3
+
+Two fixes for pools that hold an account Google has refused, both found on the day 2.7.2 went out.
+**Update and restart the bridge** to get them.
 
 ### Fixed: a 500 when the last account tried was one Google wants verified
 
