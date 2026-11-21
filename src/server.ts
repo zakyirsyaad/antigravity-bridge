@@ -4,6 +4,7 @@ import { BRIDGE_DEFAULT_PORT, SUPPORTED_MODELS } from "./constants";
 import { OAuthManager, toPublicAccountSummary, type AccountToken } from "./oauth";
 import { AntigravityClient, UpstreamError } from "./antigravity-client";
 import { PoolExhaustedError, TRANSIENT_RATE_RETRY_SECONDS } from "./pool-failures";
+import { RequestRefusedError } from "./request-refusal";
 import { isVerificationChallenge } from "./account-verification";
 import { Transformer, UnknownModelError } from "./transformer";
 import { UsageTracker, UsageReport } from "./usage-tracker";
@@ -40,6 +41,19 @@ function isUpstreamClientError(err: unknown): err is UpstreamError {
  */
 function sendInvalidRequest(res: http.ServerResponse, route: string, err: Error): void {
   console.warn(`[Bridge] ${route}: Google rejected the request (400): ${String(err.message).slice(0, 400)}`);
+  res.writeHead(400, { "Content-Type": "application/json" });
+  res.end(JSON.stringify({ type: "error", error: { type: "invalid_request_error", message: err.message } }));
+}
+
+/**
+ * Google answered this request 429 on every account, then answered a neutral request of the
+ * same size (see request-refusal.ts): it refuses the request, and no wait changes that. A 429
+ * told Hermes `retryable: true`, so it kept sending the same request. It is the caller's
+ * request that has to change, hence a 400, with no Retry-After. The message is the bridge's own
+ * (it says what was compared), so unlike `sendInvalidRequest` the log line claims no Google 400.
+ */
+function sendRequestRefused(res: http.ServerResponse, route: string, err: RequestRefusedError): void {
+  console.warn(`[Bridge] ${route}: ${String(err.message).slice(0, 400)}`);
   res.writeHead(400, { "Content-Type": "application/json" });
   res.end(JSON.stringify({ type: "error", error: { type: "invalid_request_error", message: err.message } }));
 }
@@ -787,6 +801,10 @@ export class BridgeServer {
             if (!res.headersSent) sendInvalidRequest(res, pathname, err);
             return;
           }
+          if (err instanceof RequestRefusedError && !res.headersSent) {
+            sendRequestRefused(res, pathname, err);
+            return;
+          }
           if (isUpstreamUnavailable(err) && !res.headersSent) {
             sendUpstreamUnavailable(res, pathname, err);
             return;
@@ -1134,6 +1152,10 @@ export class BridgeServer {
           sendInvalidRequest(res, "/v1/messages", streamErr);
           return;
         }
+        if (!res.headersSent && streamErr instanceof RequestRefusedError) {
+          sendRequestRefused(res, "/v1/messages", streamErr);
+          return;
+        }
         if (!res.headersSent && isUpstreamUnavailable(streamErr)) {
           sendUpstreamUnavailable(res, "/v1/messages", streamErr);
           return;
@@ -1313,6 +1335,10 @@ export class BridgeServer {
       } catch (err: any) {
         if (isUpstreamClientError(err)) {
           sendInvalidRequest(res, "/v1/chat/completions", err);
+          return;
+        }
+        if (err instanceof RequestRefusedError) {
+          sendRequestRefused(res, "/v1/chat/completions", err);
           return;
         }
         // A Google 503 is a real 503 here too: FCC, which uses this route,

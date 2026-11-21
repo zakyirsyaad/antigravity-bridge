@@ -1,6 +1,7 @@
 import { UpstreamError } from "./upstream-error";
 import { upstreamTimeoutMs } from "./upstream-stall";
 import type { FailoverReason } from "./oauth";
+import { RequestRefusedError } from "./request-refusal";
 
 /**
  * How one pass over one account ended. Each kind the run can end on gets its own
@@ -114,6 +115,7 @@ export class PoolFailures {
   private readonly byKind = new Map<FailureKind, Set<string>>();
   private cooldownWritten = false;
   private lastMessage429 = "";
+  private lastAccount429: string | null = null;
   private last: { kind: FailureKind; message503: string; stallAttempts: number } | null = null;
 
   record(email: string | undefined, outcome: AttemptOutcome): void {
@@ -123,6 +125,7 @@ export class PoolFailures {
     this.byKind.set(kind, new Set(this.byKind.get(kind)).add(account));
     if (outcome.cooldownRecorded) this.cooldownWritten = true;
     if (outcome.message429) this.lastMessage429 = outcome.message429;
+    if (kind === "quota" && email) this.lastAccount429 = email;
     this.last = { kind, message503: outcome.message503, stallAttempts: outcome.stallAttempts ?? 1 };
   }
 
@@ -186,6 +189,26 @@ export class PoolFailures {
       default:
         return null;
     }
+  }
+
+  /** The account that most recently answered 429 in this run, for asking it the comparison. */
+  lastRateLimitedAccount(): string | null {
+    return this.lastAccount429;
+  }
+
+  /**
+   * The error for a run that ended on reset-less 429s when the comparison request was then
+   * answered (see request-refusal.ts): not a rate limit, so nothing rests and no retry is asked.
+   */
+  refusedError(model: string): RequestRefusedError {
+    return new RequestRefusedError(
+      `Google refused this request for model ${model}: ${this.describe("quota")} answered HTTP 429, yet an ` +
+        `account that had just answered 429 then answered a neutral request of the same size for the same ` +
+        `model. This is not a rate limit and not quota: no account was rested or put on cooldown, and ` +
+        `retrying the same request will not help. Google is refusing something in the request itself, ` +
+        `most often its system prompt: it answers some third-party agents' prompts this way.` +
+        (this.lastMessage429 ? ` (Google: ${this.lastMessage429})` : "")
+    );
   }
 
   /** The accounts this run tried, once each, for resting after a transient exhaustion. */

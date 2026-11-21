@@ -14,6 +14,7 @@ import { UpstreamError } from "./upstream-error";
 export { UpstreamError };
 import { PoolExhaustedError, PoolFailures, rotationReason } from "./pool-failures";
 import { RateLimitRests, rateRestSeconds } from "./rate-limit-rest";
+import { comparisonRequest, comparisonTimeoutMs } from "./request-refusal";
 import { clearVerification, flagVerification, isVerificationChallenge, isVerificationFlagged } from "./account-verification";
 import { GeminiWebClient, GEMINI_WEB_FALLBACK_USAGE_ID } from "./gemini-web-client";
 import { generateWithLinkedSessions, preferredLinkedSession } from "./gemini-web-rotation";
@@ -142,12 +143,57 @@ export class AntigravityClient {
    * per-minute 429: a retry inside the rest fails fast instead of burning one
    * upstream attempt per account inside the same saturated minute.
    */
-  private exhaustedWithRest(failures: PoolFailures, model: string): Error | null {
-    const err = failures.exhaustedError(model);
-    if (err instanceof PoolExhaustedError && err.retryAfterSeconds !== undefined) {
-      for (const email of failures.triedAccounts()) RateLimitRests.rest(email, rateRestSeconds());
+  private async exhaustedWithRest(failures: PoolFailures, payload: AntigravityPayload): Promise<Error | null> {
+    const err = failures.exhaustedError(payload.model);
+    if (!(err instanceof PoolExhaustedError) || err.retryAfterSeconds === undefined) return err;
+    // A reset-less 429 is also how Google refuses a request for what it says. Resting the
+    // pool for that fails every other client for a minute over one request nobody can send.
+    if (await this.comparisonAnswered(payload, failures.lastRateLimitedAccount())) {
+      console.warn(
+        `[AutoPool] Google answered 429 to a request for ${payload.model} on every account tried, then answered ` +
+          `a neutral request of the same size: the request is refused, not rate limited. No account rests.`
+      );
+      return failures.refusedError(payload.model);
     }
+    for (const email of failures.triedAccounts()) RateLimitRests.rest(email, rateRestSeconds());
     return err;
+  }
+
+  /**
+   * Whether Google answers a neutral request as large as `payload`'s, for the same model, on the
+   * account that just answered 429 (see request-refusal.ts). Asked once, never retried: anything
+   * but an answer (another 429, any other status, the network, the timeout) proves nothing and
+   * is false, which leaves the per-minute handling as it was.
+   */
+  private async comparisonAnswered(payload: AntigravityPayload, email: string | null): Promise<boolean> {
+    const request = comparisonRequest(payload.request);
+    const account = email ? this.oauth.listAccounts().accounts.find((a) => a.email === email) : undefined;
+    if (!request || !account) return false;
+    try {
+      const accessToken = await this.oauth.getValidAccessTokenForAccount(account);
+      const res = await fetch(`${ANTIGRAVITY_ENDPOINTS[0]}/v1internal:generateContent`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+          ...getAntigravityHeaders(),
+        },
+        body: JSON.stringify({
+          project: payload.project || account.projectId || DEFAULT_PROJECT_ID,
+          model: payload.model,
+          request,
+        }),
+        signal: AbortSignal.timeout(comparisonTimeoutMs()),
+      });
+      await res.arrayBuffer();
+      return res.ok;
+    } catch (e: any) {
+      console.warn(
+        `[AutoPool] The comparison request for ${payload.model} got no answer (${e?.cause?.code ?? e?.name ?? "error"}); ` +
+          `treating the 429 as a rate limit.`
+      );
+      return false;
+    }
   }
 
   /**
@@ -415,14 +461,14 @@ export class AntigravityClient {
       if (webFallback) return webFallback;
       if (rateBlocked !== null) throw this.rateRestError(payload.model, rateBlocked);
 
-      throw this.exhaustedWithRest(failures, payload.model) ?? lastError ?? new Error("All Antigravity endpoints failed.");
+      throw (await this.exhaustedWithRest(failures, payload)) ?? lastError ?? new Error("All Antigravity endpoints failed.");
     }
 
     const webFallback = failures.ranOut() || rateBlocked !== null ? await this.tryGeminiWebFallback(payload) : null;
     if (webFallback) return webFallback;
     if (rateBlocked !== null) throw this.rateRestError(payload.model, rateBlocked);
 
-    throw this.exhaustedWithRest(failures, payload.model) ?? new Error(POOL_RATE_LIMITED);
+    throw (await this.exhaustedWithRest(failures, payload)) ?? new Error(POOL_RATE_LIMITED);
   }
 
   /**
@@ -579,14 +625,14 @@ export class AntigravityClient {
       if (webFallback) return singleChunkStream(webFallback);
       if (rateBlocked !== null) throw this.rateRestError(payload.model, rateBlocked);
 
-      throw this.exhaustedWithRest(failures, payload.model) ?? lastError ?? new Error("All Antigravity streaming endpoints failed.");
+      throw (await this.exhaustedWithRest(failures, payload)) ?? lastError ?? new Error("All Antigravity streaming endpoints failed.");
     }
 
     const webFallback = failures.ranOut() || rateBlocked !== null ? await this.tryGeminiWebFallback(payload) : null;
     if (webFallback) return singleChunkStream(webFallback);
     if (rateBlocked !== null) throw this.rateRestError(payload.model, rateBlocked);
 
-    throw this.exhaustedWithRest(failures, payload.model) ?? new Error(POOL_RATE_LIMITED);
+    throw (await this.exhaustedWithRest(failures, payload)) ?? new Error(POOL_RATE_LIMITED);
   }
 
   /**
