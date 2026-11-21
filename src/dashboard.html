@@ -1855,6 +1855,9 @@ print(response.choices[0].message.content)</pre>
      * A sign, not a rest: the bridge keeps trying the account, and Re-login is what clears it.
      */
     function verificationBadge(acc) {
+      if (acc.disabledByGoogle) {
+        return '<span class="tier-chip" style="background: rgba(244, 63, 94, 0.15); color: var(--rose); border-color: rgba(244, 63, 94, 0.35);" title="Google answered 403: it has disabled this account for a Terms of Service violation. Signing in again will not restore it. Submit the appeal with Google; the pool skips this account while another is free.">Disabled by Google</span>';
+      }
       if (!acc.needsVerification) return '';
       return '<span class="tier-chip" style="background: rgba(244, 63, 94, 0.15); color: var(--rose); border-color: rgba(244, 63, 94, 0.35);" title="Google answered 403 and asked to verify this account. Use Re-login and complete the prompt in the browser.">Verification needed</span>';
     }

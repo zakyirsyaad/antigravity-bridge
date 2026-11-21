@@ -10,6 +10,21 @@ answered HTTP 500 *"All accounts in the pool are currently rate limited"*. It sh
 request after a restart, which forgets which account is flagged. The answer now follows the accounts
 that could have served: the 400, 429 or 503 the run earned.
 
+### Fixed: an account Google has disabled looked ready and was tried on every rotation
+
+Google can disable an account outright: HTTP 403 *"This service has been disabled in this account
+for violation of Terms of Service. Please submit an appeal to continue using this product."* The
+bridge only recognised the verification challenge, so a disabled account kept its **Ready** label and
+cost one failed request each time the pool rotated onto it.
+
+- The pool now passes over a disabled account while any other is free, as it does for one that needs
+  verification.
+- Its card says **Disabled by Google**, and `/api/pool` reports `disabledByGoogle`.
+- When it is the only account left, the 403 says that signing in again will not restore it and that
+  the appeal is with Google.
+- Like the verification sign, this one lives in memory: after a restart the account is tried once
+  and marked again.
+
 ## 2.7.2
 
 Fixes only, from failures seen on a shared bridge between 2026-11-16 and 2026-11-21. **Update and

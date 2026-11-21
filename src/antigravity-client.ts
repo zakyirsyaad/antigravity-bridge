@@ -22,7 +22,7 @@ import {
   comparisonTokens,
   countableText,
 } from "./request-refusal";
-import { clearVerification, flagVerification, isVerificationChallenge, isVerificationFlagged } from "./account-verification";
+import { clearVerification, flagRefusal, isAccountRefused } from "./account-verification";
 import { GeminiWebClient, GEMINI_WEB_FALLBACK_USAGE_ID } from "./gemini-web-client";
 import { generateWithLinkedSessions, preferredLinkedSession } from "./gemini-web-rotation";
 
@@ -259,7 +259,7 @@ export class AntigravityClient {
     // A Google-refused active account is moved off before a request is spent on it.
     // With nowhere free to go the request still proceeds: stranding a one-account
     // pool would be worse than the honest 403 it already answers.
-    if (isVerificationFlagged(account.email)) {
+    if (isAccountRefused(account.email)) {
       const nextAcc = this.oauth.selectNextAvailableAccount(account.email, model, "refused");
       if (nextAcc) {
         console.log(
@@ -420,7 +420,7 @@ export class AntigravityClient {
               // verification challenge raises the dashboard sign, which claims exactly that.
               console.warn(`[Upstream 403] ${currentAccount?.email ?? "the active account"}: ${message}`);
               hit403 = true;
-              if (isVerificationChallenge(message)) flagVerification(currentAccount?.email);
+              flagRefusal(currentAccount?.email, message);
             }
 
             lastError = new UpstreamError(res.status, `Antigravity ${endpoint} (${res.status}): ${message}`);
@@ -590,7 +590,7 @@ export class AntigravityClient {
               // the log only, never into the 403 the client receives.
               console.warn(`[Upstream 403] ${currentAccount?.email ?? "the active account"}: ${message}`);
               hit403 = true;
-              if (isVerificationChallenge(message)) flagVerification(currentAccount?.email);
+              flagRefusal(currentAccount?.email, message);
             }
 
             lastError = new UpstreamError(res.status, `Antigravity stream ${endpoint} (${res.status}): ${message}`);

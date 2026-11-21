@@ -24,7 +24,18 @@ import { QuotaTracker } from "../src/quota-tracker";
 import { UsageTracker } from "../src/usage-tracker";
 import { BridgeServer } from "../src/server";
 import { ACCOUNTS_STORAGE_PATH, USER_HOME } from "../src/constants";
-import { clearVerification, flagVerification, isVerificationFlagged } from "../src/account-verification";
+import {
+  clearVerification,
+  flagDisabled,
+  flagVerification,
+  isAccountDisabled,
+  isAccountRefused,
+  isVerificationFlagged,
+  refusalRecovery,
+} from "../src/account-verification";
+
+/** Google's words when it has disabled an account outright (seen 2026-10-21 and 2026-11-21). */
+const DISABLED = "This service has been disabled in this account for violation of Terms of Service. Please submit an appeal to continue using this product.";
 
 const TEST_PORT = 52155;
 const QUOTA_PATH = path.join(USER_HOME, ".zcode", "antigravity-quota.json");
@@ -179,6 +190,26 @@ async function runTests() {
     const plainErr = await caught(() => realGenerate.call(client, payload));
     expect("a non-verification 403 keeps its status", plainErr?.status, 403);
     expect("but does not claim a verification challenge", isVerificationFlagged(EMAIL), false);
+    expect("and is not taken for a disabled account", isAccountDisabled(EMAIL), false);
+    expect("so the pool does not skip it", isAccountRefused(EMAIL), false);
+
+    // An account Google disabled is its own state: no login clears it, only Google's appeal.
+    googleReplies(403, DISABLED);
+    const disabledErr = await caught(() => realGenerate.call(client, payload));
+    expect("a disabled account keeps Google's status", disabledErr?.status, 403);
+    expect("it is marked disabled", isAccountDisabled(EMAIL), true);
+    expect("not as needing verification", isVerificationFlagged(EMAIL), false);
+    expect("and the pool skips it", isAccountRefused(EMAIL), true);
+    clearVerification(EMAIL);
+    await caught(() => realStream.call(client, payload));
+    expect("the stream path marks it too", isAccountDisabled(EMAIL), true);
+    googleReplies(200);
+    await caught(() => realGenerate.call(client, payload));
+    expect("an account that answers again is no longer disabled", isAccountDisabled(EMAIL), false);
+    expect("a verification flag also makes the pool skip", (flagVerification(EMAIL), isAccountRefused(EMAIL)), true);
+    clearVerification(EMAIL);
+    expect("guidance for a disabled account names the appeal, not a login", /appeal/i.test(refusalRecovery(DISABLED)) && !/re-login/i.test(refusalRecovery(DISABLED)), true);
+    expect("guidance for a challenge names Re-login", /Re-login/.test(refusalRecovery(VERIFY)), true);
   } finally {
     (globalThis as any).fetch = realFetch;
   }
@@ -211,6 +242,12 @@ async function runTests() {
   clearVerification(EMAIL);
   const cleared: any = OAuthManager.getInstance().getPoolStatus();
   expect("the field follows the flag", cleared.accounts.find((a: any) => a.email === EMAIL)?.needsVerification, false);
+  flagDisabled(EMAIL);
+  const withDisabled: any = OAuthManager.getInstance().getPoolStatus();
+  expect("a disabled account says so", withDisabled.accounts.find((a: any) => a.email === EMAIL)?.disabledByGoogle, true);
+  expect("without claiming verification", withDisabled.accounts.find((a: any) => a.email === EMAIL)?.needsVerification, false);
+  expect("the other account is not disabled", withDisabled.accounts.find((a: any) => a.email === OTHER)?.disabledByGoogle, false);
+  clearVerification(EMAIL);
 
   const server = new BridgeServer(TEST_PORT);
   await server.start();
@@ -325,6 +362,9 @@ async function runTests() {
     if (ui) {
       expect("no badge on an account that is fine", ui.verificationBadge({ needsVerification: false }), "");
       expect("a flagged account gets a badge", String(ui.verificationBadge({ needsVerification: true })).includes("Verification needed"), true);
+      const disabledBadge = String(ui.verificationBadge({ disabledByGoogle: true }));
+      expect("a disabled account gets its own badge", disabledBadge.includes("Disabled by Google"), true);
+      expect("which does not promise that Re-login helps", /Re-login/.test(disabledBadge), false);
       const btn = String(ui.reloginButton({ email: "a+tag@example.com" }));
       expect("the button goes through the keyed fetch handler", btn.includes("reloginAccount("), true);
       expect("it names that account", btn.includes("a+tag@example.com"), true);

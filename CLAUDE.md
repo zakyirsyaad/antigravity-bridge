@@ -642,6 +642,15 @@ id (`95a4c0abcba24364`, sent at RPC index 79), so the others run Gemini Web's de
   fails on any module that does. `ANTIGRAVITY_CLIENT_VERSION` (a plain `x.y.z`; anything else is
   ignored) overrides `DEFAULT_ANTIGRAVITY_VERSION` without a deploy; bump the default to the installed
   app's `CFBundleShortVersionString` when this recurs.
+- **Two 403s mark an account, and they are different states** (`account-verification.ts`). "Verify
+  your account to continue." raises `needsVerification`: Re-login and Google's prompt clear it.
+  "This service has been disabled in this account for violation of Terms of Service" raises
+  `disabledByGoogle`: nothing the operator does in the bridge clears it, so its badge and its 403
+  guidance (`refusalRecovery()`) must not offer Re-login as the cure. The pool skips both while
+  another account is free (`isAccountRefused()`); any other 403 raises neither and is not skipped.
+  Both live in memory only. Pool account 1 was disabled on 2026-11-21, hours after answering
+  normally, on a day of live tests that sent Google the Hermes line below dozens of times: **do not
+  replay a prompt Google refuses against real accounts**; `test:request-refused` covers it offline.
 - **Google refuses Hermes Agent's system prompt, and answers it as a 429.** Verified 2026-11-21 with
   requests sent straight to Google: any request whose system instruction contains "you are hermes
   agent" (any case, the opening of Hermes's default prompt) comes back HTTP 429 `Resource has been
