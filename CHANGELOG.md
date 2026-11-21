@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased
+## 2.7.2
+
+Fixes only, from failures seen on a shared bridge between 2026-11-16 and 2026-11-21. **Update and
+restart the bridge** to get them. One of them needs your attention if you use Hermes Agent: Google
+refuses its default prompt, and the bridge now says so instead of reporting a rate limit.
 
 ### Fixed: a request Google refuses no longer rests the pool or reads as a rate limit
 
@@ -22,6 +26,49 @@ client's requests failed fast in the meantime.
   is skipped above 120,000 tokens, and does not appear in `npm run bridge:usage`.
 - The bridge does not rewrite a refused prompt. Hermes Agent with its default prompt does not work
   through this backend while Google refuses it.
+
+### Fixed: a 429 with no reset time was reported as a cooldown that never ends
+
+Google sometimes answers 429 without saying when the limit resets. The bridge records a cooldown only
+when it is told a reset time, so nothing was recorded, yet the client was told *"All accounts in the
+pool are currently rate limited. Please wait for cooldown to reset."* with HTTP 500, while the
+dashboard showed every account ready and the quota meters near full.
+
+- Such a run now ends as HTTP 429 `rate_limit_error` with a `Retry-After` header. The message says it
+  is a per-minute limit and that no quota cooldown was recorded.
+- The accounts that were tried rest in memory until the `Retry-After` time (60 seconds, or
+  `BRIDGE_RATE_REST_SECONDS`). A retry inside that time is answered at once with the seconds left,
+  without asking Google again. Before, each retry spent one request per account inside the same
+  minute.
+- With `GEMINI_WEB_FALLBACK=1`, Gemini Web still answers during that rest.
+- A 429 that does name a reset time behaves as before: the account cools down until then.
+
+### Fixed: one account Google wants verified could take the whole pool down
+
+Google answers HTTP 403 *"Verify your account to continue."* for an account it wants verified. The
+bridge answered that as HTTP 500 (or as an error inside a 200 on the OpenAI stream), which clients
+retried. Worse, a failover could land on that account and stay there, failing every request while the
+other accounts were healthy.
+
+- A 403 now moves on to the next account, as a 503 does, and an account Google refused is skipped
+  while any other is free. No cooldown is written for it.
+- When no other account can answer, the client gets HTTP 403 `permission_error` with Google's own
+  message and what to do about it. The account's address appears in the bridge log only.
+- The dashboard marks the account **Verification needed** and offers **Re-login** on its card.
+  `/api/pool` reports it as `needsVerification`.
+
+### Fixed: Re-login and Add Account from a dashboard on another machine
+
+- On a bridge protected by an API key, the two buttons opened a page that said *"Missing or invalid
+  API key"*: a link cannot carry the key. They now go through the dashboard's own authenticated
+  request. `GET /api/pool/auth-url` answers JSON `{url}` when asked with `Accept: application/json`,
+  and still redirects a plain navigation.
+- Google sends the browser back to `localhost:51121` after sign-in. On a remote install that is the
+  machine the browser runs on, where nothing listens, so sign-in could never finish. The dashboard
+  now opens a **Finish sign-in** box: paste the address of the tab that failed to load.
+  `POST /oauth/exchange` reads the code from it.
+- That exchange never sent the PKCE verifier and never saved the account. It does both now.
+- Re-login of an account that is not the active one no longer makes it active.
 
 ## 2.7.1
 
