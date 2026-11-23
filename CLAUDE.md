@@ -78,7 +78,7 @@ Everything else runs offline — no account, no network, no quota — by stubbin
 | `test:capacity` | a 503 rotates the pool without recording a cooldown; 400 still does not rotate; a pool that runs out on a 503 says capacity (status 503, model named) only when Google said "No capacity", and service unavailable otherwise; accounts are counted once each, not per pass; one that runs out on a 429 keeps the rate-limited wording |
 | `test:quota` | a 429 cools the model family that earned it, not the whole account |
 | `test:updater` | `update` refuses dirty worktrees and non-git installs, tolerates only npm's own lockfile version rewrite; the release check never throws; the lockfile tracks package.json |
-| `test:effort` | Anthropic `output_config.effort` scales the budget; the default level changes nothing; a model with no declared budget reasons only above the default level; a retired fixed-tier id, or a reasoning suffix on a guessed one, keeps its tier on both protocols; every ZCode reasoning variant sends a distinct budget |
+| `test:effort` | Anthropic `output_config.effort` scales the budget; the default level changes nothing; a model with no declared budget reasons only above the default level; a retired fixed-tier id, or a reasoning suffix on a guessed one, keeps its tier on both protocols; every ZCode reasoning variant sends a distinct budget; Gemini 4 Hydrogen sends nothing by default and -1 only above the default level, and warns once when reasoning is switched off or the cap is under 4096 |
 | `test:upstream` | a request Google rejects (400) is a 400 on all four paths, the OpenAI stream included; a 503 is a 503 on all four paths, `overloaded_error` for no capacity and `api_error` for any other; a pool that ran out on a stall is still a 500 (in-band on the OpenAI stream); every other failure keeps its old shape; a failure after streaming began stays in-band |
 | `test:models-context` | every `/v1/models` entry carries `context_length` from `SUPPORTED_MODELS`; the older fields are unchanged; `/models` answers the same |
 | `test:turns` | a history that opens with a model turn gets a user note in front (both protocols, Claude too) and is otherwise untouched; the logged request shape names roles and part kinds and never carries text |
@@ -448,6 +448,17 @@ Reasoning config is per model, not global:
   `zcodeReasoning()` gives these models **no** ZCode picker: ZCode speaks Anthropic, where its
   "low" / "high" would both leave them off. `test:effort` asserts that every variant ZCode is offered
   sends a distinct budget.
+- **Gemini 4 Hydrogen (`gemini-4-hydrogen-sonar`) is declared the same way, for a different
+  reason.** Google gives it no budget, only `thinkingLevel: 1`, and it reasons by level (measured
+  2026-11-24; the per-prompt figures are in `constants.ts`): on one prompt no config, budgets 0 and
+  128 and `thinking_level: "low"` all spent 950 thought tokens, 4000 spent 1234, and -1 or `"high"`
+  4259. It never stops reasoning, and returns no thought parts. Declaring it -1 would run every Claude
+  Code request at its high level. Re-measure before giving it a budget: a number you send is mapped
+  to a level, not honoured. That also defeats the small-window pin (a budget pinned to 592 still
+  spent 1032, and a 1200 cap cut the answer off), so `reasoningFloorTokens` marks it and
+  `warnUncappableReasoning()` logs `[Reasoning]` once per reason (no reasoning asked, or a cap under
+  `DYNAMIC_PIN_BELOW`) instead. Its family is `gemini` because Google's quota summary groups it there
+  (one "Gemini Models" group, the same `resetTime` as every Flash).
 - `Transformer.applyThinkingConfig()` fits the budget inside the caller's `max_tokens`, holding back
   `BRIDGE_ANSWER_RESERVE_TOKENS` (default 8192, clamped to half the window) for the visible answer.
   Thinking tokens are billed as output and count against that cap.
