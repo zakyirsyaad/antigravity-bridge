@@ -112,6 +112,13 @@ async function runTests() {
   const textOutput = parsedResp.candidates?.[0]?.content?.parts?.[0]?.text;
   expect("extracts candidate text cleanly", textOutput, "Halo! Ada yang bisa saya bantu?");
   expect("an answer carries no error", parsedResp.webError, undefined);
+  // Gemini Web links every bare URL, also inside a tool call's JSON, which broke shell commands.
+  expect("an automatic link is undone", GeminiWebClient.unwrapAutoLinks("git clone [https://github.com/a/b](https://github.com/a/b) /tmp/x"), "git clone https://github.com/a/b /tmp/x");
+  expect("also when the text dropped the scheme", GeminiWebClient.unwrapAutoLinks("see [github.com/a](https://github.com/a)"), "see github.com/a");
+  expect("and a mailto", GeminiWebClient.unwrapAutoLinks("[me@x.io](mailto:me@x.io)"), "me@x.io");
+  expect("a link the model named on purpose keeps its words", GeminiWebClient.unwrapAutoLinks("read [the docs](https://x.io/d)"), "read [the docs](https://x.io/d)");
+  const linked = ")]}'\n\n" + JSON.stringify([["wrb.fr", null, JSON.stringify([null, null, null, null, [["rc_1", ['{"tool_calls":[{"name":"run","arguments":{"command":"curl [https://a.io/x](https://a.io/x)"}}]}']]]])]]);
+  expect("the parser hands the tool bridge the unlinked text", GeminiWebClient.parseAntiXssiResponse(linked).candidates[0].content.parts[0].text, '{"tool_calls":[{"name":"run","arguments":{"command":"curl https://a.io/x"}}]}');
   // The shape Gemini Web answered a Neon request with on 2026-11-24.
   const refusal = ")]}'\n\n174\n" + JSON.stringify([["wrb.fr", null, null, null, null, [13, null, [["type.googleapis.com/assistant.boq.bard.application.BardErrorInfo", [1155, null, "Too many requests. Try again later. (1155)"]]]]]]) + "\n25\n[[\"e\",4,null,null,271]]\n";
   const untyped = ")]}'\n\n" + JSON.stringify([["wrb.fr", null, null, null, null, [13, null, [["type.googleapis.com/some.OtherInfo", [7, null, "not ours"]]]]]]);
@@ -241,6 +248,7 @@ async function runTests() {
       emptyErr = err;
     }
     expect("an answer with no readable reply throws", /no readable reply/.test(String(emptyErr?.message)), true);
+    expect("a reply that short is quoted, so the log says what it was", String(emptyErr?.message).endsWith("(8 bytes): []"), true);
     expect("and drops the cached session", (fresh as any).session, null);
   }
   {

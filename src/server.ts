@@ -221,8 +221,8 @@ export class BridgeServer {
   }
 
   /**
-   * What Gemini Web answered, for this request: tool calls the request allows, or text,
-   * never neither. generateContent() already refuses a reply it cannot read; this refuses
+   * What Gemini Web answered, for this request: tool calls the request allows, text, or
+   * both (text first, as a native model writes it), never neither. generateContent() already refuses a reply it cannot read; this refuses
    * one the tool bridge empties (`{"content": ""}`, or only calls the request does not
    * allow), which otherwise reached the client as a successful empty turn with nothing in
    * the log. Callers turn the error into a 500 before writing anything.
@@ -903,9 +903,11 @@ export class BridgeServer {
       }
       const webUsage = resp.usageMetadata;
       // The bridge only lets through arguments that are a JSON object, as Anthropic's input must be.
-      const blocks: any[] = answer.toolCalls.length > 0
-        ? answer.toolCalls.map((tc) => ({ type: "tool_use", id: tc.id, name: tc.function.name, input: JSON.parse(tc.function.arguments) }))
-        : [{ type: "text", text: answer.text }];
+      // Text first, then the calls, as a native model writes a turn that says something and acts.
+      const blocks: any[] = [
+        ...(answer.text || answer.toolCalls.length === 0 ? [{ type: "text", text: answer.text }] : []),
+        ...answer.toolCalls.map((tc) => ({ type: "tool_use", id: tc.id, name: tc.function.name, input: JSON.parse(tc.function.arguments) })),
+      ];
       const stopReason = answer.toolCalls.length > 0 ? "tool_use" : "end_turn";
 
       if (!body.stream) {
@@ -1271,7 +1273,7 @@ export class BridgeServer {
 
       if (!body.stream) {
         if (hasTools) {
-          const message: any = { role: "assistant", content: toolCalls.length > 0 ? null : answer.text };
+          const message: any = { role: "assistant", content: toolCalls.length > 0 ? answer.text || null : answer.text };
           if (toolCalls.length > 0) message.tool_calls = toolCalls;
           res.writeHead(200, { "Content-Type": "application/json" });
           res.end(
@@ -1299,6 +1301,7 @@ export class BridgeServer {
           `data: ${JSON.stringify({ id: cmplId, object: "chat.completion.chunk", created, model: requestedModel, choices, ...extra })}\n\n`
         );
       if (toolCalls.length > 0) {
+        if (answer.text) writeChunk([{ index: 0, delta: { content: answer.text }, finish_reason: null }]);
         writeChunk([
           {
             index: 0,

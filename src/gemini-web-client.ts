@@ -96,6 +96,9 @@ function signedInCheckEnabled(): boolean {
 const FRESH_COOKIES_HINT =
   "check that __Secure-OSID was included (gemini.google.com redirects without it), then link fresh ones in the dashboard (or replace GEMINI_WEB_COOKIES, or GEMINI_PSID with GEMINI_OSID)";
 
+/** A reply no longer than this is an envelope with no answer in it, so it is quoted in the error. */
+const SHORT_REPLY_BYTES = 512;
+
 /** Generate statuses that blame the request, not the account: never rotated. */
 const REQUEST_FAULT_STATUSES = new Set([400, 413]);
 
@@ -665,7 +668,7 @@ export class GeminiWebClient {
       candidates: [
         {
           content: {
-            parts: [{ text: parsedText }],
+            parts: [{ text: GeminiWebClient.unwrapAutoLinks(parsedText) }],
             role: "model",
           },
           finishReason: "STOP",
@@ -673,6 +676,21 @@ export class GeminiWebClient {
       ],
       ...(webError && !parsedText ? { webError } : {}),
     };
+  }
+
+  /**
+   * Gemini Web's answer text with its automatic links undone. It turns every bare URL into a
+   * markdown link, `[https://x](https://x)`, also inside the JSON a tool call is read from, so
+   * `git clone https://github.com/a/b` reached the client's shell as
+   * `git clone [https://github.com/a/b](https://github.com/a/b)` (verified 2026-11-24, Carbon).
+   * Only a link whose text is its own target, with or without the scheme, is undone: one the
+   * model wrote on purpose, `[the docs](https://x)`, keeps its words.
+   */
+  public static unwrapAutoLinks(text: string): string {
+    if (!text || !text.includes("](")) return text;
+    return text.replace(/\[([^[\]\n]{1,2048})\]\(((?:https?|mailto):[^)\s]{1,2048})\)/g, (whole, label: string, href: string) =>
+      label === href || href.replace(/^[a-z]+:(?:\/\/)?/i, "") === label ? label : whole
+    );
   }
 
   /**
@@ -756,7 +774,11 @@ export class GeminiWebClient {
       // Passed on, it reaches the client as a successful empty reply ("completed without
       // producing any output") with nothing in the log. Say so, and fetch a fresh session.
       if (this.session === session) this.session = null;
-      throw new GeminiWebAccountError(`Gemini Web answered HTTP ${res.status} with no readable reply (${raw.length} bytes)`);
+      // A reply this short is an envelope, not an answer (2026-11-24: 131-132 bytes on every
+      // linked session for a minute, nothing to say why). Its text says what it was; a long
+      // one could carry the conversation, so only the size is named.
+      const envelope = raw.length <= SHORT_REPLY_BYTES ? `: ${raw.replace(/^\)\]\}'\s*/, "").replace(/\s+/g, " ").trim()}` : "";
+      throw new GeminiWebAccountError(`Gemini Web answered HTTP ${res.status} with no readable reply (${raw.length} bytes)${envelope}`);
     }
     return GeminiWebClient.withEstimatedUsage(parsed, prompt);
   }
