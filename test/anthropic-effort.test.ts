@@ -146,6 +146,33 @@ function runTests() {
   expect("hydrogen: max -> dynamic (its high level)", anthropicBudget(HYDROGEN, effort("max")), -1);
   expect("hydrogen: OpenAI default -> nothing sent", openaiBudget(HYDROGEN), undefined);
   expect("hydrogen: OpenAI high -> dynamic", openaiBudget(HYDROGEN, { reasoning_effort: "high" }), -1);
+  // Hydrogen cannot be switched off or capped (a budget only picks a level): the bridge says
+  // so, once per reason, rather than letting a client wonder at reasoning it turned off or
+  // an answer cut off at MAX_TOKENS.
+  {
+    const originalWarn = console.warn;
+    const seen: string[] = [];
+    console.warn = (...a: any[]) => {
+      seen.push(a.map(String).join(" "));
+    };
+    try {
+      anthropicBudget(HYDROGEN, { thinking: { type: "disabled" } });
+      anthropicBudget(HYDROGEN, { thinking: { type: "disabled" } });
+      openaiBudget(HYDROGEN, { reasoning_effort: "none" });
+      const offWarnings = seen.filter((w) => w.includes("[Reasoning] gemini-4-hydrogen-sonar") && w.includes("switched off"));
+      expect("hydrogen: switching reasoning off warns", offWarnings.length, 1);
+      Transformer.openaiToAntigravity({ model: HYDROGEN, max_tokens: 1200, messages: [{ role: "user", content: "x" }] });
+      const capWarnings = seen.filter((w) => w.includes("[Reasoning] gemini-4-hydrogen-sonar") && w.includes("output cap is 1200"));
+      expect("hydrogen: a small output cap warns, naming the cap", capWarnings.length, 1);
+      const before = seen.length;
+      Transformer.openaiToAntigravity({ model: HYDROGEN, max_tokens: 8000, messages: [{ role: "user", content: "x" }] });
+      anthropicBudget(UNDECLARED, { thinking: { type: "disabled" } });
+      Transformer.openaiToAntigravity({ model: UNDECLARED, max_tokens: 1200, messages: [{ role: "user", content: "x" }] });
+      expect("a roomy cap, or a model that can be switched off, warns nothing", seen.length, before);
+    } finally {
+      console.warn = originalWarn;
+    }
+  }
 
   console.log("\n[6/8] The OpenAI path is untouched by sharing the helper ...");
   expect("dynamic, low", openaiBudget(DYNAMIC, { reasoning_effort: "low" }), 1000);

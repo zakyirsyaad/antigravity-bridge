@@ -284,6 +284,38 @@ export class Transformer {
    * which in several cases is not what it used to resolve to. `gemini-3-pro`
    * in particular resolved to `gemini-3-pro-low`, which Google does not offer.
    */
+  /** (model, reason) pairs already warned about by warnUncappableReasoning(). */
+  private static warnedUncappable = new Set<string>();
+
+  /**
+   * Say so when a request asks a level-reasoning model (reasoningFloorTokens) for
+   * something it will not do: no reasoning at all, or reasoning that fits a small output
+   * cap. Neither can be sent to it, since a budget only picks a level, and without this
+   * a client saw reasoning tokens it had switched off, or an answer cut off at
+   * MAX_TOKENS, with nothing in the log. Once per model and reason.
+   */
+  private static warnUncappableReasoning(model: ModelDef | undefined, budget: number | undefined, generationConfig: any): void {
+    const floor = model?.reasoningFloorTokens;
+    if (!model || !floor) return;
+    const cap = generationConfig.maxOutputTokens;
+    const reasons: Array<[string, string]> = [];
+    if (budget === 0) {
+      reasons.push(["off", "reasoning was switched off, but this model reasons at its low level whatever is sent"]);
+    }
+    if (typeof cap === "number" && cap < this.DYNAMIC_PIN_BELOW) {
+      reasons.push([
+        "cap",
+        `the output cap is ${cap} tokens, and this model spends about ${floor} on reasoning even at its lowest level, which the bridge cannot limit, so the answer may be cut off (MAX_TOKENS)`,
+      ]);
+    }
+    for (const [key, text] of reasons) {
+      const id = `${model.id}:${key}`;
+      if (this.warnedUncappable.has(id)) continue;
+      this.warnedUncappable.add(id);
+      console.warn(`[Reasoning] ${model.id}: ${text}.`);
+    }
+  }
+
   /** Ids already warned about, so a busy agent loop logs each once. */
   private static warnedRetiredIds = new Set<string>();
 
@@ -654,6 +686,7 @@ export class Transformer {
         }
       }
       if (budget !== undefined) this.applyThinkingConfig(generationConfig, budget, model);
+      this.warnUncappableReasoning(model, budget, generationConfig);
     }
 
     // Tools conversion
@@ -827,6 +860,7 @@ export class Transformer {
       }
 
       if (budget !== undefined) this.applyThinkingConfig(generationConfig, budget, model);
+      this.warnUncappableReasoning(model, budget, generationConfig);
     }
 
     let tools: any[] | undefined = undefined;

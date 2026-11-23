@@ -113,6 +113,13 @@ export interface ModelDef {
   thinkingBudget?: number;
   /** Smallest budget the model accepts. Requests below this are raised to it. */
   minThinkingBudget?: number;
+  /**
+   * Set for a model that reasons by level and cannot be capped or switched off: the
+   * thought tokens it spent at its lowest level on a short reasoning prompt. A budget
+   * sent to it only picks a level, so neither `thinking_budget: 0` nor the small-window
+   * pin in Transformer.applyThinkingConfig() holds it, and the bridge warns instead.
+   */
+  reasoningFloorTokens?: number;
 }
 
 export const SUPPORTED_MODELS: ModelDef[] = [
@@ -168,15 +175,24 @@ export const SUPPORTED_MODELS: ModelDef[] = [
     minThinkingBudget: 32,
   },
   // Gemini 4 Hydrogen. Google lists it with no displayName and no thinkingBudget, only
-  // `thinkingLevel: 1`, and it reasons by levels, not budgets. Measured 2026-11-24 on
-  // two prompts, every setting gave the same answer and these thought tokens:
-  // no thinkingConfig, budget 0, 32 or 128, and `thinking_level: "low"` all ~950
-  // (low: a budget of 0 does not switch it off); budget 4000 ~1234; budget -1 and
-  // `thinking_level: "high"` ~4259. Thought parts never come back, even with
-  // include_thoughts. So it is declared like the Flash Lites, with no budget: by
-  // default the bridge sends nothing and the model runs at low, and only an effort
-  // above the protocol's default sends -1, which is high. Declared -1, every Claude
-  // Code request (which always says "high") would have run at four times the thinking.
+  // `thinkingLevel: 1`, and it reasons by levels, not budgets. Measured 2026-11-24, with
+  // the same answer under every setting. Thought tokens, prompt 1 (train times): no
+  // thinkingConfig, budget 0, 32 and 1000 all 181; budget -1 625. Prompt 2 (primes):
+  // no thinkingConfig, budget 0, 128 and `thinking_level: "low"` all 950; budget 4000
+  // 1234; budget -1 and `thinking_level: "high"` 4259. A budget of 0 does not switch it
+  // off, and thought parts never come back, even with include_thoughts. So it is
+  // declared like the Flash Lites, with no budget: by default the bridge sends nothing
+  // and the model runs at low, and only an effort above the protocol's default sends -1,
+  // which is high. Declared -1, every Claude Code request (which always says "high")
+  // would have run at four or more times the thinking.
+  //
+  // Its low level cannot be capped either. On a third prompt it spent 1032 thought
+  // tokens with no config and with a budget pinned to 592 alike: under a 1200-token cap
+  // the answer was cut off (MAX_TOKENS), under 3000 it finished. reasoningFloorTokens
+  // makes the bridge say so instead of pinning in silence.
+  //
+  // Its family is "gemini" on evidence: Google's quota summary has one "Gemini Models"
+  // group, and fetchAvailableModels gives Hydrogen the same resetTime as every Flash model.
   {
     id: "gemini-4-hydrogen-sonar",
     name: "Gemini 4 Hydrogen",
@@ -185,6 +201,7 @@ export const SUPPORTED_MODELS: ModelDef[] = [
     outputLimit: 65536,
     supportsThinking: true,
     minThinkingBudget: 32,
+    reasoningFloorTokens: 1032,
   },
 
   // gemini-3.7-flash-tiered and gemini-3.6-flash-tiered were here until Google began
