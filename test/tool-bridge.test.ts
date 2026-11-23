@@ -123,6 +123,17 @@ async function runTests() {
   const parsed3 = parseToolBridgeOutput(proseOutput, mockTools);
   expect("extracts tool call from prose", parsed3.finish_reason, "tool_calls");
   expect("extracted function name matches", parsed3.tool_calls[0]?.function?.name, "get_weather");
+  // A hook that blocks a call asks the model to state facts and then retry, in one turn. With
+  // "tool_calls OR content" the model chose the text, and the agent's turn ended there.
+  const both = JSON.stringify({ content: "Facts: removes /tmp/x; rollback: none needed.", tool_calls: [{ name: "get_weather", arguments: { location: "Oslo" } }] });
+  const parsedBoth = parseToolBridgeOutput(both, mockTools);
+  expect("text beside a call is kept", parsedBoth.content, "Facts: removes /tmp/x; rollback: none needed.");
+  expect("and the call goes with it", parsedBoth.tool_calls[0]?.function?.name, "get_weather");
+  expect("as a tool_calls turn", parsedBoth.finish_reason, "tool_calls");
+  expect("under tool_choice none the text survives the dropped call", parseToolBridgeOutput(both, mockTools, "none").content, "Facts: removes /tmp/x; rollback: none needed.");
+  const bridgePrompt = buildToolBridgePrompt("hi", mockTools);
+  expect("the prompt allows content beside tool_calls", bridgePrompt.includes('"content": "<what you tell the user; optional when you call a tool>", "tool_calls"'), true);
+  expect("and says a reply without tool_calls ends the turn", bridgePrompt.includes('A reply without "tool_calls" ends your turn'), true);
 
   console.log("\n[6/7] Both protocols' tool_choice shapes, and the rules held on the output ...");
   expect("Anthropic {type:any} is required", normalizeToolChoice({ type: "any" }).mode, "required");
@@ -287,6 +298,26 @@ async function runTests() {
     expect("Anthropic non-stream emits tool_use", anthJson.data.content?.[0]?.type, "tool_use");
     expect("with an object input", anthJson.data.content?.[0]?.input?.location, "Berlin");
     expect("and stop_reason tool_use", anthJson.data.stop_reason, "tool_use");
+
+    // Text and a call in one answer reach the client as one turn, text first, on all four paths.
+    (geminiWeb as any).generateContent = answerWith('{"content": "Facts stated.", "tool_calls": [{"name": "get_weather", "arguments": {"location": "Oslo"}}]}');
+    const anthTools = [{ name: "get_weather", input_schema: { type: "object", properties: { location: { type: "string" } } } }];
+    const bothOai = await postJson("/v1/chat/completions", { model: "gemini-neon-4", messages: [{ role: "user", content: "x" }], tools: mockTools });
+    expect("OpenAI non-stream: the text is the message content", bothOai.data.choices?.[0]?.message?.content, "Facts stated.");
+    expect("OpenAI non-stream: beside the call", bothOai.data.choices?.[0]?.message?.tool_calls?.[0]?.function?.name, "get_weather");
+    expect("OpenAI non-stream: finish_reason tool_calls", bothOai.data.choices?.[0]?.finish_reason, "tool_calls");
+    const bothOaiStream = await postJson("/v1/chat/completions", { model: "gemini-neon-4", stream: true, messages: [{ role: "user", content: "x" }], tools: mockTools });
+    const textAt = bothOaiStream.raw.indexOf('"content":"Facts stated."');
+    expect("OpenAI stream: the text comes first, then the call", textAt >= 0 && textAt < bothOaiStream.raw.indexOf('"name":"get_weather"'), true);
+    expect("OpenAI stream: finish_reason tool_calls", bothOaiStream.raw.includes('"finish_reason":"tool_calls"'), true);
+    const bothAnth = await postJson("/v1/messages", { model: "gemini-neon-4", max_tokens: 256, messages: [{ role: "user", content: "x" }], tools: anthTools });
+    expect("Anthropic non-stream: a text block first", bothAnth.data.content?.[0]?.text, "Facts stated.");
+    expect("Anthropic non-stream: then the tool_use", bothAnth.data.content?.[1]?.type, "tool_use");
+    expect("Anthropic non-stream: stop_reason tool_use", bothAnth.data.stop_reason, "tool_use");
+    const bothAnthStream = await postJson("/v1/messages", { model: "gemini-neon-4", max_tokens: 256, stream: true, messages: [{ role: "user", content: "x" }], tools: anthTools });
+    const deltaAt = bothAnthStream.raw.indexOf('"text":"Facts stated."');
+    expect("Anthropic stream: the text block comes before the tool_use", deltaAt >= 0 && deltaAt < bothAnthStream.raw.indexOf('"type":"tool_use"'), true);
+    expect("Anthropic stream: stop_reason tool_use", bothAnthStream.raw.includes('"stop_reason":"tool_use"'), true);
 
     (geminiWeb as any).generateContent = answerWith('{"content": ""}');
     const emptied = await postJson("/v1/messages", {

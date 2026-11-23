@@ -95,12 +95,11 @@ export function buildToolBridgePrompt(
 You MUST respond with valid JSON only. Do not output markdown code fences or commentary outside the JSON.
 
 Output format schema:
-{"tool_calls": [{"name": "<tool_name>", "arguments": {<parameters>}}]}
-OR
-{"content": "<conversational_response>"}
+{"content": "<what you tell the user; optional when you call a tool>", "tool_calls": [{"name": "<tool_name>", "arguments": {<parameters>}}]}
 
 Rules:
-- If a tool is required to fulfill the user's request, output the "tool_calls" array.
+- To use a tool, include the "tool_calls" array. You may put "content" beside it in the same reply, for example facts, a plan or a rollback step you were asked to state before acting: both are delivered together.
+- A reply without "tool_calls" ends your turn, and nothing runs until the user writes again. When you are told to state something and then retry or continue, put that statement in "content" and the tool call in "tool_calls" of this same reply.
 - Use only tool names declared in the Available Tools section below.
 - "arguments" must be a valid JSON object matching the tool's parameters schema.
 - If no tool call is needed, return {"content": "<your reply here>"}.
@@ -151,9 +150,11 @@ export function parseToolBridgeOutput(rawText: string, availableTools?: any[], t
     }
     kept.push({ ...tc, function: { name, arguments: args } });
   }
+  // The text beside the calls goes with them when one is kept, and on its own when every call
+  // was refused: it is still what the model said.
   return kept.length > 0
-    ? { content: "", tool_calls: kept, finish_reason: "tool_calls", dropped }
-    : { content: "", tool_calls: [], finish_reason: "stop", dropped };
+    ? { content: loose.content, tool_calls: kept, finish_reason: "tool_calls", dropped }
+    : { content: loose.content, tool_calls: [], finish_reason: "stop", dropped };
 }
 
 /** The tool names a request declares, in either protocol's shape; null when it declares none. */
@@ -207,6 +208,10 @@ function parseToolCallsLoosely(rawText: string): ToolBridgeResult {
       }
       if (result.tool_calls.length > 0) {
         result.finish_reason = "tool_calls";
+        // Text the model put beside its calls (the prompt allows both): what it was asked to
+        // say before acting. Dropping it lost that statement, and offering only one or the
+        // other made the model choose the text and end its turn instead of retrying.
+        if (typeof parsed.content === "string") result.content = parsed.content;
         return result;
       }
     }

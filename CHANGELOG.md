@@ -1,5 +1,33 @@
 # Changelog
 
+## 2.7.6
+
+Fixes for agents running on the Gemini Web models (`gemini-neon-4`, `gemini-carbon-4`).
+**Update and restart the bridge** to get them.
+
+### Fixed: an agent stopped after stating facts instead of retrying
+
+Gemini Web has no function calling, so the bridge asks for tool calls in JSON, and it offered the
+model a tool call **or** text, never both. When a hook blocks a command and asks the model to state
+some facts and then retry (ECC's "Fact-Forcing Gate" does this before `rm -rf`), the model had to
+choose: it wrote the facts and the agent's turn ended there, or it retried without them and was
+blocked again. The model may now answer with text and tool calls together, and is told that an answer
+without a call ends its turn. Both protocols deliver the text first, then the calls, streamed or not.
+Replayed against Carbon, the old prompt did both 0 times out of 2 and the new one 2 out of 2.
+
+### Fixed: URLs in tool arguments arrived as markdown links
+
+Gemini Web writes every bare URL as a markdown link, also inside the JSON of a tool call, so a
+command such as `git clone https://github.com/a/b` reached the client as
+`git clone [https://github.com/a/b](https://github.com/a/b)`. The bridge now undoes a link whose text
+is its own address before reading the answer. Links with other words are kept.
+
+### Changed: a short unreadable Gemini Web reply is quoted
+
+*"answered HTTP 200 with no readable reply"* now quotes the reply when it is 512 bytes or less: one
+that short is an envelope with no answer in it, and it was the only clue when every linked session
+failed that way for a minute.
+
 ## 2.7.5
 
 Gemini Web works again, and serves Gemini 4 Neon and 4 Carbon instead of Argon.
