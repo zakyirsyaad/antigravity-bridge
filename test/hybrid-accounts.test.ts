@@ -118,30 +118,30 @@ async function runTests() {
     expect("response carries hasWebCookies", resSuccess.data.hasWebCookies, true);
     expect("response never leaks cookie", resSuccess.raw.includes("abc-cookie-val"), false);
 
-    console.log("\n[3/5] Task 3 Routing: gemini-argon-4 routes to Gemini Web ...");
+    console.log("\n[3/5] Task 3 Routing: gemini-neon-4 routes to Gemini Web ...");
     const geminiWeb = GeminiWebClient.getInstance();
     (geminiWeb as any).generateContent = async (req: any) => ({
-      candidates: [{ content: { parts: [{ text: "Hello from Gemini Argon 4" }] }, finishReason: "STOP" }],
+      candidates: [{ content: { parts: [{ text: "Hello from Gemini 4 Neon" }] }, finishReason: "STOP" }],
     });
 
-    const resArgon = await postJson("/v1/chat/completions", {
-      model: "gemini-argon-4",
+    const resNeon = await postJson("/v1/chat/completions", {
+      model: "gemini-neon-4",
       messages: [{ role: "user", content: "Tell me something cool" }],
     });
-    expect("argon request answers 200", resArgon.status, 200);
+    expect("neon request answers 200", resNeon.status, 200);
     expect(
       "content generated from Gemini Web",
-      resArgon.data.choices?.[0]?.message?.content,
-      "Hello from Gemini Argon 4"
+      resNeon.data.choices?.[0]?.message?.content,
+      "Hello from Gemini 4 Neon"
     );
 
     console.log("\n[4/5] Model routing check helper & /v1/models listing ...");
-    expect("detects gemini-argon-4 as web model", GeminiWebClient.isGeminiWebModel("gemini-argon-4"), true);
+    expect("detects gemini-neon-4 as web model", GeminiWebClient.isGeminiWebModel("gemini-neon-4"), true);
     expect("detects gemini-auto as web model", GeminiWebClient.isGeminiWebModel("gemini-auto"), true);
     expect("detects prefixed google/gemini-auto as web model", GeminiWebClient.isGeminiWebModel("google/gemini-auto"), true);
     expect("detects claude-opus as non-web model", GeminiWebClient.isGeminiWebModel("claude-opus-4-6-thinking"), false);
 
-    // Verify /v1/models lists gemini-argon-4 when hybrid account is linked
+    // Verify /v1/models lists gemini-neon-4 when hybrid account is linked
     const modelsRes = await new Promise<{ data: any[] }>((resolve) => {
       http.get(`${BASE_URL}/v1/models`, (res) => {
         let raw = "";
@@ -149,9 +149,11 @@ async function runTests() {
         res.on("end", () => resolve(JSON.parse(raw)));
       });
     });
-    const argonInList = modelsRes.data?.find((m: any) => m.id === "gemini-argon-4");
-    expect("/v1/models exposes gemini-argon-4", Boolean(argonInList), true);
-    expect("gemini-argon-4 owned_by", argonInList?.owned_by, "google-gemini-web");
+    const neonInList = modelsRes.data?.find((m: any) => m.id === "gemini-neon-4");
+    expect("/v1/models exposes gemini-neon-4", Boolean(neonInList), true);
+    expect("gemini-neon-4 owned_by", neonInList?.owned_by, "google-gemini-web");
+    expect("/v1/models exposes gemini-carbon-4", modelsRes.data?.some((m: any) => m.id === "gemini-carbon-4"), true);
+    expect("/v1/models no longer lists gemini-argon-4", modelsRes.data?.some((m: any) => m.id === "gemini-argon-4"), false);
 
     console.log("\n[5/5] Token refresh preserves webCookies and webLinkedAt ...");
     const accBefore = mockStorage.accounts[0];

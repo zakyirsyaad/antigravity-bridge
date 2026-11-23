@@ -305,7 +305,7 @@ export class AntigravityClient {
    * tools or asks for structured output: Gemini Web has no native function calling or
    * JSON mode (the schema never reaches its prompt), and an agent's tool
    * loop silently continued by another model on a prompt-based bridge is worse than an
-   * honest 429/503. Asking for a Gemini Web model by name (gemini-argon-4) is the way to
+   * honest 429/503. Asking for a Gemini Web model by name (gemini-neon-4) is the way to
    * use it with tools.
    *
    * The answer is awaited, also for a stream, so a Gemini Web failure leaves the pool's

@@ -9,7 +9,7 @@
  * 5. parseToolBridgeOutput extracts JSON tool calls embedded inside surrounding prose.
  * 6. parseToolBridgeOutput handles standard content response (no tool called).
  * 7. tool_choice in both protocols' shapes; calls held to the declared tools, tool_choice and object arguments.
- * 8. Through the server on gemini-argon-4: both protocols, both stream modes, usage, failures, the pool fallback.
+ * 8. Through the server on gemini-neon-4: both protocols, both stream modes, usage, failures, the pool fallback.
  */
 
 import http from "node:http";
@@ -199,7 +199,7 @@ async function runTests() {
 
   try {
     const res = await postJson("/v1/chat/completions", {
-      model: "gemini-argon-4",
+      model: "gemini-neon-4",
       messages: [{ role: "user", content: "Check weather in Berlin" }],
       tools: mockTools,
     });
@@ -213,7 +213,7 @@ async function runTests() {
 
     // Claude Code always streams and always sends tools: the stream must bridge them too.
     const anth = await postJson("/v1/messages", {
-      model: "gemini-argon-4",
+      model: "gemini-neon-4",
       max_tokens: 1024,
       stream: true,
       system: "You are a weather bot.",
@@ -224,17 +224,17 @@ async function runTests() {
     expect("Anthropic stream emits a tool_use block", anth.raw.includes('"type":"tool_use"'), true);
     expect("Anthropic stream carries the arguments", anth.raw.includes('Berlin'), true);
     expect("Anthropic stream stops as tool_use", anth.raw.includes('"stop_reason":"tool_use"'), true);
-    expect("Anthropic stream targets the requested model", lastWebArgs[1], "gemini-argon-4");
+    expect("Anthropic stream targets the requested model", lastWebArgs[1], "gemini-neon-4");
     expect("system prompt reaches Gemini Web", String(lastWebArgs[0]).includes("You are a weather bot."), true);
     // Claude Code sizes its context meter (and decides to compact) from this figure.
     expect("Anthropic stream reports the estimated prompt size", anth.raw.includes('"usage":{"input_tokens":1234,"output_tokens":20}'), true);
     expect("OpenAI non-stream reports the estimated usage", res.data.usage?.prompt_tokens, 1234);
     expect("both web requests are recorded", recorded.length, 2);
-    expect("recorded under the web model id", recorded[1]?.[0], "gemini-argon-4");
+    expect("recorded under the web model id", recorded[1]?.[0], "gemini-neon-4");
     expect("recorded with the estimated prompt size", recorded[1]?.[1], 1234);
 
     const oaiStream = await postJson("/v1/chat/completions", {
-      model: "gemini-argon-4",
+      model: "gemini-neon-4",
       stream: true,
       stream_options: { include_usage: true },
       messages: [{ role: "user", content: "Check weather in Berlin" }],
@@ -244,20 +244,20 @@ async function runTests() {
     expect("OpenAI stream carries the tool call", oaiStream.raw.includes('"name":"get_weather"'), true);
     expect("OpenAI stream finishes as tool_calls", oaiStream.raw.includes('"finish_reason":"tool_calls"'), true);
     expect("OpenAI stream sends the usage chunk when asked", oaiStream.raw.includes('"prompt_tokens":1234'), true);
-    expect("OpenAI stream targets the requested model", lastWebArgs[1], "gemini-argon-4");
+    expect("OpenAI stream targets the requested model", lastWebArgs[1], "gemini-neon-4");
 
     // A Gemini Web failure is a real status before any stream byte, on both protocols.
     (geminiWeb as any).generateContent = async () => {
       throw new Error("Gemini Web generation failed with HTTP 401: expired");
     };
     const anthFail = await postJson("/v1/messages", {
-      model: "gemini-argon-4", max_tokens: 64, stream: true,
+      model: "gemini-neon-4", max_tokens: 64, stream: true,
       messages: [{ role: "user", content: "hi" }],
     });
     expect("Anthropic stream failure is HTTP 500", anthFail.status, 500);
     expect("Anthropic stream failure is a JSON error, not SSE", anthFail.data?.error?.type, "api_error");
     const oaiFail = await postJson("/v1/chat/completions", {
-      model: "gemini-argon-4", stream: true,
+      model: "gemini-neon-4", stream: true,
       messages: [{ role: "user", content: "hi" }],
     });
     expect("OpenAI stream failure is HTTP 500, not an event inside a 200", oaiFail.status, 500);
@@ -270,15 +270,15 @@ async function runTests() {
     });
     (geminiWeb as any).generateContent = answerWith('{"tool_calls":[{"name":"get_weather","arguments":"{\\"location\\": \\"Berlin\\",}"}]}');
     const repaired = await postJson("/v1/chat/completions", {
-      model: "gemini-argon-4",
+      model: "gemini-neon-4",
       messages: [{ role: "system", content: "Answer briefly." }, { role: "user", content: "weather?" }],
       tools: mockTools,
     });
     expect("OpenAI tool arguments are repaired JSON", repaired.data.choices?.[0]?.message?.tool_calls?.[0]?.function?.arguments, '{"location":"Berlin"}');
-    expect("OpenAI non-stream targets the requested model", lastWebArgs[1], "gemini-argon-4");
+    expect("OpenAI non-stream targets the requested model", lastWebArgs[1], "gemini-neon-4");
     expect("OpenAI system message reaches Gemini Web", String(lastWebArgs[0]).includes("Answer briefly."), true);
     const anthJson = await postJson("/v1/messages", {
-      model: "gemini-argon-4",
+      model: "gemini-neon-4",
       max_tokens: 256,
       system: "Answer briefly.",
       messages: [{ role: "user", content: "weather?" }],
@@ -290,14 +290,14 @@ async function runTests() {
 
     (geminiWeb as any).generateContent = answerWith('{"content": ""}');
     const emptied = await postJson("/v1/messages", {
-      model: "gemini-argon-4", max_tokens: 64, stream: true,
+      model: "gemini-neon-4", max_tokens: 64, stream: true,
       messages: [{ role: "user", content: "hi" }],
       tools: [{ name: "get_weather", input_schema: { type: "object" } }],
     });
     expect("an answer the bridge empties is a 500, not an empty success", emptied.status, 500);
     (geminiWeb as any).generateContent = answerWith('{"tool_calls":[{"name":"get_weather","arguments":{"location":"Rome"}}]}');
     const forbidden = await postJson("/v1/chat/completions", {
-      model: "gemini-argon-4",
+      model: "gemini-neon-4",
       messages: [{ role: "user", content: "hi" }],
       tools: mockTools,
       tool_choice: "none",

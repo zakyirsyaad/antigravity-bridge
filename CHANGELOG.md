@@ -1,5 +1,40 @@
 # Changelog
 
+## 2.7.5
+
+Gemini Web works again, and serves Gemini 4 Neon and 4 Carbon instead of Argon.
+**Update and restart the bridge** to get it. Lands after 2.7.4 (Gemini 4 Hydrogen).
+
+### Fixed: every Gemini Web model failed as "signed out" while the cookies were signed in
+
+The bridge sends gemini.google.com only an allow list of the linked cookies, and that list lacked
+`OSID` / `__Secure-OSID`. Google now sends a session without them to its sign-in page, so from about
+2026-11-21 every Gemini Web request failed as *"session page /app redirected (HTTP 302): the browser
+cookies are signed out"*, even with freshly linked cookies. Both are sent now. When you link cookies,
+include `__Secure-OSID` along with `__Secure-1PSID` and `__Secure-1PSIDTS`; the dashboard and README
+say so.
+
+### Added: `gemini-neon-4` and `gemini-carbon-4`; removed: `gemini-argon-4`
+
+Gemini's model picker now offers 4 Hydrogen, 4 Neon and 4 Carbon. Argon is gone from it, and the id the
+bridge sent for Argon belongs to **4 Carbon**.
+
+- `gemini-neon-4` is **4 Neon** ("Deeper analysis"), `gemini-carbon-4` is **4 Carbon** ("Code &
+  complex work"). Both are listed in `/v1/models` once cookies are linked. Hydrogen stays on CloudCode
+  (`gemini-4-hydrogen-sonar`, 2.7.4).
+- **`gemini-argon-4` is removed.** A client still configured with it now gets an approximated CloudCode
+  model with a warning in the log; switch it to `gemini-carbon-4` (the same Gemini Web model) or
+  `gemini-neon-4`.
+- The model is now picked with the header Gemini's own page sends, not at index 79 of the request
+  body, where a Neon request once hung for the whole three-minute deadline.
+
+### Fixed: Gemini Web's "Too many requests" read as an unreadable answer
+
+Neon has a tighter limit than the other models. Gemini Web refuses with *"Too many requests. Try again
+later. (1155)"*, which the bridge reported as *"answered HTTP 200 with no readable reply"*. It now says
+*"Gemini Web refused the request (code 1155): …"*, and, as before, moves to the next linked session
+and rests this one.
+
 ## 2.7.3
 
 Two fixes for pools that hold an account Google has refused, both found on the day 2.7.2 went out.
