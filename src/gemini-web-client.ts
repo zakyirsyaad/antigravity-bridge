@@ -16,6 +16,8 @@ import https from "node:https";
 export interface GeminiWebCredentials {
   psid?: string;
   psidts?: string;
+  /** `__Secure-OSID`: gemini.google.com sends a session without it to the sign-in page. */
+  osid?: string;
   rawCookies?: string;
   authUser?: string; // target account in multi-login (e.g. "0", "1")
 }
@@ -91,7 +93,8 @@ function signedInCheckEnabled(): boolean {
 }
 
 /** Where fresh cookies go: the dashboard, or the environment for env-supplied ones. */
-const FRESH_COOKIES_HINT = "link fresh ones in the dashboard (or replace GEMINI_WEB_COOKIES / GEMINI_PSID)";
+const FRESH_COOKIES_HINT =
+  "check that __Secure-OSID was included (gemini.google.com redirects without it), then link fresh ones in the dashboard (or replace GEMINI_WEB_COOKIES, or GEMINI_PSID with GEMINI_OSID)";
 
 /** Generate statuses that blame the request, not the account: never rotated. */
 const REQUEST_FAULT_STATUSES = new Set([400, 413]);
@@ -227,6 +230,7 @@ export class GeminiWebClient {
       this.credentials.rawCookies === creds.rawCookies &&
       this.credentials.psid === creds.psid &&
       this.credentials.psidts === creds.psidts &&
+      this.credentials.osid === creds.osid &&
       this.credentials.authUser === creds.authUser
     ) {
       return; // Credentials unchanged; preserve cached session
@@ -255,6 +259,7 @@ export class GeminiWebClient {
     const raw = process.env.GEMINI_WEB_COOKIES || process.env.GEMINI_COOKIES;
     const psid = process.env.GEMINI_PSID;
     const psidts = process.env.GEMINI_PSIDTS;
+    const osid = process.env.GEMINI_OSID;
     // Left undefined when unset: an explicit choice pins the session to that account.
     const authUser = process.env.GEMINI_AUTH_USER;
 
@@ -263,6 +268,7 @@ export class GeminiWebClient {
         rawCookies: raw,
         psid,
         psidts,
+        osid,
         authUser,
       };
     }
@@ -314,6 +320,9 @@ export class GeminiWebClient {
     }
     if (this.credentials?.psidts) {
       parts.push(`__Secure-1PSIDTS=${this.credentials.psidts}`);
+    }
+    if (this.credentials?.osid) {
+      parts.push(`__Secure-OSID=${this.credentials.osid}`);
     }
     return parts.join("; ");
   }
@@ -458,14 +467,28 @@ export class GeminiWebClient {
   public static isGeminiWebModel(modelName: string): boolean {
     const clean = GeminiWebClient.normalizeWebModelName(modelName);
     return (
+      // Both spellings: Gemini's picker says "4 Neon", the CloudCode id is gemini-4-hydrogen-sonar,
+      // and clients copy either shape (gemini-4-neon is what other Gemini Web proxies call it).
       clean.startsWith("gemini-neon") ||
+      clean.startsWith("gemini-4-neon") ||
       clean.startsWith("neon") ||
       clean.startsWith("gemini-carbon") ||
+      clean.startsWith("gemini-4-carbon") ||
       clean.startsWith("carbon") ||
       clean === "gemini-auto" ||
       clean === "gemini-advanced" ||
       clean.startsWith("gemini-web-")
     );
+  }
+
+  /**
+   * Ids that went to Gemini Web once and no longer do (Argon, removed in 2.7.5). Only for
+   * labelling what was already recorded under them: their usage counts are Gemini Web
+   * estimates, whatever a request for them reaches today.
+   */
+  public static wasGeminiWebModel(modelName: string): boolean {
+    const clean = GeminiWebClient.normalizeWebModelName(modelName);
+    return GeminiWebClient.isGeminiWebModel(clean) || clean.startsWith("gemini-argon") || clean.startsWith("argon");
   }
 
   /**
@@ -652,10 +675,17 @@ export class GeminiWebClient {
     };
   }
 
-  /** The [code, null, message] triple of a BardErrorInfo, wherever it sits in an error envelope. */
+  /**
+   * The [code, null, message] of a BardErrorInfo in an error envelope. Only the detail typed
+   * as one is read (`["type.googleapis.com/....BardErrorInfo", [code, null, message]]`), so a
+   * change elsewhere in the envelope cannot pass some other number off as Google's code.
+   */
   private static findBardError(node: unknown): { code: number; message: string } | null {
     if (!Array.isArray(node)) return null;
-    if (typeof node[0] === "number" && typeof node[2] === "string") return { code: node[0], message: node[2] };
+    if (typeof node[0] === "string" && node[0].endsWith("BardErrorInfo") && Array.isArray(node[1])) {
+      const [code, , message] = node[1];
+      return typeof code === "number" && typeof message === "string" ? { code, message } : null;
+    }
     for (const child of node) {
       const found = GeminiWebClient.findBardError(child);
       if (found) return found;

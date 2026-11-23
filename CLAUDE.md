@@ -540,8 +540,13 @@ Neon and Carbon have known Gemini Web ids (`WEB_MODEL_IDS`, read from the page's
   cookie before telling anyone to re-link.
 - **A refusal is a `BardErrorInfo`, not an empty answer**: an envelope with no payload and
   `[code, null, message]` at `[5]`, such as 1155 "Too many requests" (Neon's own limit).
-  `parseAntiXssiResponse()` returns it as `webError` and `generateContent()` throws it as a
-  `GeminiWebAccountError`, so the rotation moves on.
+  `parseAntiXssiResponse()` returns it as `webError` (only from a detail typed `…BardErrorInfo`) and
+  `generateContent()` throws it as a `GeminiWebAccountError`, so the rotation moves on and rests the
+  whole session. Do not narrow that rest to the model: right after a Neon 1155 a Hydrogen request on
+  the same account was refused as well.
+- **Ids**: both `gemini-neon-4` and `gemini-4-neon` (and the Carbon pair) are web models. Argon ids are
+  not, but `wasGeminiWebModel()` still labels their recorded usage as Gemini Web estimates.
+  `GEMINI_OSID` gives the environment path its `__Secure-OSID`.
 
 - **Requests go through `node:https`, not `fetch`.** gemini.google.com sends ~29 KB of response
   headers (a 21 KB CSP); Node's `fetch` accepts 16 KB and failed every request as `fetch failed`

@@ -11,8 +11,9 @@ The bridge sends gemini.google.com only an allow list of the linked cookies, and
 `OSID` / `__Secure-OSID`. Google now sends a session without them to its sign-in page, so from about
 2026-11-21 every Gemini Web request failed as *"session page /app redirected (HTTP 302): the browser
 cookies are signed out"*, even with freshly linked cookies. Both are sent now. When you link cookies,
-include `__Secure-OSID` along with `__Secure-1PSID` and `__Secure-1PSIDTS`; the dashboard and README
-say so.
+include `__Secure-OSID` along with `__Secure-1PSID` and `__Secure-1PSIDTS`; the dashboard (its tips, label
+and placeholder) and README say so, and the "signed out" error now asks whether it was included.
+With the separate environment variables, set `GEMINI_OSID` beside `GEMINI_PSID` / `GEMINI_PSIDTS`.
 
 ### Added: `gemini-neon-4` and `gemini-carbon-4`; removed: `gemini-argon-4`
 
@@ -20,11 +21,12 @@ Gemini's model picker now offers 4 Hydrogen, 4 Neon and 4 Carbon. Argon is gone 
 bridge sent for Argon belongs to **4 Carbon**.
 
 - `gemini-neon-4` is **4 Neon** ("Deeper analysis"), `gemini-carbon-4` is **4 Carbon** ("Code &
-  complex work"). Both are listed in `/v1/models` once cookies are linked. Hydrogen stays on CloudCode
+  complex work"). `gemini-4-neon` and `gemini-4-carbon` work too. Both are listed in `/v1/models`
+  once cookies are linked. Hydrogen stays on CloudCode
   (`gemini-4-hydrogen-sonar`, 2.7.4).
 - **`gemini-argon-4` is removed.** A client still configured with it now gets an approximated CloudCode
   model with a warning in the log; switch it to `gemini-carbon-4` (the same Gemini Web model) or
-  `gemini-neon-4`.
+  `gemini-neon-4`. Usage already recorded under it is still shown as a Gemini Web estimate.
 - The model is now picked with the header Gemini's own page sends, not at index 79 of the request
   body, where a Neon request once hung for the whole three-minute deadline.
 
@@ -33,7 +35,7 @@ bridge sent for Argon belongs to **4 Carbon**.
 Neon has a tighter limit than the other models. Gemini Web refuses with *"Too many requests. Try again
 later. (1155)"*, which the bridge reported as *"answered HTTP 200 with no readable reply"*. It now says
 *"Gemini Web refused the request (code 1155): …"*, and, as before, moves to the next linked session
-and rests this one.
+and rests this one. The rest covers the whole session, since the limit looks account-wide.
 
 ## 2.7.3
 

@@ -249,7 +249,7 @@ export class BridgeServer {
   private static usageByModel(report: UsageReport) {
     const models = Object.entries(report?.byModel || {})
       .map(([id, usage]) => {
-        const web = id === GEMINI_WEB_FALLBACK_USAGE_ID || GeminiWebClient.isGeminiWebModel(id);
+        const web = id === GEMINI_WEB_FALLBACK_USAGE_ID || GeminiWebClient.wasGeminiWebModel(id);
         return {
           id,
           backend: web ? "gemini-web" : "cloudcode",

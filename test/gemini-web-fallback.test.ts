@@ -76,6 +76,22 @@ async function runTests() {
     rawCookies: "NID=big; __Secure-1PSID=p; OSID=o; COMPASS=big; __Secure-OSID=so",
   });
   expect("keeps OSID and __Secure-OSID, still drops tracking cookies", client.buildCookieHeader(), "__Secure-1PSID=p; OSID=o; __Secure-OSID=so");
+  {
+    // The environment's separate values need their OSID too, or that path stays signed out.
+    const saved = { a: process.env.GEMINI_WEB_COOKIES, b: process.env.GEMINI_COOKIES, c: process.env.GEMINI_PSID, d: process.env.GEMINI_PSIDTS, e: process.env.GEMINI_OSID };
+    delete process.env.GEMINI_WEB_COOKIES;
+    delete process.env.GEMINI_COOKIES;
+    process.env.GEMINI_PSID = "p";
+    process.env.GEMINI_PSIDTS = "ts";
+    process.env.GEMINI_OSID = "so";
+    const envClient: GeminiWebClient = new (GeminiWebClient as any)();
+    (envClient as any).loadCredentialsFromEnv();
+    expect("GEMINI_OSID joins the environment's cookies", envClient.buildCookieHeader(), "__Secure-1PSID=p; __Secure-1PSIDTS=ts; __Secure-OSID=so");
+    for (const [k, v] of Object.entries({ GEMINI_WEB_COOKIES: saved.a, GEMINI_COOKIES: saved.b, GEMINI_PSID: saved.c, GEMINI_PSIDTS: saved.d, GEMINI_OSID: saved.e })) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  }
 
   console.log("\n[3/7] RPC payload double-JSON formatting ...");
   const rpcBody = GeminiWebClient.buildRpcPayload("Hello Gemini Web", "AIzaToken123");
@@ -98,6 +114,8 @@ async function runTests() {
   expect("an answer carries no error", parsedResp.webError, undefined);
   // The shape Gemini Web answered a Neon request with on 2026-11-24.
   const refusal = ")]}'\n\n174\n" + JSON.stringify([["wrb.fr", null, null, null, null, [13, null, [["type.googleapis.com/assistant.boq.bard.application.BardErrorInfo", [1155, null, "Too many requests. Try again later. (1155)"]]]]]]) + "\n25\n[[\"e\",4,null,null,271]]\n";
+  const untyped = ")]}'\n\n" + JSON.stringify([["wrb.fr", null, null, null, null, [13, null, [["type.googleapis.com/some.OtherInfo", [7, null, "not ours"]]]]]]);
+  expect("only a detail typed BardErrorInfo is read as Google's code", GeminiWebClient.parseAntiXssiResponse(untyped).webError, undefined);
   expect("a refusal is read as an error with its code", JSON.stringify(GeminiWebClient.parseAntiXssiResponse(refusal).webError), JSON.stringify({ code: 1155, message: "Too many requests. Try again later. (1155)" }));
 
   console.log("\n[5/7] Model ids, prompt text, and session handling ...");
@@ -105,6 +123,12 @@ async function runTests() {
   expect("carbon resolves to Gemini Web's id", GeminiWebClient.resolveWebModelId("gemini-carbon-4"), "95a4c0abcba24364");
   expect("neon and carbon are web models", ["gemini-neon-4", "neon", "gemini-carbon-4", "carbon"].every((m) => GeminiWebClient.isGeminiWebModel(m)), true);
   expect("argon is gone: no longer a web model", GeminiWebClient.isGeminiWebModel("gemini-argon-4"), false);
+  expect("but its recorded usage is still labelled Gemini Web", GeminiWebClient.wasGeminiWebModel("gemini-argon-4"), true);
+  expect("and a CloudCode id is not", GeminiWebClient.wasGeminiWebModel("gemini-3.8-flash-tiered"), false);
+  expect("the gemini-4-* spelling is a web model too", ["gemini-4-neon", "gemini-4-carbon", "openrouter/gemini-4-neon"].every((m) => GeminiWebClient.isGeminiWebModel(m)), true);
+  expect("gemini-4-neon resolves to Neon", GeminiWebClient.resolveWebModelId("gemini-4-neon"), "e6fa609c3fa255c0");
+  expect("gemini-4-carbon resolves to Carbon", GeminiWebClient.resolveWebModelId("gemini-4-carbon"), "95a4c0abcba24364");
+  expect("Hydrogen is not a web model (it is served from CloudCode)", GeminiWebClient.isGeminiWebModel("gemini-4-hydrogen-sonar"), false);
   expect("neon is selected by the header the page sends", GeminiWebClient.modelSelectionHeader("gemini-neon-4"), '[1,null,null,null,"e6fa609c3fa255c0",null,null,0,[4],null,null,2]');
   expect("gemini-auto sends no selection header", GeminiWebClient.modelSelectionHeader("gemini-auto"), null);
   expect("a bridge name is never sent as a model id", GeminiWebClient.resolveWebModelId("gemini-advanced"), null);
@@ -277,6 +301,7 @@ async function runTests() {
     fresh.setCredentials({ rawCookies: "__Secure-1PSID=x" });
     const outErr = await errorOf(() => fresh.generateContent("hi"));
     expect("a redirect says the cookies are signed out", /\/app redirected \(HTTP 302\).*signed out/.test(String(outErr?.message)), true);
+    expect("and names __Secure-OSID, the usual reason now", String(outErr?.message).includes("__Secure-OSID"), true);
   }
   {
     // GEMINI_WEB_TIMEOUT_MS is one budget for the whole request, pages and generate together.
