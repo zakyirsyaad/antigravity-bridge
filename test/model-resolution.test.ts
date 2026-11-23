@@ -54,6 +54,7 @@ async function runTests() {
   expect("tiered", resolve("gemini-3.8-flash-tiered"), "gemini-3.8-flash-tiered");
   expect("3.5 flash lite", resolve("gemini-3.5-flash-lite"), "gemini-3.5-flash-lite");
   expect("3.1 flash lite", resolve("gemini-3.1-flash-lite"), "gemini-3.1-flash-lite");
+  expect("gemini 4 hydrogen", resolve("gemini-4-hydrogen-sonar"), "gemini-4-hydrogen-sonar");
   expect("claude opus", resolve("claude-opus-4-6-thinking"), "claude-opus-4-6-thinking");
   expect("the display name still resolves", resolve("Gemini 3.5 Flash Lite"), "gemini-3.5-flash-lite");
 
@@ -100,9 +101,11 @@ async function runTests() {
   // A suffix on any known id keeps that id; it is not a guess at a different generation.
   expect("suffix on gemini-3-flash keeps gemini-3-flash", resolve("gemini-3-flash-low"), "gemini-3-flash");
   expect("suffix on the 3.1 lite keeps the 3.1 lite", resolve("gemini-3.1-flash-lite-high"), "gemini-3.1-flash-lite");
+  // "gemini-4-hydrogen" contains "gemini", and used to be guessed as the tiered flash.
+  expect("a hydrogen name without the sonar suffix lands on hydrogen", resolve("gemini-4-hydrogen"), "gemini-4-hydrogen-sonar");
   expect("suffix behind a prefix", resolve("openrouter/gemini-3-flash-medium"), "gemini-3-flash");
   expect("suffix on a retired id resolves as retired", resolve("gemini-pro-agent-low"), "gemini-3.8-flash-tiered");
-  expect("every guess is a model that is exposed", ["claude-opus-x", "claude-sonnet-x", "x-pro", "x-lite", "gemini-x"].every((id) => exposed.has(resolve(id))), true);
+  expect("every guess is a model that is exposed", ["claude-opus-x", "claude-sonnet-x", "x-hydrogen", "x-pro", "x-lite", "gemini-x"].every((id) => exposed.has(resolve(id))), true);
 
   console.log("\n[3b/4] A routing prefix is not part of the model name ...");
   // OpenCode / OpenRouter-style clients write `provider/model`. The tail is an exact

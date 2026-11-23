@@ -483,13 +483,15 @@ export class Transformer {
         ? "claude-sonnet-4-6"
         : name.includes("claude")
           ? "claude-opus-4-6-thinking"
-          : name.includes("pro")
-            ? "gemini-3.8-flash-tiered" // no Pro is served; see RETIRED_IDS
-            : name.includes("lite")
-              ? "gemini-3.5-flash-lite"
-              : name.includes("flash") || name.includes("gemini")
-                ? "gemini-3.8-flash-tiered"
-                : null;
+          : name.includes("hydrogen")
+            ? "gemini-4-hydrogen-sonar" // `gemini-4-hydrogen` would otherwise match "gemini"
+            : name.includes("pro")
+              ? "gemini-3.8-flash-tiered" // no Pro is served; see RETIRED_IDS
+              : name.includes("lite")
+                ? "gemini-3.5-flash-lite"
+                : name.includes("flash") || name.includes("gemini")
+                  ? "gemini-3.8-flash-tiered"
+                  : null;
 
     if (guess) {
       // A reasoning suffix is still the caller's choice of tier, on a guess too.

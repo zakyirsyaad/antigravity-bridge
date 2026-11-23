@@ -99,6 +99,7 @@ figure below comes from Google's `fetchAvailableModels`; re-check it any time wi
 | `claude-opus-4-6-thinking` | 1,024 | 250K | 64K | Complex refactors, deep reasoning |
 | `claude-sonnet-4-6` | 1,024 | 250K | 64K | High-speed agentic coding, daily pair-programming |
 | `gemini-3.8-flash-tiered` | dynamic | 1M | 65K | **Newest and most capable Gemini — pick low/medium/high per request** |
+| `gemini-4-hydrogen-sonar` | low unless asked | 1M | 65K | First Gemini 4 model, images and video in |
 | `gemini-3-flash` | dynamic | 1M | 65K | General fast generation |
 | `gemini-3.5-flash-lite` | off unless asked | 1M | 65K | Ultra-low latency |
 | `gemini-3.1-flash-lite` | off unless asked | 1M | 65K | Ultra-low latency, older generation |
@@ -111,6 +112,11 @@ a number, since an explicit budget would switch it off.
 do not. The bridge sends them no thinking settings unless you ask for reasoning — an explicit budget,
 or an effort level above the protocol's default (`reasoning_effort: "high"`, or Anthropic's
 `xhigh` / `max`).
+
+**"low unless asked"**: Gemini 4 Hydrogen always reasons, and picks how much by level, not by
+budget. With no thinking settings it runs at its low level (a budget of 0 does not switch it off).
+The same effort levels that turn the Flash Lites on move it to its high level, which spent about
+four and a half times the thinking tokens on the same prompt. Google lists no Gemini 4 Neon.
 
 **There is no Gemini Pro.** Google stopped serving `gemini-pro-agent` and `gemini-3.1-pro-low`
 (HTTP 404), and `gemini-2.5-pro` answers 503 "no capacity" on every account. Pro ids resolve to

@@ -1,5 +1,22 @@
 # Changelog
 
+## 2.7.4
+
+### Added: Gemini 4 Hydrogen
+
+Google now serves `gemini-4-hydrogen-sonar`, and the bridge exposes it: 1M context, 65K output,
+images and video in. A request to it was answered on both the streamed and the plain path before it
+went in the table. **Update and restart the bridge** to get it.
+
+- It reasons by level, not by budget. Sent no thinking settings it runs at its low level, and the
+  bridge sends none by default, as for the Flash Lites. An effort above the protocol's default
+  (OpenAI `reasoning_effort: "high"`, Anthropic `xhigh` / `max`) or a `-high` suffix moves it to its
+  high level, which spent about 4.5 times the thinking tokens on the same prompt. A budget of 0 does
+  not switch its reasoning off.
+- A name with "hydrogen" in it, such as `gemini-4-hydrogen`, now resolves to it (with the usual
+  "approximated" warning) instead of to Gemini 3.8 Flash.
+- Google lists no Gemini 4 Neon, so there is none to add.
+
 ## 2.7.3
 
 Two fixes for pools that hold an account Google has refused, both found on the day 2.7.2 went out.

@@ -138,6 +138,14 @@ function runTests() {
   expect("xhigh -> dynamic", anthropicBudget(UNDECLARED, effort("xhigh")), -1);
   expect("max -> dynamic", anthropicBudget(UNDECLARED, effort("max")), -1);
   expect("an explicit budget wins", anthropicBudget(UNDECLARED, { output_config: { effort: "high" }, thinking: { type: "enabled", budget_tokens: 2048 } }), 2048);
+  // Gemini 4 Hydrogen declares no budget either, and runs at its low level when sent none:
+  // declared -1 instead, Claude Code's constant "high" would run every request at its high.
+  const HYDROGEN = "gemini-4-hydrogen-sonar";
+  expect("hydrogen: no effort -> nothing sent", anthropicBudget(HYDROGEN), undefined);
+  expect("hydrogen: high (Claude Code's default) -> nothing sent", anthropicBudget(HYDROGEN, effort("high")), undefined);
+  expect("hydrogen: max -> dynamic (its high level)", anthropicBudget(HYDROGEN, effort("max")), -1);
+  expect("hydrogen: OpenAI default -> nothing sent", openaiBudget(HYDROGEN), undefined);
+  expect("hydrogen: OpenAI high -> dynamic", openaiBudget(HYDROGEN, { reasoning_effort: "high" }), -1);
 
   console.log("\n[6/8] The OpenAI path is untouched by sharing the helper ...");
   expect("dynamic, low", openaiBudget(DYNAMIC, { reasoning_effort: "low" }), 1000);
@@ -246,6 +254,8 @@ function runTests() {
     ["gemini-3.5-flash-lite-medium", "gemini-3.5-flash-lite", 4000],
     ["openrouter/gemini-3-flash-low", "gemini-3-flash", 1000],
     ["openrouter/google/gemini-3.1-flash-lite-high", "gemini-3.1-flash-lite", -1],
+    ["gemini-4-hydrogen-sonar-high", "gemini-4-hydrogen-sonar", -1],
+    ["gemini-4-hydrogen-sonar-low", "gemini-4-hydrogen-sonar", 1000],
   ];
   for (const [id, model, budget] of keeps) {
     for (const proto of ["anthropic", "openai"] as const) {

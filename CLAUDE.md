@@ -448,6 +448,12 @@ Reasoning config is per model, not global:
   `zcodeReasoning()` gives these models **no** ZCode picker: ZCode speaks Anthropic, where its
   "low" / "high" would both leave them off. `test:effort` asserts that every variant ZCode is offered
   sends a distinct budget.
+- **Gemini 4 Hydrogen (`gemini-4-hydrogen-sonar`) is declared the same way, for a different
+  reason.** Google gives it no budget, only `thinkingLevel: 1`, and it reasons by level: no config,
+  budgets 0 / 32 / 128 and `thinking_level: "low"` all spent ~950 thought tokens on one prompt,
+  4000 ~1234, and -1 or `"high"` ~4259 (measured 2026-11-24). It never stops reasoning, and returns
+  no thought parts. Declaring it -1 would run every Claude Code request at its high level. Re-measure
+  before giving it a budget: a number you send is mapped to a level, not honoured.
 - `Transformer.applyThinkingConfig()` fits the budget inside the caller's `max_tokens`, holding back
   `BRIDGE_ANSWER_RESERVE_TOKENS` (default 8192, clamped to half the window) for the visible answer.
   Thinking tokens are billed as output and count against that cap.

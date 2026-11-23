@@ -167,6 +167,26 @@ export const SUPPORTED_MODELS: ModelDef[] = [
     thinkingBudget: -1,
     minThinkingBudget: 32,
   },
+  // Gemini 4 Hydrogen. Google lists it with no displayName and no thinkingBudget, only
+  // `thinkingLevel: 1`, and it reasons by levels, not budgets. Measured 2026-11-24 on
+  // two prompts, every setting gave the same answer and these thought tokens:
+  // no thinkingConfig, budget 0, 32 or 128, and `thinking_level: "low"` all ~950
+  // (low: a budget of 0 does not switch it off); budget 4000 ~1234; budget -1 and
+  // `thinking_level: "high"` ~4259. Thought parts never come back, even with
+  // include_thoughts. So it is declared like the Flash Lites, with no budget: by
+  // default the bridge sends nothing and the model runs at low, and only an effort
+  // above the protocol's default sends -1, which is high. Declared -1, every Claude
+  // Code request (which always says "high") would have run at four times the thinking.
+  {
+    id: "gemini-4-hydrogen-sonar",
+    name: "Gemini 4 Hydrogen",
+    family: "gemini",
+    contextLimit: 1048576,
+    outputLimit: 65536,
+    supportsThinking: true,
+    minThinkingBudget: 32,
+  },
+
   // gemini-3.7-flash-tiered and gemini-3.6-flash-tiered were here until Google began
   // answering HTTP 404 "Requested entity was not found" for both (and dropped them from
   // its catalogue). They are retired aliases of the newest tiered model now.
