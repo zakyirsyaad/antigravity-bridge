@@ -1455,17 +1455,17 @@ print(response.choices[0].message.content)</pre>
     <div style="background: var(--surface-card); border: 1px solid var(--border-hover); border-radius: var(--radius-lg); width: 90%; max-width: 520px; padding: 24px; box-shadow: 0 20px 40px rgba(0,0,0,0.8);">
       <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">
         <h3 style="margin: 0; font-size: 1.1rem; font-weight: 600; color: var(--text-main); display: flex; align-items: center; gap: 8px;">
-          <span>🔗</span> Link Gemini Web (Argon 4 & Web Models)
+          <span>🔗</span> Link Gemini Web (Neon, Carbon & Web Models)
         </h3>
         <button type="button" onclick="closeLinkWebModal()" style="background: transparent; border: none; color: var(--text-muted); cursor: pointer; font-size: 1.2rem; padding: 4px;">&times;</button>
       </div>
 
       <p style="font-size: 0.82rem; color: var(--text-muted); margin-bottom: 12px; line-height: 1.45;">
-        Upgrade this account into a <strong>Hybrid Account</strong> by linking its browser session cookie. This enables access to <strong>Gemini Argon 4</strong>, <code>gemini-auto</code>, and web-exclusive models.
+        Upgrade this account into a <strong>Hybrid Account</strong> by linking its browser session cookie. This enables access to <strong>Gemini 4 Neon</strong>, <strong>Gemini 4 Carbon</strong>, <code>gemini-auto</code>, and web-exclusive models.
       </p>
 
       <div style="background: var(--surface-elevated); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 10px 12px; font-size: 0.76rem; color: var(--text-muted); margin-bottom: 14px; line-height: 1.4;">
-        💡 <strong>How to get cookies:</strong> Open <a href="https://gemini.google.com" target="_blank" style="color: var(--emerald);">gemini.google.com</a> in browser &rarr; Press <code>F12</code> &rarr; Go to <strong>Application</strong> &rarr; <strong>Cookies</strong> &rarr; Copy <code>__Secure-1PSID</code> (or paste the entire Cookie header).
+        💡 <strong>How to get cookies:</strong> Open <a href="https://gemini.google.com" target="_blank" style="color: var(--emerald);">gemini.google.com</a> in browser &rarr; Press <code>F12</code> &rarr; Go to <strong>Application</strong> &rarr; <strong>Cookies</strong> &rarr; Copy <code>__Secure-1PSID</code>, <code>__Secure-1PSIDTS</code> and <code>__Secure-OSID</code> as <code>name=value; name=value</code>. Without <code>__Secure-OSID</code> Gemini treats the session as signed out.
       </div>
 
       <div style="display: flex; flex-direction: column; gap: 12px; margin-bottom: 16px;">
@@ -1474,8 +1474,8 @@ print(response.choices[0].message.content)</pre>
           <input type="text" id="linkWebEmail" readonly style="width: 100%; box-sizing: border-box; background: var(--surface-input); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 10px 12px; color: var(--text-faint); font-family: var(--font-mono); font-size: 0.85rem; cursor: not-allowed;" />
         </div>
         <div>
-          <label style="display: block; font-size: 0.78rem; font-weight: 500; color: var(--text-muted); margin-bottom: 4px;">Cookies or __Secure-1PSID (required)</label>
-          <textarea id="linkWebCookies" rows="3" placeholder="__Secure-1PSID=... or paste entire cookie header" style="width: 100%; box-sizing: border-box; background: var(--surface-input); border: 1px solid var(--border-hover); border-radius: var(--radius-md); padding: 10px 12px; color: var(--text-main); font-family: var(--font-mono); font-size: 0.82rem; resize: vertical; outline: none;" onfocus="this.style.borderColor='var(--border-active)'" onblur="this.style.borderColor='var(--border-hover)'"></textarea>
+          <label style="display: block; font-size: 0.78rem; font-weight: 500; color: var(--text-muted); margin-bottom: 4px;">Cookies: __Secure-1PSID, __Secure-1PSIDTS and __Secure-OSID (required)</label>
+          <textarea id="linkWebCookies" rows="3" placeholder="__Secure-1PSID=...; __Secure-1PSIDTS=...; __Secure-OSID=..." style="width: 100%; box-sizing: border-box; background: var(--surface-input); border: 1px solid var(--border-hover); border-radius: var(--radius-md); padding: 10px 12px; color: var(--text-main); font-family: var(--font-mono); font-size: 0.82rem; resize: vertical; outline: none;" onfocus="this.style.borderColor='var(--border-active)'" onblur="this.style.borderColor='var(--border-hover)'"></textarea>
         </div>
       </div>
 
@@ -2101,7 +2101,7 @@ print(response.choices[0].message.content)</pre>
 
 
         const webBadge = acc.hasWebCookies
-          ? '<span class="tier-chip" style="background: rgba(16, 185, 129, 0.15); color: var(--emerald); border-color: rgba(16, 185, 129, 0.3);" title="Gemini Web (Argon 4 / Web Models) is linked">● Web Linked</span>'
+          ? '<span class="tier-chip" style="background: rgba(16, 185, 129, 0.15); color: var(--emerald); border-color: rgba(16, 185, 129, 0.3);" title="Gemini Web (Neon, Carbon and web models) is linked">● Web Linked</span>'
           : '<span class="tier-chip" style="opacity: 0.5; color: var(--text-muted);" title="Gemini Web cookies not linked">○ Web Unlinked</span>';
 
         card.innerHTML = '<div class="card-top">' +
@@ -2125,7 +2125,7 @@ print(response.choices[0].message.content)</pre>
             '<button class="btn btn-sm btn-action" disabled style="opacity: 0.6; cursor: default;">● Currently Active</button>' :
             '<button class="btn btn-sm btn-primary btn-action" onclick="switchAccount(\'' + acc.email + '\')">Set Active</button>'
           ) +
-          '<button class="btn btn-sm btn-secondary" onclick="openLinkWebModal(\'' + acc.email + '\')" title="Link Gemini Web session cookies to access Gemini Argon 4 and web models">🔗 Link Web</button>' +
+          '<button class="btn btn-sm btn-secondary" onclick="openLinkWebModal(\'' + acc.email + '\')" title="Link Gemini Web session cookies to access Gemini 4 Neon, Carbon and web models">🔗 Link Web</button>' +
           reloginButton(acc) +
           (acc.status === "cooling_down" ?
             '<button class="btn btn-sm" onclick="clearCooldown(\'' + acc.email + '\')">Clear Cooldown</button>' : ''

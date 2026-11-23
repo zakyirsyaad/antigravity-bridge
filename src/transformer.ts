@@ -472,7 +472,7 @@ export class Transformer {
     const raw = (requestedModel || "").toLowerCase().trim();
     const clean = this.stripRoutingPrefix(raw.replace(/^google\//, "").replace(/^antigravity-/, ""));
 
-    // Gemini Web models (e.g. gemini-argon-4, gemini-auto, gemini-advanced, gemini-web-*)
+    // Gemini Web models (e.g. gemini-neon-4, gemini-carbon-4, gemini-auto, gemini-advanced, gemini-web-*)
     // pass through directly to be routed to the Gemini Web engine.
     // One predicate for both this and the server's routing, so they cannot disagree.
     if (GeminiWebClient.isGeminiWebModel(raw)) {

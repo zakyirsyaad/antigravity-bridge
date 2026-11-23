@@ -249,7 +249,7 @@ export class BridgeServer {
   private static usageByModel(report: UsageReport) {
     const models = Object.entries(report?.byModel || {})
       .map(([id, usage]) => {
-        const web = id === GEMINI_WEB_FALLBACK_USAGE_ID || GeminiWebClient.isGeminiWebModel(id);
+        const web = id === GEMINI_WEB_FALLBACK_USAGE_ID || GeminiWebClient.wasGeminiWebModel(id);
         return {
           id,
           backend: web ? "gemini-web" : "cloudcode",
@@ -733,7 +733,8 @@ export class BridgeServer {
             const hybridAccount = this.oauth.findAccountWithWebCookies();
             if (hybridAccount) {
               const webModels = [
-                { id: "gemini-argon-4", context: 1048576, desc: "Gemini Argon (Web Reasoning Model)" },
+                { id: "gemini-neon-4", context: 1048576, desc: "Gemini 4 Neon (Web, deeper analysis)" },
+                { id: "gemini-carbon-4", context: 1048576, desc: "Gemini 4 Carbon (Web, code & complex work)" },
                 { id: "gemini-auto", context: 1048576, desc: "Gemini Auto (Default Web Model)" },
                 { id: "gemini-advanced", context: 1048576, desc: "Gemini Advanced (Pro Web Model)" },
               ];
@@ -857,7 +858,7 @@ export class BridgeServer {
     const payload = Transformer.anthropicToAntigravity(body);
     const msgId = `msg_${crypto.randomBytes(12).toString("hex")}`;
 
-    // Dedicated routing for Gemini Web models (e.g. Gemini Argon 4, Gemini Auto)
+    // Dedicated routing for Gemini Web models (e.g. Gemini 4 Neon, Gemini Auto)
     if (GeminiWebClient.isGeminiWebModel(requestedModel)) {
       const linked = this.oauth.listAccountsWithWebCookies();
       const geminiWeb = this.geminiWebWithLinkedCookies(linked);
@@ -1228,7 +1229,7 @@ export class BridgeServer {
     const cmplId = `chatcmpl-${crypto.randomBytes(12).toString("hex")}`;
     const created = Math.floor(Date.now() / 1000);
 
-    // Dedicated routing for Gemini Web models (e.g. Gemini Argon 4, Gemini Auto)
+    // Dedicated routing for Gemini Web models (e.g. Gemini 4 Neon, Gemini Auto)
     if (GeminiWebClient.isGeminiWebModel(requestedModel)) {
       const linked = this.oauth.listAccountsWithWebCookies();
       const geminiWeb = this.geminiWebWithLinkedCookies(linked);

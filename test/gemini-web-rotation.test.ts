@@ -310,7 +310,7 @@ async function runTests() {
     reset();
     failing.add(A.webCookies);
     const openai = await captured(() =>
-      postJson("/v1/chat/completions", { model: "gemini-argon-4", messages: [{ role: "user", content: "hi" }] })
+      postJson("/v1/chat/completions", { model: "gemini-neon-4", messages: [{ role: "user", content: "hi" }] })
     );
     expect("OpenAI: answers 200 from the second session", openai.value?.status, 200);
     expect("OpenAI: with its text", openai.value?.data?.choices?.[0]?.message?.content, `from ${B.webCookies}`);
@@ -318,7 +318,7 @@ async function runTests() {
     reset();
     failing.add(A.webCookies);
     const anthropic = await captured(() =>
-      postJson("/v1/messages", { model: "gemini-argon-4", max_tokens: 100, messages: [{ role: "user", content: "hi" }] })
+      postJson("/v1/messages", { model: "gemini-neon-4", max_tokens: 100, messages: [{ role: "user", content: "hi" }] })
     );
     expect("Anthropic: answers 200 from the second session", anthropic.value?.status, 200);
     expect("Anthropic: with its text", anthropic.value?.data?.content?.[0]?.text, `from ${B.webCookies}`);
@@ -327,7 +327,7 @@ async function runTests() {
     failing.add(A.webCookies);
     failing.add(B.webCookies);
     const both = await captured(() =>
-      postJson("/v1/chat/completions", { model: "gemini-argon-4", messages: [{ role: "user", content: "hi" }] })
+      postJson("/v1/chat/completions", { model: "gemini-neon-4", messages: [{ role: "user", content: "hi" }] })
     );
     expect("every session failing is still a 500", both.value?.status, 500);
     expect("whose message counts the sessions", /2 linked sessions/.test(both.value?.data?.error?.message || ""), true);
@@ -345,7 +345,7 @@ async function runTests() {
     };
     try {
       await captured(() =>
-        postJson("/v1/chat/completions", { model: "gemini-argon-4", messages: [{ role: "user", content: "hi" }] })
+        postJson("/v1/chat/completions", { model: "gemini-neon-4", messages: [{ role: "user", content: "hi" }] })
       );
       expect("a resting account's cookies are never set on the way to the next one", setTo.every((c) => c === B.webCookies), true);
       expect("so the session in use is not dropped", setTo.length > 0, true);

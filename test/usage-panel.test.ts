@@ -61,7 +61,7 @@ const report = {
   firstUsed: "2026-10-01T00:00:00.000Z",
   lastUsed: "2026-11-06T11:58:00.000Z",
   byModel: {
-    "gemini-argon-4": { requests: 3, inputTokens: 9000, outputTokens: 600, thoughtsTokens: 0, lastUsed: "2026-11-06T11:58:00.000Z" },
+    "gemini-neon-4": { requests: 3, inputTokens: 9000, outputTokens: 600, thoughtsTokens: 0, lastUsed: "2026-11-06T11:58:00.000Z" },
     "gemini-3.8-flash-tiered": { requests: 10, inputTokens: 50000, outputTokens: 2500, thoughtsTokens: 1500, lastUsed: "2026-11-06T09:00:00.000Z" },
     "gemini-web-fallback": { requests: 1, inputTokens: 1000, outputTokens: 200, thoughtsTokens: 0, lastUsed: "2026-11-05T12:00:00.000Z" },
     '<img src=x onerror="alert(1)">': { requests: 1, inputTokens: 1000, outputTokens: 200, thoughtsTokens: 0, lastUsed: "2026-11-06T11:00:00.000Z" },
@@ -87,7 +87,7 @@ async function runTests() {
     expect("sorted by requests, most first", models[0]?.id, "gemini-3.8-flash-tiered");
     const byId = Object.fromEntries(models.map((m) => [m.id, m]));
     expect("a CloudCode model is cloudcode", byId["gemini-3.8-flash-tiered"]?.backend, "cloudcode");
-    expect("Argon is gemini-web (the page marks those rows as estimates)", byId["gemini-argon-4"]?.backend, "gemini-web");
+    expect("Neon is gemini-web (the page marks those rows as estimates)", byId["gemini-neon-4"]?.backend, "gemini-web");
     expect("the pool fallback's own id is gemini-web too", byId["gemini-web-fallback"]?.backend, "gemini-web");
     expect("totals are passed through", res.data.totalRequests, 15);
     expect("reasoning is its own figure", byId["gemini-3.8-flash-tiered"]?.thoughtsTokens, 1500);
@@ -114,7 +114,7 @@ async function runTests() {
   expect("Gemini Web rows are marked as estimates", (markup.match(/Gemini Web · estimate/g) || []).length, 2);
   expect("an estimated count carries a ~", markup.includes(">~9.0K</div>"), true);
   expect("a counted figure carries none", markup.includes(">50K</div>"), true);
-  // 54,000 of 66,000 tokens; Argon's 9,600 of them.
+  // 54,000 of 66,000 tokens; Neon's 9,600 of them.
   expect("shares are of all tokens", markup.includes(">81.8%</span>"), true);
   expect("an estimated row has its share too", markup.includes(">14.5%</span>"), true);
   expect("last use is relative", markup.includes(">2m ago</div>"), true);

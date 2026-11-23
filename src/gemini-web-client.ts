@@ -16,6 +16,8 @@ import https from "node:https";
 export interface GeminiWebCredentials {
   psid?: string;
   psidts?: string;
+  /** `__Secure-OSID`: gemini.google.com sends a session without it to the sign-in page. */
+  osid?: string;
   rawCookies?: string;
   authUser?: string; // target account in multi-login (e.g. "0", "1")
 }
@@ -30,8 +32,15 @@ export interface GeminiWebSession {
   authPath?: string;
 }
 
-/** Gemini Web's own id for Argon, discovered via otAQ7b. */
-const ARGON_MODEL_ID = "95a4c0abcba24364";
+/**
+ * Gemini Web's own ids for the models the bridge names, read from the model picker's RPC
+ * (otAQ7b) on 2026-11-24: "4 Neon" (Deeper analysis) and "4 Carbon" (Code & complex work).
+ * Carbon's id is the one the bridge used to call Argon; Argon is no longer in the picker.
+ */
+const WEB_MODEL_IDS: Record<string, string> = {
+  neon: "e6fa609c3fa255c0",
+  carbon: "95a4c0abcba24364",
+};
 /** The shape of Gemini Web's model ids; anything else is a bridge name, not one Google knows. */
 const WEB_MODEL_ID_PATTERN = /^[0-9a-f]{16}$/;
 const DEFAULT_WEB_TIMEOUT_MS = 180_000;
@@ -84,7 +93,8 @@ function signedInCheckEnabled(): boolean {
 }
 
 /** Where fresh cookies go: the dashboard, or the environment for env-supplied ones. */
-const FRESH_COOKIES_HINT = "link fresh ones in the dashboard (or replace GEMINI_WEB_COOKIES / GEMINI_PSID)";
+const FRESH_COOKIES_HINT =
+  "check that __Secure-OSID was included (gemini.google.com redirects without it), then link fresh ones in the dashboard (or replace GEMINI_WEB_COOKIES, or GEMINI_PSID with GEMINI_OSID)";
 
 /** Generate statuses that blame the request, not the account: never rotated. */
 const REQUEST_FAULT_STATUSES = new Set([400, 413]);
@@ -220,6 +230,7 @@ export class GeminiWebClient {
       this.credentials.rawCookies === creds.rawCookies &&
       this.credentials.psid === creds.psid &&
       this.credentials.psidts === creds.psidts &&
+      this.credentials.osid === creds.osid &&
       this.credentials.authUser === creds.authUser
     ) {
       return; // Credentials unchanged; preserve cached session
@@ -248,6 +259,7 @@ export class GeminiWebClient {
     const raw = process.env.GEMINI_WEB_COOKIES || process.env.GEMINI_COOKIES;
     const psid = process.env.GEMINI_PSID;
     const psidts = process.env.GEMINI_PSIDTS;
+    const osid = process.env.GEMINI_OSID;
     // Left undefined when unset: an explicit choice pins the session to that account.
     const authUser = process.env.GEMINI_AUTH_USER;
 
@@ -256,6 +268,7 @@ export class GeminiWebClient {
         rawCookies: raw,
         psid,
         psidts,
+        osid,
         authUser,
       };
     }
@@ -278,6 +291,11 @@ export class GeminiWebClient {
         "SSID",
         "SAPISID",
         "APISID",
+        // gemini.google.com's own session cookies. Without them the page redirects to
+        // accounts.google.com/ServiceLogin, so cookies that are signed in read as signed out
+        // (verified 2026-11-24: the same cookies answered 302 without these and 200 with).
+        "OSID",
+        "__Secure-OSID",
       ];
       const found: string[] = [];
       const parts = raw.split(";");
@@ -302,6 +320,9 @@ export class GeminiWebClient {
     }
     if (this.credentials?.psidts) {
       parts.push(`__Secure-1PSIDTS=${this.credentials.psidts}`);
+    }
+    if (this.credentials?.osid) {
+      parts.push(`__Secure-OSID=${this.credentials.osid}`);
     }
     return parts.join("; ");
   }
@@ -446,12 +467,28 @@ export class GeminiWebClient {
   public static isGeminiWebModel(modelName: string): boolean {
     const clean = GeminiWebClient.normalizeWebModelName(modelName);
     return (
-      clean.startsWith("gemini-argon") ||
-      clean.startsWith("argon") ||
+      // Both spellings: Gemini's picker says "4 Neon", the CloudCode id is gemini-4-hydrogen-sonar,
+      // and clients copy either shape (gemini-4-neon is what other Gemini Web proxies call it).
+      clean.startsWith("gemini-neon") ||
+      clean.startsWith("gemini-4-neon") ||
+      clean.startsWith("neon") ||
+      clean.startsWith("gemini-carbon") ||
+      clean.startsWith("gemini-4-carbon") ||
+      clean.startsWith("carbon") ||
       clean === "gemini-auto" ||
       clean === "gemini-advanced" ||
       clean.startsWith("gemini-web-")
     );
+  }
+
+  /**
+   * Ids that went to Gemini Web once and no longer do (Argon, removed in 2.7.5). Only for
+   * labelling what was already recorded under them: their usage counts are Gemini Web
+   * estimates, whatever a request for them reaches today.
+   */
+  public static wasGeminiWebModel(modelName: string): boolean {
+    const clean = GeminiWebClient.normalizeWebModelName(modelName);
+    return GeminiWebClient.isGeminiWebModel(clean) || clean.startsWith("gemini-argon") || clean.startsWith("argon");
   }
 
   /**
@@ -522,25 +559,34 @@ export class GeminiWebClient {
   public static resolveWebModelId(modelId?: string): string | null {
     if (!modelId) return null;
     const clean = GeminiWebClient.normalizeWebModelName(modelId);
-    if (clean.includes("argon")) return ARGON_MODEL_ID;
+    for (const [name, id] of Object.entries(WEB_MODEL_IDS)) {
+      if (clean.includes(name)) return id;
+    }
     if (WEB_MODEL_ID_PATTERN.test(clean)) return clean;
     return null;
   }
 
   /**
-   * Builds the double-JSON encoded RPC form payload (`f.req`).
-   * Supports specific modelId routing (e.g. Argon: 95a4c0abcba24364) at index 79.
+   * The header Gemini Web's own page selects a model with, or null to leave it on its
+   * default. The model is chosen here and not in the body: the bridge used to put the id
+   * at index 79 of `f.req`, which the page does not do, and a Neon request sent that way
+   * once hung for the whole three-minute deadline where the header answered in ten seconds.
    */
-  public static buildRpcPayload(prompt: string, atToken: string, modelId?: string): URLSearchParams {
+  public static modelSelectionHeader(modelId?: string): string | null {
+    const webModelId = GeminiWebClient.resolveWebModelId(modelId);
+    return webModelId ? JSON.stringify([1, null, null, null, webModelId, null, null, 0, [4], null, null, 2]) : null;
+  }
+
+  /**
+   * Builds the double-JSON encoded RPC form payload (`f.req`). The model is not in it:
+   * see modelSelectionHeader().
+   */
+  public static buildRpcPayload(prompt: string, atToken: string): URLSearchParams {
     // Sparse array format used by assistant.lamda.BardFrontendService
     const innerData = new Array(81).fill(null);
     innerData[0] = [prompt];
     innerData[1] = ["en"];
     innerData[2] = ["", "", ""];
-
-    // A model Gemini Web knows is routed via index 79; anything else stays on its default.
-    const webModelId = GeminiWebClient.resolveWebModelId(modelId);
-    if (webModelId) innerData[79] = webModelId;
 
     const fReq = JSON.stringify([null, JSON.stringify(innerData)]);
     return new URLSearchParams({
@@ -560,6 +606,7 @@ export class GeminiWebClient {
     }
 
     let parsedText = "";
+    let webError: { code: number; message: string } | undefined;
     const lines = clean.split("\n");
     for (const line of lines) {
       const trimmed = line.trim();
@@ -570,6 +617,11 @@ export class GeminiWebClient {
         if (Array.isArray(chunkJson)) {
           // Find envelope where item[2] is a nested JSON string
           for (const item of chunkJson) {
+            // A refusal arrives as an envelope with no payload and a BardErrorInfo at [5]:
+            // ["wrb.fr",null,null,null,null,[13,null,[["...BardErrorInfo",[1155,null,"Too many requests. Try again later. (1155)"]]]]]
+            if (Array.isArray(item) && item[0] === "wrb.fr" && item[2] == null && Array.isArray(item[5])) {
+              webError ??= GeminiWebClient.findBardError(item[5]) ?? undefined;
+            }
             if (Array.isArray(item) && typeof item[2] === "string") {
               const payload = JSON.parse(item[2]);
               // In wrb.fr responses:
@@ -619,7 +671,26 @@ export class GeminiWebClient {
           finishReason: "STOP",
         },
       ],
+      ...(webError && !parsedText ? { webError } : {}),
     };
+  }
+
+  /**
+   * The [code, null, message] of a BardErrorInfo in an error envelope. Only the detail typed
+   * as one is read (`["type.googleapis.com/....BardErrorInfo", [code, null, message]]`), so a
+   * change elsewhere in the envelope cannot pass some other number off as Google's code.
+   */
+  private static findBardError(node: unknown): { code: number; message: string } | null {
+    if (!Array.isArray(node)) return null;
+    if (typeof node[0] === "string" && node[0].endsWith("BardErrorInfo") && Array.isArray(node[1])) {
+      const [code, , message] = node[1];
+      return typeof code === "number" && typeof message === "string" ? { code, message } : null;
+    }
+    for (const child of node) {
+      const found = GeminiWebClient.findBardError(child);
+      if (found) return found;
+    }
+    return null;
   }
 
   /**
@@ -643,7 +714,8 @@ export class GeminiWebClient {
     const authPath = session.authPath ?? "";
     const generateUrl = `https://gemini.google.com${authPath}/_/BardChatUi/data/assistant.lamda.BardFrontendService/StreamGenerate?bl=${encodeURIComponent(session.bl)}&f.sid=${encodeURIComponent(session.fsid)}&_reqid=${Math.floor(Math.random() * 89999 + 10000)}&rt=c`;
 
-    const bodyParams = GeminiWebClient.buildRpcPayload(prompt, session.at, targetModelId);
+    const bodyParams = GeminiWebClient.buildRpcPayload(prompt, session.at);
+    const modelHeader = GeminiWebClient.modelSelectionHeader(targetModelId);
 
     const res = await this.transport(generateUrl, {
       method: "POST",
@@ -654,6 +726,7 @@ export class GeminiWebClient {
         "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Cookie": session.cookies,
         "X-Same-Domain": "1",
+        ...(modelHeader ? { "x-goog-ext-525001261-jspb": modelHeader } : {}),
       },
       body: bodyParams.toString(),
       timeoutMs: Math.max(1, deadline - Date.now()),
@@ -671,6 +744,13 @@ export class GeminiWebClient {
 
     const raw = res.text;
     const parsed = GeminiWebClient.parseAntiXssiResponse(raw);
+    if (parsed.webError) {
+      // Gemini Web said why it would not answer, such as "Too many requests. Try again
+      // later. (1155)": the account's own limit for that model (Neon hits it first). An
+      // account error, so the rotation moves to the next linked session and rests this one.
+      // It was reported as "no readable reply", which sent people looking for a format change.
+      throw new GeminiWebAccountError(`Gemini Web refused the request (code ${parsed.webError.code}): ${parsed.webError.message.slice(0, 200)}`);
+    }
     if (!parsed.candidates?.[0]?.content?.parts?.[0]?.text) {
       // A 200 with no answer we can read: a format change, an interstitial, a quota page.
       // Passed on, it reaches the client as a successful empty reply ("completed without
