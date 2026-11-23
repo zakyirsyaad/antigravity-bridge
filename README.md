@@ -151,6 +151,30 @@ Each model carries its own default budget, so the same request reasons different
   `medium` **is it**, `high` is four times it. `reasoning_tokens: N` sets an exact figure.
 - **Tiered models** (`gemini-3.8-flash-tiered` and friends) have no fixed default, so effort selects
   the tier instead on either API: `low` = 1,000, `medium` = 4,000, `high` and above = dynamic.
+- **Models with no default** (the Flash Lites and Gemini 4 Hydrogen) get no reasoning setting until a
+  level above the protocol's default asks: OpenAI `high`, Anthropic `xhigh` / `max`, which send
+  dynamic. Below that the Flash Lites do not reason and Hydrogen reasons at its low level.
+- **A suffix on a Gemini id** picks the tier the same way: `gemini-3-flash-low` = 1,000,
+  `-medium` = 4,000, `-high` = dynamic (the bridge logs that it read it). Claude and GPT-OSS ignore
+  a suffix.
+- **Claude's floor is 1,024 tokens.** A level that scales its 1,024 default below that (OpenAI
+  `low`; Anthropic `low` and `medium`) turns its reasoning **off** rather than shrinking it.
+- **Gemini Web models** (`gemini-neon-4`, `gemini-carbon-4`, `gemini-auto`) take no reasoning
+  setting at all: they run their Gemini app mode. Gemini Web does accept a thinking level, but low
+  and high answered in the same time and no better, so the bridge does not claim to set it.
+
+What each level sends, in tokens of reasoning (`–` = nothing sent, so the model's own behaviour):
+
+| Model | No level | OpenAI `low` / `medium` / `high` | Anthropic `low` / `medium` / `high` / `xhigh` / `max` |
+| :--- | :--- | :--- | :--- |
+| `claude-opus-4-6-thinking`, `claude-sonnet-4-6` | 1,024 | off / 1,024 / 4,096 | off / off / 1,024 / 2,048 / 4,096 |
+| `gpt-oss-120b-medium` | 8,192 | 2,048 / 8,192 / 32,768 | 2,048 / 4,096 / 8,192 / 16,384 / 32,768 |
+| `gemini-3.8-flash-tiered`, `gemini-3-flash` | dynamic | 1,000 / 4,000 / dynamic | 1,000 / 4,000 / dynamic / dynamic / dynamic |
+| `gemini-3.5-flash-lite`, `gemini-3.1-flash-lite` | – (none) | – / – / dynamic | – / – / – / dynamic / dynamic |
+| `gemini-4-hydrogen-sonar` | – (its low level) | – / – / dynamic (its high) | – / – / – / dynamic / dynamic |
+
+Every figure is then fitted inside `max_tokens` (see below), so a small cap lowers it. Hydrogen is
+the exception: it cannot be capped, so give it 4,096 or more.
 
 Each protocol's *default* level is the model's own default, deliberately: Claude Code sends
 `high` even when nobody chose it, and OpenAI clients default to `medium`. Doing nothing therefore
@@ -191,6 +215,9 @@ be, but prefer the real ids above.
 | `gemini-3.6-flash-low`, `gemini-3.5-flash-extra-low` (Google's "Low") | `gemini-3.8-flash-tiered`, 1,000-token reasoning |
 | `gemini-2.5-flash`, `gemini-2.5-flash-lite` | `gemini-3.5-flash-lite` |
 | `gemini-2.5-flash-thinking` | `gemini-3.5-flash-lite`, dynamic reasoning |
+| `gemini-4-hydrogen` (and any name with "hydrogen") | `gemini-4-hydrogen-sonar` |
+| `gemini-4-neon`, `gemini-4-carbon` | Gemini Web's Neon and Carbon, the same as `gemini-neon-4` and `gemini-carbon-4` (no warning) |
+| `gemini-argon-4` | **Removed in 2.7.5.** No longer a Gemini Web model: it falls to the nearest CloudCode guess (`gemini-3.8-flash-tiered`, with a warning). Use `gemini-carbon-4`, the Gemini Web model the bridge used to send for it |
 
 Google's catalogue is not proof that a model is served: `npm run bridge:models` reads only the
 catalogue, so it cannot tell. It kept listing `gemini-3.1-pro-high` while answering HTTP 400 to every
@@ -234,7 +261,8 @@ Or set `GEMINI_WEB_COOKIES` (or `GEMINI_PSID` / `GEMINI_PSIDTS` / `GEMINI_OSID`,
 - **Every request is a new Gemini chat.** Each request is sent as a new conversation in the linked account's Gemini app, carrying the whole system prompt, tool definitions and history, and it is kept there like a chat you started yourself (subject to that account's Gemini Apps Activity setting). Each agent step is one app prompt.
 - **Usage is estimated.** Gemini Web reports no token counts, so the bridge estimates them at about 4 characters per token and reports that figure to clients (so Claude Code's context meter and auto-compact keep working). The dashboard's usage ledger marks these rows as estimates (`bridge:usage` counts them like any other model).
 - **Tools work through a prompt.** Gemini Web has no function-calling API, so the bridge describes the tools in the prompt and looks for a JSON object in the answer to turn into `tool_use` / `tool_calls`. Only declared tools are let through, and `tool_choice: none` and a named tool are enforced on the calls that come back; `required` / `any` is only asked for in the prompt, so the model can still answer with text. Arguments must be a JSON object. Because the bridge looks anywhere in the answer, JSON the model only quotes in prose (an example call, a `{"content": …}` snippet) can be taken as a real call or as the whole answer, and a quoted call to a tool the request did not declare fails the request with a `500`. Do not auto-approve tools on Gemini Web models; for agents, CloudCode's native tool calling is more dependable.
-- **No structured output or generation settings.** Only the conversation text reaches Gemini Web: `response_format`, `max_tokens`, stop sequences, temperature and reasoning settings are ignored. Do not send `response_format` to a Gemini Web model: its prose answer would be run through the JSON repair and come back altered.
+- **No structured output or generation settings.** Only the conversation text reaches Gemini Web: `response_format`, `max_tokens`, stop sequences, temperature and reasoning settings are ignored (see [Controlling reasoning](#controlling-reasoning)). Do not send `response_format` to a Gemini Web model: its prose answer would be run through the JSON repair and come back altered.
+- **Answers can carry the code the model ran.** Neon and Carbon often work a question out in Python first, and Gemini Web returns that code (a fenced block starting `` ```python?code_reference``) ahead of the answer. The bridge passes the answer on as Gemini Web wrote it, so the block reaches the client as part of the reply.
 - **Text only.** Images and files in a message are dropped without an error, so the model answers without them. An image returned inside a tool result is pasted into the prompt as base64 text, which inflates the estimated token count.
 - **Nothing is streamed.** Gemini Web answers in one piece, so a "streamed" reply comes all at once, after up to `GEMINI_WEB_TIMEOUT_MS` (180 s) with no bytes sent; a failure is a real HTTP `500` before the stream starts. Set the client's and any reverse proxy's read timeout above that (nginx's default is 60 s), or lower `GEMINI_WEB_TIMEOUT_MS`. A request the client gives up on still runs to the end, uses an app prompt and is counted.
 
@@ -582,7 +610,7 @@ top-level `type: "error"` that the Anthropic SDKs expect. The message says which
 | `429` | `rate_limit_error` | Every account tried answered a 429 that names no reset: a per-minute limit. Comes with `Retry-After`; no quota cooldown is recorded, and the accounts rest in memory until then | Retry after the `Retry-After` seconds |
 | `503` | `overloaded_error` | Google has no capacity for the model on every account tried. Not quota: nothing cools down | Retry shortly, or use another model |
 | `503` | `api_error` | Google answered some other 503 (an outage) on every account tried | Retry shortly |
-| `500` | `api_error` | Gemini Web failed: signed-out cookies, a timeout, an error page (possibly its limit, which the bridge does not recognize as such), or an answer with nothing usable (for example only a tool call the request does not allow) | Read the message; see [Gemini Web](#-gemini-web-neon-carbon) |
+| `500` | `api_error` | Gemini Web failed: signed-out cookies (or a link without `__Secure-OSID`), a timeout, its limit (*"Gemini Web refused the request (code 1155)"*) on every linked session tried, an error page, or an answer with nothing usable (for example only a tool call the request does not allow) | Read the message; see [Gemini Web](#-gemini-web-neon-carbon) |
 | `500` | `server_error` / `api_error` | Every account is cooling down after a 429 (*"All accounts in the pool are currently rate limited"*), Google stopped answering (*"Google stopped answering requests for model …"*), or anything else | Read the message: only the first one is quota |
 
 Two exceptions, both from how streaming works:
