@@ -16,7 +16,7 @@
 import http from "node:http";
 import {
   GeminiWebClient,
-  GeminiWebAccountError,
+  GeminiWebAccountError, GeminiWebRequestError,
   GEMINI_WEB_FALLBACK_USAGE_ID,
 } from "../src/gemini-web-client";
 import { generateWithLinkedSessions, WebSessionRests, webRestSeconds, MAX_WEB_SESSIONS_PER_REQUEST } from "../src/gemini-web-rotation";
@@ -183,15 +183,31 @@ async function runTests() {
     expect(`and still says what Google answered (${status})`, requestFault?.message?.includes(`HTTP ${status}`), true);
   }
 
+  // The envelope Gemini Web answered a ~1,000,000-character prompt with on 2026-11-24.
+  const tooLongEnvelope = ")]}'\n\n38\n[[\"wrb.fr\",null,null,null,null,[3]]]\n56\n[[\"di\",196],[\"af.httprm\",195,\"1522715370925292370\",2]]\n25\n[[\"e\",4,null,null,131]]\n";
+  const tooLong = await classify(async (url) =>
+    url.endsWith("/app") ? { ok: true, status: 200, text: page } : { ok: true, status: 200, text: tooLongEnvelope }
+  );
+  expect("a prompt Gemini Web refuses as too long is not the account's", tooLong instanceof GeminiWebAccountError, false);
+  expect("it is the request's own fault", tooLong instanceof GeminiWebRequestError, true);
+  expect("and says the prompt is too long, in the words clients compact on", /prompt is too long/.test(tooLong?.message || ""), true);
+  expect("naming how much was sent", /characters sent/.test(tooLong?.message || ""), true);
+  const bareStatus = await classify(async (url) =>
+    url.endsWith("/app") ? { ok: true, status: 200, text: page } : { ok: true, status: 200, text: ")]}'\n[[\"wrb.fr\",null,null,null,null,[7]]]" }
+  );
+  expect("any other bare status is still an unreadable reply, the account's", bareStatus instanceof GeminiWebAccountError, true);
+
   console.log("\n[2/3] generateWithLinkedSessions ...");
   const client = GeminiWebClient.getInstance();
   const calls: { cookie: string; deadline: number }[] = [];
   let failing = new Set<string>();
   let transportFailing = new Set<string>();
+  let tooLongFor = new Set<string>();
   (client as any).generateContent = async (_prompt: any, _model?: string, deadline?: number) => {
     const cookie = String((client as any).credentials?.rawCookies || "");
     calls.push({ cookie, deadline: deadline ?? -1 });
     if (transportFailing.has(cookie)) throw new Error("Gemini Web connection failed: ECONNRESET");
+    if (tooLongFor.has(cookie)) throw new GeminiWebRequestError("Gemini Web refused the request (status 3): the prompt is too long for Gemini Web");
     if (failing.has(cookie)) throw new GeminiWebAccountError(`Gemini Web generation failed with HTTP 429: quota`);
     return answer(`from ${cookie}`);
   };
@@ -203,8 +219,22 @@ async function runTests() {
     calls.length = 0;
     failing = new Set();
     transportFailing = new Set();
+    tooLongFor = new Set();
     WebSessionRests.clear();
   };
+
+  reset();
+  tooLongFor = new Set([A.webCookies, B.webCookies]);
+  const tooLongRun = await generateWithLinkedSessions(client, [A, B], "hi").catch((e) => e);
+  expect("a prompt too long is not rotated to the next session", calls.length, 1);
+  expect("it reaches the caller as the request's fault", tooLongRun instanceof GeminiWebRequestError, true);
+  expect("and rests no session", WebSessionRests.isResting(A.email), false);
+  reset();
+  failing.add(A.webCookies);
+  tooLongFor.add(B.webCookies);
+  const afterRotation = await generateWithLinkedSessions(client, [A, B], "hi").catch((e) => e);
+  expect("after an account failure it is still the request's fault", afterRotation instanceof GeminiWebRequestError, true);
+  expect("and says sessions failed first", /failed first/.test(afterRotation?.message || ""), true);
 
   reset();
   const healthy = await generateWithLinkedSessions(client, [A, B], "hi");

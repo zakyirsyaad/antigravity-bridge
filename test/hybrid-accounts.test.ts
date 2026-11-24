@@ -153,6 +153,8 @@ async function runTests() {
     expect("/v1/models exposes gemini-neon-4", Boolean(neonInList), true);
     expect("gemini-neon-4 owned_by", neonInList?.owned_by, "google-gemini-web");
     expect("/v1/models exposes gemini-carbon-4", modelsRes.data?.some((m: any) => m.id === "gemini-carbon-4"), true);
+    // Gemini Web refuses about 1,000,000 characters; advertising 1M tokens let a client grow its prompt far past that.
+    expect("a web model advertises the context Gemini Web takes", modelsRes.data?.find((m: any) => m.id === "gemini-carbon-4")?.context_length, 200000);
     expect("/v1/models no longer lists gemini-argon-4", modelsRes.data?.some((m: any) => m.id === "gemini-argon-4"), false);
 
     console.log("\n[5/5] Token refresh preserves webCookies and webLinkedAt ...");

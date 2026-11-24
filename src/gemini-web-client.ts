@@ -110,6 +110,34 @@ export class GeminiWebAccountError extends Error {
 }
 
 /**
+ * Gemini Web refused the request itself, so every other account would refuse it too: it is
+ * never rotated, rests no session, and reaches the client as a 400, not a 500.
+ */
+export class GeminiWebRequestError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "GeminiWebRequestError";
+  }
+}
+
+/**
+ * The status Gemini Web answers, in an envelope with nothing else in it, to a prompt it will
+ * not take: `["wrb.fr",null,null,null,null,[3]]`, gRPC's INVALID_ARGUMENT. Measured
+ * 2026-11-24 on Carbon: 900,000 characters answered, 1,000,000 refused in under a second,
+ * the same for prose and for hex that costs several times the tokens, so the limit is
+ * characters. Qwen Code reached it after a long session and every linked session was rested.
+ */
+const PROMPT_REFUSED_STATUS = 3;
+
+/**
+ * The context `/v1/models` advertises for the Gemini Web models, in the bridge's own estimated
+ * tokens (CHARS_PER_TOKEN): about 800,000 characters, under the refusal above with room for the
+ * tool-bridge instructions. It used to say 1,048,576, so a client compacted only after its
+ * prompt was four times what Gemini Web takes.
+ */
+export const GEMINI_WEB_CONTEXT_TOKENS = 200_000;
+
+/**
  * An error that says what happened. A connection that fails on every address is an
  * AggregateError with an empty message, which used to reach the log and the client as
  * nothing at all; its code (ECONNREFUSED, ETIMEDOUT) is the useful part.
@@ -610,6 +638,7 @@ export class GeminiWebClient {
 
     let parsedText = "";
     let webError: { code: number; message: string } | undefined;
+    let webStatus: number | undefined;
     const lines = clean.split("\n");
     for (const line of lines) {
       const trimmed = line.trim();
@@ -624,6 +653,8 @@ export class GeminiWebClient {
             // ["wrb.fr",null,null,null,null,[13,null,[["...BardErrorInfo",[1155,null,"Too many requests. Try again later. (1155)"]]]]]
             if (Array.isArray(item) && item[0] === "wrb.fr" && item[2] == null && Array.isArray(item[5])) {
               webError ??= GeminiWebClient.findBardError(item[5]) ?? undefined;
+              // A status and nothing else, such as [3] for a prompt too large to take.
+              if (item[5].length === 1 && typeof item[5][0] === "number") webStatus ??= item[5][0];
             }
             if (Array.isArray(item) && typeof item[2] === "string") {
               const payload = JSON.parse(item[2]);
@@ -675,6 +706,7 @@ export class GeminiWebClient {
         },
       ],
       ...(webError && !parsedText ? { webError } : {}),
+      ...(webStatus !== undefined && !webError && !parsedText ? { webStatus } : {}),
     };
   }
 
@@ -757,7 +789,7 @@ export class GeminiWebClient {
       const message = `Gemini Web generation failed with HTTP ${res.status}: ${res.text.slice(0, 200)}`;
       // A 400 or 413 is this request's own fault (a history or size Gemini Web refuses):
       // another account would refuse it too, so it must not rotate and rest healthy sessions.
-      throw REQUEST_FAULT_STATUSES.has(res.status) ? new Error(message) : new GeminiWebAccountError(message);
+      throw REQUEST_FAULT_STATUSES.has(res.status) ? new GeminiWebRequestError(message) : new GeminiWebAccountError(message);
     }
 
     const raw = res.text;
@@ -768,6 +800,14 @@ export class GeminiWebClient {
       // account error, so the rotation moves to the next linked session and rests this one.
       // It was reported as "no readable reply", which sent people looking for a format change.
       throw new GeminiWebAccountError(`Gemini Web refused the request (code ${parsed.webError.code}): ${parsed.webError.message.slice(0, 200)}`);
+    }
+    if (parsed.webStatus === PROMPT_REFUSED_STATUS) {
+      // The request's fault, not the session's: the session is kept and nothing rotates.
+      // "prompt is too long" is the wording clients compact on (Claude Code does).
+      throw new GeminiWebRequestError(
+        `Gemini Web refused the request (status ${PROMPT_REFUSED_STATUS}): the prompt is too long for Gemini Web ` +
+        `(${prompt.length.toLocaleString("en-US")} characters sent; it refuses about 1,000,000). Compact or shorten the conversation.`
+      );
     }
     if (!parsed.candidates?.[0]?.content?.parts?.[0]?.text) {
       // A 200 with no answer we can read: a format change, an interstitial, a quota page.

@@ -15,7 +15,7 @@
  */
 
 import type { AccountToken } from "./oauth";
-import { GeminiWebClient, GeminiWebAccountError, webTimeoutMs } from "./gemini-web-client";
+import { GeminiWebClient, GeminiWebAccountError, GeminiWebRequestError, webTimeoutMs } from "./gemini-web-client";
 import { RestBook, restSecondsFromEnv } from "./rest-book";
 
 const DEFAULT_REST_SECONDS = 300;
@@ -87,7 +87,9 @@ export async function generateWithLinkedSessions(
         // reads a timeout and never learns that the accounts before it were set aside.
         if (tried.length === 1) throw err;
         console.warn(`[Gemini Web] ${name} failed after ${tried.slice(0, -1).join(", ")} did: ${err?.message}`);
-        throw new Error(`${err?.message || "Gemini Web request failed"} (after ${tried.length - 1} linked session(s) failed first)`);
+        const message = `${err?.message || "Gemini Web request failed"} (after ${tried.length - 1} linked session(s) failed first)`;
+        // Keep the request's own fault a request fault: the client must still get its 400.
+        throw err instanceof GeminiWebRequestError ? new GeminiWebRequestError(message) : new Error(message);
       }
       const seconds = webRestSeconds();
       WebSessionRests.rest(account.email, seconds);
