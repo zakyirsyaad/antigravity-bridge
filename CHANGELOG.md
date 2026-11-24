@@ -1,5 +1,28 @@
 # Changelog
 
+## 2.7.7
+
+A fix for long sessions on the Gemini Web models (`gemini-neon-4`, `gemini-carbon-4`).
+**Update and restart the bridge** to get it.
+
+### Fixed: a prompt too long for Gemini Web took every linked session down
+
+Gemini Web refuses a prompt of about 1,000,000 characters or more with a bare status envelope,
+`[["wrb.fr",null,null,null,null,[3]]]`, and no message. The limit is characters, not tokens: 900,000
+characters were answered whether they were prose or hex. The bridge read that envelope as an unreadable
+reply, which it blames on the account, so it tried every linked session, rested each one for five minutes
+and answered the client HTTP 500. Qwen Code then retried every few seconds. It is now read as the
+request's own fault: nothing rotates or rests, and the client gets HTTP 400 `invalid_request_error`
+saying *"the prompt is too long for Gemini Web"* with the number of characters sent. A generate that
+Gemini Web answers 400 or 413 is a 400 to the client too, where it was a 500.
+
+### Changed: the Gemini Web models advertise 200,000 tokens of context
+
+`/v1/models` gave them 1,048,576 tokens, so a client compacted only once its prompt was about four times
+what Gemini Web takes. They now say 200,000 of the bridge's estimated tokens (about 800,000 characters).
+A session already past the limit has to be compacted or restarted; this release cannot make Gemini Web
+take it.
+
 ## 2.7.6
 
 Fixes for agents running on the Gemini Web models (`gemini-neon-4`, `gemini-carbon-4`).

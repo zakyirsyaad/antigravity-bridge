@@ -14,7 +14,7 @@ import { QuotaTracker } from "./quota-tracker";
 import { getDashboardHtml } from "./dashboard-html";
 import { applyConnectAttemptTimeout } from "./network";
 import { parseOrRepairJson } from "./json-repair";
-import { GeminiWebClient, GEMINI_WEB_FALLBACK_USAGE_ID } from "./gemini-web-client";
+import { GeminiWebClient, GeminiWebRequestError, GEMINI_WEB_CONTEXT_TOKENS, GEMINI_WEB_FALLBACK_USAGE_ID } from "./gemini-web-client";
 import { generateWithLinkedSessions, preferredLinkedSession } from "./gemini-web-rotation";
 import { buildToolBridgePrompt, parseToolBridgeOutput, ToolBridgeResult } from "./tool-bridge";
 
@@ -733,10 +733,10 @@ export class BridgeServer {
             const hybridAccount = this.oauth.findAccountWithWebCookies();
             if (hybridAccount) {
               const webModels = [
-                { id: "gemini-neon-4", context: 1048576, desc: "Gemini 4 Neon (Web, deeper analysis)" },
-                { id: "gemini-carbon-4", context: 1048576, desc: "Gemini 4 Carbon (Web, code & complex work)" },
-                { id: "gemini-auto", context: 1048576, desc: "Gemini Auto (Default Web Model)" },
-                { id: "gemini-advanced", context: 1048576, desc: "Gemini Advanced (Pro Web Model)" },
+                { id: "gemini-neon-4", context: GEMINI_WEB_CONTEXT_TOKENS, desc: "Gemini 4 Neon (Web, deeper analysis)" },
+                { id: "gemini-carbon-4", context: GEMINI_WEB_CONTEXT_TOKENS, desc: "Gemini 4 Carbon (Web, code & complex work)" },
+                { id: "gemini-auto", context: GEMINI_WEB_CONTEXT_TOKENS, desc: "Gemini Auto (Default Web Model)" },
+                { id: "gemini-advanced", context: GEMINI_WEB_CONTEXT_TOKENS, desc: "Gemini Advanced (Pro Web Model)" },
               ];
               for (const wm of webModels) {
                 data.push({
@@ -892,11 +892,12 @@ export class BridgeServer {
         answer = BridgeServer.webAnswer(resp, body);
       } catch (err: any) {
         console.error("[Gemini Web] /v1/messages%s failed:", body.stream ? " stream" : "", err?.message);
-        res.writeHead(500, { "Content-Type": "application/json" });
+        const refused = err instanceof GeminiWebRequestError;
+        res.writeHead(refused ? 400 : 500, { "Content-Type": "application/json" });
         res.end(
           JSON.stringify({
             type: "error",
-            error: { type: "api_error", message: err?.message || "Gemini Web request failed" },
+            error: { type: refused ? "invalid_request_error" : "api_error", message: err?.message || "Gemini Web request failed" },
           })
         );
         return;
@@ -1264,8 +1265,9 @@ export class BridgeServer {
         answer = BridgeServer.webAnswer(resp, body);
       } catch (err: any) {
         console.error("[Gemini Web] /v1/chat/completions%s failed:", body.stream ? " stream" : "", err?.message);
-        res.writeHead(500, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: { message: err?.message || "Gemini Web request failed", type: "api_error" } }));
+        const refused = err instanceof GeminiWebRequestError;
+        res.writeHead(refused ? 400 : 500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: { message: err?.message || "Gemini Web request failed", type: refused ? "invalid_request_error" : "api_error" } }));
         return;
       }
       const webUsage = resp.usageMetadata;

@@ -123,6 +123,10 @@ async function runTests() {
   const refusal = ")]}'\n\n174\n" + JSON.stringify([["wrb.fr", null, null, null, null, [13, null, [["type.googleapis.com/assistant.boq.bard.application.BardErrorInfo", [1155, null, "Too many requests. Try again later. (1155)"]]]]]]) + "\n25\n[[\"e\",4,null,null,271]]\n";
   const untyped = ")]}'\n\n" + JSON.stringify([["wrb.fr", null, null, null, null, [13, null, [["type.googleapis.com/some.OtherInfo", [7, null, "not ours"]]]]]]);
   expect("only a detail typed BardErrorInfo is read as Google's code", GeminiWebClient.parseAntiXssiResponse(untyped).webError, undefined);
+  const statusOnly = ")]}'\n\n38\n" + JSON.stringify([["wrb.fr", null, null, null, null, [3]]]) + "\n";
+  expect("a bare status envelope is read as that status", GeminiWebClient.parseAntiXssiResponse(statusOnly).webStatus, 3);
+  expect("and not as a BardErrorInfo", GeminiWebClient.parseAntiXssiResponse(statusOnly).webError, undefined);
+  expect("an answer carries no status", parsedResp.webStatus, undefined);
   expect("a refusal is read as an error with its code", JSON.stringify(GeminiWebClient.parseAntiXssiResponse(refusal).webError), JSON.stringify({ code: 1155, message: "Too many requests. Try again later. (1155)" }));
 
   console.log("\n[5/7] Model ids, prompt text, and session handling ...");

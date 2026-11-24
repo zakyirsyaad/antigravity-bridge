@@ -16,7 +16,7 @@ import http from "node:http";
 import { formatToolsForPrompt, buildToolBridgePrompt, parseToolBridgeOutput, normalizeToolChoice } from "../src/tool-bridge";
 import { BridgeServer } from "../src/server";
 import { OAuthManager } from "../src/oauth";
-import { GeminiWebClient } from "../src/gemini-web-client";
+import { GeminiWebClient, GeminiWebRequestError } from "../src/gemini-web-client";
 import { UsageTracker } from "../src/usage-tracker";
 
 const TEST_PORT = 52150;
@@ -273,6 +273,24 @@ async function runTests() {
     });
     expect("OpenAI stream failure is HTTP 500, not an event inside a 200", oaiFail.status, 500);
     expect("OpenAI stream failure is a JSON error, not SSE", oaiFail.raw.startsWith("data:"), false);
+
+    // A request Gemini Web refuses (a prompt too long) is the caller's: a 400 on both protocols.
+    (geminiWeb as any).generateContent = async () => {
+      throw new GeminiWebRequestError("Gemini Web refused the request (status 3): the prompt is too long for Gemini Web");
+    };
+    const anthTooLong = await postJson("/v1/messages", {
+      model: "gemini-neon-4", max_tokens: 64, stream: true,
+      messages: [{ role: "user", content: "hi" }],
+    });
+    expect("Anthropic: a prompt too long is HTTP 400", anthTooLong.status, 400);
+    expect("Anthropic: as invalid_request_error", anthTooLong.data?.error?.type, "invalid_request_error");
+    expect("Anthropic: saying the prompt is too long", /prompt is too long/.test(anthTooLong.data?.error?.message || ""), true);
+    const oaiTooLong = await postJson("/v1/chat/completions", {
+      model: "gemini-neon-4", stream: true,
+      messages: [{ role: "user", content: "hi" }],
+    });
+    expect("OpenAI: a prompt too long is HTTP 400", oaiTooLong.status, 400);
+    expect("OpenAI: as invalid_request_error", oaiTooLong.data?.error?.type, "invalid_request_error");
 
     // Whatever Gemini Web writes, the request's rules and Anthropic's input shape hold.
     const answerWith = (text: string) => async (...args: any[]) => (lastWebArgs = args, {
